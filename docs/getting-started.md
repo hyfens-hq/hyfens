@@ -24,8 +24,7 @@ documented in [CLI distribution](cli-distribution.md).
 Package-manager installs are:
 
 ```bash
-brew tap hyfens-hq/tap
-brew install hyfens
+brew install hyfens-hq/tap/hyfens
 ```
 
 ```powershell

@@ -61,12 +61,21 @@ prints PATH guidance without modifying project files or `~/.hyfens`.
 
 ### Homebrew
 
-The published Homebrew tap provides the same release archives:
+Install directly from the published Homebrew tap with one command:
 
 ```bash
-brew tap hyfens-hq/tap
-brew install hyfens
+brew install hyfens-hq/tap/hyfens
 ```
+
+Homebrew adds the tap automatically and trusts only the requested formula.
+If you have already added the tap manually and want to keep using the short
+`brew install hyfens` form, trust only this formula once:
+
+```bash
+brew trust --formula hyfens-hq/tap/hyfens
+```
+
+Do not disable Homebrew tap trust globally.
 
 ### Windows
 

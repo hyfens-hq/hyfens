@@ -31,12 +31,22 @@ Hyfens GitHub repository, verifies `SHA256SUMS` before extraction, and prints
 PATH guidance. It does not modify project files or `~/.hyfens`.
 
 The Homebrew tap and Scoop bucket use the same immutable GitHub Release
-archives:
+archives. Homebrew can add the tap and trust only the requested formula in a
+single command:
 
 ```bash
-brew tap hyfens-hq/tap
+brew install hyfens-hq/tap/hyfens
+```
+
+If the tap was already added manually, Homebrew may require a one-time,
+formula-scoped trust before the short form works:
+
+```bash
+brew trust --formula hyfens-hq/tap/hyfens
 brew install hyfens
 ```
+
+Do not disable tap trust globally.
 
 ```powershell
 scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket

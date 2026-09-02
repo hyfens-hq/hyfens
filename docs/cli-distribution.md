@@ -89,12 +89,23 @@ corresponding line in `SHA256SUMS` before using the extracted executable. Use
 
 The current `v0.1.1` release has live Homebrew and Scoop distribution:
 
-- Homebrew: `hyfens-hq/homebrew-tap`, installed with
-  `brew tap hyfens-hq/tap && brew install hyfens`;
+- Homebrew: `hyfens-hq/homebrew-tap`, installed directly with
+  `brew install hyfens-hq/tap/hyfens`. Homebrew automatically adds the tap
+  and trusts only the requested formula;
 - Scoop: `hyfens-hq/scoop-bucket`, installed with
   `scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket` and
   `scoop install hyfens`; and
 - WinGet remains an external Microsoft submission gate.
+
+If the Homebrew tap was already added manually, trust only the formula once to
+use the short name:
+
+```sh
+brew trust --formula hyfens-hq/tap/hyfens
+brew install hyfens
+```
+
+Do not disable Homebrew tap trust globally.
 
 The live package metadata points to immutable GitHub Release archives and the
 release-generated SHA-256 values. For future releases, use
