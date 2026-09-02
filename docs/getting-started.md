@@ -1,35 +1,53 @@
 # Getting started
 
 This guide runs the bounded Hyfens developer workflow against either the
-managed default or a self-hosted control plane. The CLI uses repository path
-dependencies rather than pub.dev; tagged GitHub Releases provide native
-archives once the first release is published. The source checkout remains the
-fallback installation path.
+managed default or a self-hosted control plane. Hyfens v0.1.0 provides native
+CLI archives through GitHub Releases; the source checkout remains the
+contributor fallback. The CLI uses repository path dependencies rather than
+pub.dev.
 
 The tested toolchain family is Flutter `3.47.x` with Dart `3.13.x`.
 
-## 1. Install from a source checkout
+## 1. Install the CLI
 
-From an existing Hyfens checkout, resolve the CLI's local path dependencies:
+On macOS or Linux, install the latest release without Dart or Flutter:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
+```
+
+The installer detects x64/arm64, verifies the downloaded archive against
+`SHA256SUMS`, and prints PATH guidance. Pin v0.1.0 with
+`--version v0.1.0`. Direct Windows archives and PowerShell verification are
+documented in [CLI distribution](cli-distribution.md).
+
+After the v0.1.0 manifests are published, package-manager installs are:
+
+```bash
+brew tap hyfens-hq/tap
+brew install hyfens
+```
+
+```powershell
+scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket
+scoop install hyfens
+```
+
+WinGet remains an external Microsoft submission gate. For contributors who
+need a source checkout:
 
 ```bash
 export HYFENS_CHECKOUT=/absolute/path/to/hyfens
 cd "$HYFENS_CHECKOUT/cli"
-dart pub get
-```
-
-Define the canonical command name in the shell that owns your Flutter project:
-
-```bash
+flutter pub get
 hyfens() {
   dart run "$HYFENS_CHECKOUT/cli/bin/hyfens.dart" "$@"
 }
 ```
 
-The `tool.dart` source filename is a compatibility detail of the current
-checkout. New scripts and documentation use `hyfens`; there is no second
-implementation. Do not copy a session file, token, or private signing key into
-the checkout.
+The `tool.dart` source filename is a compatibility detail. New scripts and
+documentation use `hyfens`; there is no second implementation. Do not copy a
+session file, token, or private signing key into the checkout.
 
 ## 2. Select an endpoint and authenticate
 

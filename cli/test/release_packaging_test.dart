@@ -94,14 +94,16 @@ void main() {
     final files = <String>[
       'packaging/cli/homebrew/hyfens.rb.template',
       'packaging/cli/scoop/hyfens.json.template',
+      'packaging/cli/winget/Hyfens.Hyfens.yaml.template',
       'packaging/cli/winget/Hyfens.Hyfens.installer.yaml.template',
       'packaging/cli/winget/Hyfens.Hyfens.locale.en-US.yaml.template',
     ];
     final platformPlaceholders = <String, String>{
       files[0]: '__MACOS_',
       files[1]: '__WINDOWS_',
-      files[2]: '__WINDOWS_',
-      files[3]: '__WINGET_PUBLISHER__',
+      files[2]: '__WINGET_PUBLISHER__',
+      files[3]: '__WINDOWS_',
+      files[4]: '__WINGET_PUBLISHER__',
     };
     for (final relativePath in files) {
       final content = File(p.join(repository.path, relativePath))

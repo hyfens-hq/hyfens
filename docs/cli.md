@@ -8,23 +8,56 @@ bounded patches, verifies them, and deploys them through a selected control
 plane. The runtime remains the final authority for patch bytes, exact release
 binding, capabilities, sequence/high-water, health, rollback, and fallback.
 
-## Source checkout invocation
+## Install a released CLI
+
+The canonical executable is `hyfens`. Hyfens v0.1.0 provides native archives
+for macOS, Linux, and Windows on x64 and arm64. The deprecated `tool` shim is
+included only for compatibility.
+
+On macOS or Linux, install the latest release without Dart or Flutter:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
+```
+
+Pin a release with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash -s -- --version v0.1.0
+```
+
+The installer detects the host architecture, downloads only from the fixed
+Hyfens GitHub repository, verifies `SHA256SUMS` before extraction, and prints
+PATH guidance. It does not modify project files or `~/.hyfens`.
+
+The Homebrew tap and Scoop bucket use the same immutable GitHub Release
+archives:
+
+```bash
+brew tap hyfens-hq/tap
+brew install hyfens
+```
+
+```powershell
+scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket
+scoop install hyfens
+```
+
+WinGet remains an external Microsoft submission gate for this release. Direct
+Windows archive and PowerShell verification instructions are in
+`docs/cli-distribution.md`.
+
+## Build from a source checkout
 
 The package manifest deliberately has `publish_to: none` and uses repository
-path dependencies, so pub.dev is not the distribution channel. Tagged GitHub
-Releases build native archives for macOS, Linux, and Windows. Until the first
-tagged release is published, install from a checkout:
+path dependencies, so pub.dev is not the distribution channel. Contributors
+can use the source fallback:
 
 ```bash
 export HYFENS_CHECKOUT=/absolute/path/to/hyfens
 cd "$HYFENS_CHECKOUT/cli"
-dart pub get
-```
+flutter pub get
 
-From the Flutter project being operated on, give the source runner its
-canonical shell name:
-
-```bash
 hyfens() {
   dart run "$HYFENS_CHECKOUT/cli/bin/hyfens.dart" "$@"
 }
@@ -33,8 +66,7 @@ hyfens() {
 `cli/bin/hyfens.dart` is the canonical source entry point. `cli/bin/tool.dart`
 is retained only as the deprecated compatibility shim; it is not a second
 public CLI. Release archives include both executables, checksums, and a
-machine-readable inventory. Future Homebrew, Scoop, and WinGet publication is
-separate from the GitHub Release and must point at a real published archive.
+machine-readable inventory.
 
 ## Public command surface
 

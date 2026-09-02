@@ -21,11 +21,14 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up Dart
-        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
+      - name: Set up Flutter
+        uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: '3.47.0'
+          channel: stable
       - name: Resolve locked CLI dependencies
         working-directory: cli
-        run: dart pub get --enforce-lockfile --no-example
+        run: flutter pub get --enforce-lockfile --no-example
       - name: Validate tag version
         id: version
         working-directory: cli
@@ -66,9 +69,32 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up Dart
+      - name: Set up Flutter
+        if: matrix.architecture != 'arm64' || matrix.platform == 'macos'
+        uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: '3.47.0'
+          channel: stable
+      # The CLI does not execute Flutter while it is being packaged. On the
+      # Linux/Windows ARM runners, use the official x64 Flutter SDK only as a
+      # metadata root for the transitive SDK package, then restore native Dart
+      # for the actual ARM64 build.
+      - name: Provide Flutter package metadata on ARM
+        if: matrix.architecture == 'arm64' && matrix.platform != 'macos'
+        uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: '3.47.0'
+          channel: stable
+          architecture: x64
+      - name: Set up native Dart on ARM
+        if: matrix.architecture == 'arm64' && matrix.platform != 'macos'
         uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
       - name: Resolve locked CLI dependencies
+        if: matrix.architecture != 'arm64' || matrix.platform == 'macos'
+        working-directory: cli
+        run: flutter pub get --enforce-lockfile --no-example
+      - name: Resolve locked CLI dependencies with native Dart
+        if: matrix.architecture == 'arm64' && matrix.platform != 'macos'
         working-directory: cli
         run: dart pub get --enforce-lockfile --no-example
       - name: Build native archive
@@ -101,11 +127,14 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up Dart
-        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
+      - name: Set up Flutter
+        uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: '3.47.0'
+          channel: stable
       - name: Resolve locked CLI dependencies
         working-directory: cli
-        run: dart pub get --enforce-lockfile --no-example
+        run: flutter pub get --enforce-lockfile --no-example
       - name: Download platform archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:

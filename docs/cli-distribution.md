@@ -28,37 +28,37 @@ approved.
 
 ## Install a GitHub Release directly
 
-Use the archive for the host operating system and architecture. Keep the
-archive's `bin/` and `lib/` directories together because Dart build hooks may
-ship native libraries beside the executable.
-
-On macOS or Linux:
+The bounded macOS/Linux installer resolves `latest` by querying the fixed
+GitHub repository, or accepts an explicit release such as `v0.1.0`:
 
 ```sh
-version=0.1.0
-platform=macos
-architecture=arm64
-base="https://github.com/hyfens-hq/hyfens/releases/download/v${version}"
-archive="hyfens-${version}-${platform}-${architecture}.tar.gz"
-mkdir -p "$HOME/.local/opt/hyfens-${version}"
-curl --fail --location --remote-name "$base/$archive"
-curl --fail --location --remote-name "$base/SHA256SUMS"
+# Install the latest published release.
+curl --fail --silent --show-error --location \
+  --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh \
+  | bash
 
-if [ "$platform" = macos ]; then
-  grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
-else
-  grep -F "  $archive" SHA256SUMS | sha256sum -c -
-fi
-tar -xzf "$archive" -C "$HOME/.local/opt/hyfens-${version}" --strip-components=1
-mkdir -p "$HOME/.local/bin"
-ln -sfn "$HOME/.local/opt/hyfens-${version}/bin/hyfens" "$HOME/.local/bin/hyfens"
-ln -sfn "$HOME/.local/opt/hyfens-${version}/bin/tool" "$HOME/.local/bin/tool"
-export PATH="$HOME/.local/bin:$PATH"
-hyfens --version
+# Pin an explicit release instead.
+curl --fail --silent --show-error --location \
+  --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh \
+  | bash -s -- --version v0.1.0
 ```
 
-The archive and checksum must be verified before extraction. Use the matching
-`linux` or `macos` value and `x64` or `arm64` architecture for another host.
+The installer supports macOS and Linux on x64 and arm64. It downloads the
+matching GitHub Release archive and `SHA256SUMS`, verifies the archive before
+extracting or installing it, rejects unsafe archive paths and special files,
+and keeps the archive's `bin/` and `lib/` directories together. It uses a
+writable `/usr/local` prefix when available and otherwise falls back to
+`~/.local`; `--prefix PATH` selects an explicit absolute prefix without using
+`sudo`. Versions are kept under `PREFIX/opt/hyfens-VERSION`, with launchers in
+`PREFIX/bin`.
+
+It does not modify `~/.hyfens`, project files, shell startup files, or existing
+non-symlink launchers. The command prints the required `PATH` export after a
+successful install. It is release-only and fails closed when the requested
+GitHub Release or checksum is unavailable; use the source-checkout fallback
+below before a public release exists.
 
 On Windows PowerShell:
 
@@ -91,13 +91,15 @@ The templates under `packaging/cli/` are intentionally not live manifests:
 
 - Homebrew supports macOS and Linux formulas;
 - Scoop provides a Windows manifest; and
-- WinGet uses the two Windows YAML manifests.
+- WinGet uses version, installer, and locale Windows YAML manifests.
 
-After a GitHub Release exists, generate reviewed manifests from
-`artifact-inventory.json`, replace every placeholder, and submit them through
-the approved tap, bucket, or WinGet submission process. Do not commit a
-release-specific checksum or URL until the destination repository and
-publisher identity are verified.
+After a GitHub Release exists, use `artifact-inventory.json` for the release
+version, exact archive names, and SHA-256 values. Construct each URL as
+`https://github.com/hyfens-hq/hyfens/releases/download/v<version>/<archive>`
+and fill the approved WinGet publisher identity separately. Replace the
+template placeholders only after those values and the destination repository
+are verified, then submit through the approved tap, bucket, or WinGet process.
+Do not commit release-specific checksums or URLs before that gate passes.
 
 ## Source-checkout fallback
 

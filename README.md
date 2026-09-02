@@ -42,29 +42,56 @@ products use the same CLI and core protocol; Cloud does not hide baseline
 self-host functionality. Hyfens names and brand assets are governed separately
 by [TRADEMARKS.md](TRADEMARKS.md).
 
-## Quick start
+## Install the CLI
 
-The CLI package is not published to pub.dev because it uses repository path
-dependencies. Until the first tagged GitHub Release is published, use a source
-checkout:
+The canonical executable is `hyfens`. The packaged `tool` executable is
+only a deprecated compatibility shim.
+
+### macOS / Linux
+
+Install the latest published release without Dart or Flutter:
 
 ```bash
-export HYFENS_CHECKOUT=/absolute/path/to/hyfens
-cd "$HYFENS_CHECKOUT/cli"
-dart pub get
-
-# Keep the canonical public name while running the source checkout.
-hyfens() {
-  dart run "$HYFENS_CHECKOUT/cli/bin/hyfens.dart" "$@"
-}
+curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
 ```
 
-Run the function from the Flutter project you want to operate on. The source
-entry file is named `tool.dart` only for compatibility with the existing
-checkout; `hyfens` is the documented command name. Tagged releases build
-native macOS, Linux, and Windows archives with SHA-256 checksums. See
-[CLI distribution](docs/cli-distribution.md) for the release workflow and
-[Getting started](docs/getting-started.md) for the complete local flow.
+Pin an explicit release with `--version v0.1.0`. The installer detects
+macOS/Linux and x64/arm64, verifies `SHA256SUMS` before extraction, and
+prints PATH guidance without modifying project files or `~/.hyfens`.
+
+### Homebrew
+
+Once the v0.1.0 tap manifest is published:
+
+```bash
+brew tap hyfens-hq/tap
+brew install hyfens
+```
+
+### Windows
+
+Once the v0.1.0 Scoop manifest is published:
+
+```powershell
+scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket
+scoop install hyfens
+```
+
+WinGet publication is an external Microsoft submission gate. Until it is
+available, use the direct Windows archive from the GitHub Release.
+
+### Direct release archive
+
+Download the matching archive and verify its `SHA256SUMS` entry before
+running `bin/hyfens`. See [CLI distribution](docs/cli-distribution.md) for
+archive names, Windows PowerShell instructions, upgrade, and uninstall
+guidance.
+
+## Quick start
+
+After installation, run these commands from the Flutter project you want to
+operate on. See [Getting started](docs/getting-started.md) for the complete
+local and self-hosted flow.
 
 ```bash
 hyfens doctor
@@ -193,7 +220,7 @@ follow that notice and use the canonical name for new automation.
 
 ## External gates and backlog
 
-The following are intentionally not claimed by the public workflow:
+The following remain explicit external gates or limitations:
 
 - browser-PKCE or device-code auth as a generally deployed service feature;
 - AWS/provider acceptance, public ingress hardening, durable object retention,
@@ -202,12 +229,12 @@ The following are intentionally not claimed by the public workflow:
   recorded fixtures;
 - App Store/Google Play, legal, or compliance approval;
 - arbitrary Dart/native/dependency patching;
-- package-manager publication, code signing, or a global installer maintained
-  by a package registry.
+- WinGet submission, platform code signing/notarization, and package-manager
+  publication while their external repositories are being provisioned.
 
-The first distribution workflow is configured to publish direct GitHub Release
-archives; the source checkout remains the fallback until a tagged release
-exists.
+The v0.1.0 distribution workflow publishes direct GitHub Release archives. A
+source checkout remains available for contributors and environments where a
+native archive is not yet available.
 
 See [CLI reference](docs/cli.md), [Getting started](docs/getting-started.md),
 the [self-hosted deployment guide](deploy/self-hosted/README.md), and the

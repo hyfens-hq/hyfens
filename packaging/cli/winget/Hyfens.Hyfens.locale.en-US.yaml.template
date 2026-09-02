@@ -8,3 +8,5 @@ PackageName: Hyfens CLI
 PackageUrl: https://github.com/__GITHUB_OWNER__/__GITHUB_REPOSITORY__
 License: Apache-2.0
 ShortDescription: Hyfens developer platform CLI
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0
