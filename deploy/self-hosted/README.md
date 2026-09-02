@@ -18,8 +18,13 @@ loopback-bound application ports.
 
 Requirements: Docker Engine with Compose v2, a DNS name for the dashboard and
 API, and a host-level TLS reverse proxy. The release images are published to
-GHCR by the tagged GitHub release workflow. If the package is private, log in
-with `docker login ghcr.io` before pulling.
+GHCR by the tagged GitHub release workflow. Anonymous GHCR pulls are currently
+an external package-visibility gate: the published packages may respond with
+HTTP 401 until an organization package administrator marks them public. This
+is not a Compose configuration problem. Do not put registry credentials in
+this repository; until visibility is corrected, use an authorized local
+`docker login ghcr.io` or override the image variables with images built or
+mirrored under your own control.
 
 From this directory:
 

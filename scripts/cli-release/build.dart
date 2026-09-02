@@ -7,6 +7,12 @@ import 'release_support.dart';
 String get repositoryRoot =>
     File.fromUri(Platform.script).parent.parent.parent.absolute.path;
 
+String archiveRootName(String archiveName) {
+  final format = parseArtifactFileName(archiveName).format;
+  final suffix = '.$format';
+  return archiveName.substring(0, archiveName.length - suffix.length);
+}
+
 void printUsage() {
   stdout.writeln('''
 Build a native Hyfens CLI release archive.
@@ -192,7 +198,7 @@ Future<void> buildRelease({
 
   final staging = await Directory.systemTemp.createTemp('hyfens-cli-release-');
   try {
-    final packageName = p.withoutExtension(p.withoutExtension(archiveName));
+    final packageName = archiveRootName(archiveName);
     final packageDirectory = Directory(p.join(staging.path, packageName));
     final binDirectory = Directory(p.join(packageDirectory.path, 'bin'));
     await binDirectory.create(recursive: true);

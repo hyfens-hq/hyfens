@@ -1,6 +1,6 @@
 name: hyfens_tool
 description: Local Phase 1B developer toolchain for the Hyfens Flutter patch runtime.
-version: 0.1.0
+version: 0.1.1
 publish_to: none
 
 executables:

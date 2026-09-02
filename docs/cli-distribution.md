@@ -12,7 +12,7 @@ repository has been created and its Actions permissions are enabled:
 1. Set `version` in `cli/pubspec.yaml`.
 2. Run the CLI tests and a host-native build locally.
 3. Create and push an annotated tag with the same version, for example
-   `v0.1.0`.
+   `v<version>`.
 4. `.github/workflows/release-cli.yml` builds and attaches six archives:
    macOS, Linux, and Windows on x64 and arm64.
 5. The workflow also attaches `SHA256SUMS` and `artifact-inventory.json`.
@@ -29,7 +29,7 @@ approved.
 ## Install a GitHub Release directly
 
 The bounded macOS/Linux installer resolves `latest` by querying the fixed
-GitHub repository, or accepts an explicit release such as `v0.1.0`:
+GitHub repository, or accepts an explicit published release such as `v0.1.0`:
 
 ```sh
 # Install the latest published release.
@@ -58,7 +58,7 @@ It does not modify `~/.hyfens`, project files, shell startup files, or existing
 non-symlink launchers. The command prints the required `PATH` export after a
 successful install. It is release-only and fails closed when the requested
 GitHub Release or checksum is unavailable; use the source-checkout fallback
-below before a public release exists.
+below when a native release archive is unavailable.
 
 On Windows PowerShell:
 
@@ -103,8 +103,9 @@ Do not commit release-specific checksums or URLs before that gate passes.
 
 ## Source-checkout fallback
 
-Before the first tagged release, use the source workflow described in
-[`docs/getting-started.md`](getting-started.md). It requires Dart `3.13.x` and
+When a native archive is unavailable or for contributors, use the source
+workflow described in [`docs/getting-started.md`](getting-started.md). It
+requires Dart `3.13.x` and
 the repository's path dependencies. The source installer remains useful for
 local development; it is not a network installer or a package-manager
 publication.

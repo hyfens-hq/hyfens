@@ -1,10 +1,10 @@
 # Getting started
 
 This guide runs the bounded Hyfens developer workflow against either the
-managed default or a self-hosted control plane. Hyfens v0.1.0 provides native
-CLI archives through GitHub Releases; the source checkout remains the
-contributor fallback. The CLI uses repository path dependencies rather than
-pub.dev.
+managed default or a self-hosted control plane. The current Hyfens release
+provides native CLI archives through GitHub Releases; the source checkout
+remains the contributor fallback. The CLI uses repository path dependencies
+rather than pub.dev.
 
 The tested toolchain family is Flutter `3.47.x` with Dart `3.13.x`.
 
@@ -17,11 +17,11 @@ curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/insta
 ```
 
 The installer detects x64/arm64, verifies the downloaded archive against
-`SHA256SUMS`, and prints PATH guidance. Pin v0.1.0 with
+`SHA256SUMS`, and prints PATH guidance. Pin a published release with
 `--version v0.1.0`. Direct Windows archives and PowerShell verification are
 documented in [CLI distribution](cli-distribution.md).
 
-After the v0.1.0 manifests are published, package-manager installs are:
+Package-manager installs are:
 
 ```bash
 brew tap hyfens-hq/tap

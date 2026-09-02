@@ -55,13 +55,13 @@ Install the latest published release without Dart or Flutter:
 curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
 ```
 
-Pin an explicit release with `--version v0.1.0`. The installer detects
+Pin an explicit release with `--version v<version>`. The installer detects
 macOS/Linux and x64/arm64, verifies `SHA256SUMS` before extraction, and
 prints PATH guidance without modifying project files or `~/.hyfens`.
 
 ### Homebrew
 
-Once the v0.1.0 tap manifest is published:
+The published Homebrew tap provides the same release archives:
 
 ```bash
 brew tap hyfens-hq/tap
@@ -70,7 +70,7 @@ brew install hyfens
 
 ### Windows
 
-Once the v0.1.0 Scoop manifest is published:
+The published Scoop bucket provides the same release archives:
 
 ```powershell
 scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket
@@ -229,10 +229,11 @@ The following remain explicit external gates or limitations:
   recorded fixtures;
 - App Store/Google Play, legal, or compliance approval;
 - arbitrary Dart/native/dependency patching;
-- WinGet submission, platform code signing/notarization, and package-manager
-  publication while their external repositories are being provisioned.
+- WinGet submission, platform code signing/notarization, and any additional
+  package-manager channels while their external repositories are being
+  provisioned.
 
-The v0.1.0 distribution workflow publishes direct GitHub Release archives. A
+The CLI distribution workflow publishes direct GitHub Release archives. A
 source checkout remains available for contributors and environments where a
 native archive is not yet available.
 

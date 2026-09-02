@@ -10,9 +10,9 @@ binding, capabilities, sequence/high-water, health, rollback, and fallback.
 
 ## Install a released CLI
 
-The canonical executable is `hyfens`. Hyfens v0.1.0 provides native archives
-for macOS, Linux, and Windows on x64 and arm64. The deprecated `tool` shim is
-included only for compatibility.
+The canonical executable is `hyfens`. The current Hyfens release provides
+native archives for macOS, Linux, and Windows on x64 and arm64. The deprecated
+`tool` shim is included only for compatibility.
 
 On macOS or Linux, install the latest release without Dart or Flutter:
 
@@ -20,7 +20,7 @@ On macOS or Linux, install the latest release without Dart or Flutter:
 curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
 ```
 
-Pin a release with:
+Pin a published release with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash -s -- --version v0.1.0

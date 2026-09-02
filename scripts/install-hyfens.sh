@@ -35,13 +35,13 @@ old_tool_link_target=''
 
 usage() {
   cat <<'EOF'
-Usage: install-hyfens.sh [--version latest|v0.1.0] [--prefix PATH]
+Usage: install-hyfens.sh [--version latest|VERSION] [--prefix PATH]
 
 Install the Hyfens CLI from a GitHub Release on macOS or Linux.
 
 Options:
-  --version VERSION  Install latest (default) or an explicit release, such as
-                     v0.1.0. A leading v is optional for an explicit version.
+  --version VERSION  Install latest (default) or an explicit semantic release
+                     version. A leading v is optional for an explicit version.
   --prefix PATH      Install under PATH instead of the writable standard path.
   -h, --help         Show this help.
 
@@ -215,13 +215,187 @@ download() {
   curl "${curl_options[@]}" --output "$destination" "$url"
 }
 
+extract_latest_release_tag() {
+  awk '
+  function skip_space(   character) {
+    while (position <= json_length) {
+      character = substr(json, position, 1)
+      if (character !~ /[[:space:]]/) break
+      position++
+    }
+  }
+
+  function parse_string(   character, escape, hex) {
+    if (substr(json, position, 1) != "\"") return 0
+    position++
+    string_value = ""
+    while (position <= json_length) {
+      character = substr(json, position, 1)
+      if (character == "\"") {
+        position++
+        return 1
+      }
+      if (character ~ /[[:cntrl:]]/) return 0
+      if (character == "\\") {
+        position++
+        escape = substr(json, position, 1)
+        if (escape == "u") {
+          hex = substr(json, position + 1, 4)
+          if (length(hex) != 4 || hex !~ /^[0-9A-Fa-f]+$/) return 0
+          position += 5
+        } else if (index("\"\\/bfnrt", escape) == 0) {
+          return 0
+        } else {
+          position++
+        }
+        string_value = string_value "?"
+        continue
+      }
+      string_value = string_value character
+      position++
+    }
+    return 0
+  }
+
+  function parse_number(   character) {
+    character = substr(json, position, 1)
+    if (character == "-") {
+      position++
+      character = substr(json, position, 1)
+    }
+    if (character == "0") {
+      position++
+    } else if (character ~ /^[1-9]$/) {
+      while (substr(json, position, 1) ~ /^[0-9]$/) position++
+    } else {
+      return 0
+    }
+
+    if (substr(json, position, 1) == ".") {
+      position++
+      if (substr(json, position, 1) !~ /^[0-9]$/) return 0
+      while (substr(json, position, 1) ~ /^[0-9]$/) position++
+    }
+    character = substr(json, position, 1)
+    if (character == "e" || character == "E") {
+      position++
+      character = substr(json, position, 1)
+      if (character == "+" || character == "-") position++
+      if (substr(json, position, 1) !~ /^[0-9]$/) return 0
+      while (substr(json, position, 1) ~ /^[0-9]$/) position++
+    }
+    return 1
+  }
+
+  function parse_value(   character) {
+    skip_space()
+    character = substr(json, position, 1)
+    if (character == "{") return parse_object(0)
+    if (character == "[") return parse_array()
+    if (character == "\"") return parse_string()
+    if (character == "-") return parse_number()
+    if (character ~ /^[0-9]$/) return parse_number()
+    if (substr(json, position, 4) == "true") {
+      position += 4
+      return 1
+    }
+    if (substr(json, position, 5) == "false") {
+      position += 5
+      return 1
+    }
+    if (substr(json, position, 4) == "null") {
+      position += 4
+      return 1
+    }
+    return 0
+  }
+
+  function parse_array(   character) {
+    if (substr(json, position, 1) != "[") return 0
+    position++
+    skip_space()
+    if (substr(json, position, 1) == "]") {
+      position++
+      return 1
+    }
+    while (position <= json_length) {
+      if (!parse_value()) return 0
+      skip_space()
+      character = substr(json, position, 1)
+      if (character == "]") {
+        position++
+        return 1
+      }
+      if (character != ",") return 0
+      position++
+      skip_space()
+      if (substr(json, position, 1) == "]") return 0
+    }
+    return 0
+  }
+
+  function parse_object(top_level,   key, character) {
+    if (substr(json, position, 1) != "{") return 0
+    position++
+    skip_space()
+    if (substr(json, position, 1) == "}") {
+      position++
+      return 1
+    }
+    while (position <= json_length) {
+      if (!parse_string()) return 0
+      key = string_value
+      skip_space()
+      if (substr(json, position, 1) != ":") return 0
+      position++
+      skip_space()
+      if (top_level && key == "tag_name") {
+        if (tag_found || !parse_string()) return 0
+        tag_value = string_value
+        tag_found = 1
+      } else if (!parse_value()) {
+        return 0
+      }
+      skip_space()
+      character = substr(json, position, 1)
+      if (character == "}") {
+        position++
+        return 1
+      }
+      if (character != ",") return 0
+      position++
+      skip_space()
+      if (substr(json, position, 1) == "}") return 0
+    }
+    return 0
+  }
+
+  { json = json $0 "\n" }
+
+  END {
+    json_length = length(json)
+    position = 1
+    skip_space()
+    if (substr(json, position, 1) != "{") {
+      exit 1
+    }
+    if (!parse_object(1)) exit 1
+    skip_space()
+    if (position <= json_length) exit 1
+    if (tag_found) print tag_value
+  }
+  ' "$1"
+}
+
 resolve_latest() {
   local metadata="$download_dir/latest.json"
   local tag
 
   download "$RELEASES_API_URL" "$metadata" ||
     fail 'unable to resolve the latest GitHub Release'
-  tag="$(awk -F '"' '$2 == "tag_name" { print $4; exit }' "$metadata")"
+  if ! tag="$(extract_latest_release_tag "$metadata")"; then
+    fail 'GitHub latest-release response was not valid JSON'
+  fi
   [[ -n "$tag" ]] || fail 'GitHub latest-release response did not contain tag_name'
   [[ "$tag" == v* ]] || fail "latest release tag is not a v-prefixed version: $tag"
   version="$(normalize_version "$tag")"

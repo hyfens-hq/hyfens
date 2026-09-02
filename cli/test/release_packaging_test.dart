@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
+import '../../scripts/cli-release/build.dart' as release_build;
 import '../../scripts/cli-release/release_support.dart';
 
 Directory repositoryDirectory() {
@@ -23,11 +24,12 @@ void main() {
   group('release metadata', () {
     test('normalizes tags and enforces the CLI package version', () {
       expect(normalizeReleaseVersion('v0.1.0'), '0.1.0');
-      expect(cliPackageVersion(repository.path), '0.1.0');
+      expect(cliPackageVersion(repository.path), '0.1.1');
+      validateReleaseVersion(repositoryRoot: repository.path, version: '0.1.1');
       expect(
         () => validateReleaseVersion(
           repositoryRoot: repository.path,
-          version: '0.1.1',
+          version: '0.1.0',
         ),
         throwsStateError,
       );
@@ -36,20 +38,55 @@ void main() {
     test('uses platform-specific archive names and formats', () {
       expect(
         artifactFileName(
-          version: '0.1.0',
+          version: '0.1.1',
           platform: 'macos',
           architecture: 'arm64',
         ),
-        'hyfens-0.1.0-macos-arm64.tar.gz',
+        'hyfens-0.1.1-macos-arm64.tar.gz',
       );
-      final windows = parseArtifactFileName('hyfens-0.1.0-windows-x64.zip');
+      final windows = parseArtifactFileName('hyfens-0.1.1-windows-x64.zip');
       expect(windows.platform, 'windows');
       expect(windows.architecture, 'x64');
       expect(
-        () => parseArtifactFileName('hyfens-0.1.0-linux-x64.zip'),
+        () => parseArtifactFileName('hyfens-0.1.1-linux-x64.zip'),
         throwsFormatException,
       );
     });
+
+    test(
+      'keeps full archive stems as package roots for every native target',
+      () {
+        const targets = <String, String>{
+          'macos/x64': 'tar.gz',
+          'macos/arm64': 'tar.gz',
+          'linux/x64': 'tar.gz',
+          'linux/arm64': 'tar.gz',
+          'windows/x64': 'zip',
+          'windows/arm64': 'zip',
+        };
+
+        for (final entry in targets.entries) {
+          final parts = entry.key.split('/');
+          final platform = parts[0];
+          final architecture = parts[1];
+          final archiveName =
+              'hyfens-0.1.1-$platform-$architecture.' + entry.value;
+
+          expect(
+            artifactFileName(
+              version: '0.1.1',
+              platform: platform,
+              architecture: architecture,
+            ),
+            archiveName,
+          );
+          expect(
+            release_build.archiveRootName(archiveName),
+            'hyfens-0.1.1-$platform-$architecture',
+          );
+        }
+      },
+    );
   });
 
   test('inventory writes SHA256SUMS and all native platform records', () async {
@@ -58,12 +95,12 @@ void main() {
     );
     addTearDown(() => artifacts.delete(recursive: true));
     final names = <String>[
-      'hyfens-0.1.0-linux-arm64.tar.gz',
-      'hyfens-0.1.0-linux-x64.tar.gz',
-      'hyfens-0.1.0-macos-arm64.tar.gz',
-      'hyfens-0.1.0-macos-x64.tar.gz',
-      'hyfens-0.1.0-windows-arm64.zip',
-      'hyfens-0.1.0-windows-x64.zip',
+      'hyfens-0.1.1-linux-arm64.tar.gz',
+      'hyfens-0.1.1-linux-x64.tar.gz',
+      'hyfens-0.1.1-macos-arm64.tar.gz',
+      'hyfens-0.1.1-macos-x64.tar.gz',
+      'hyfens-0.1.1-windows-arm64.zip',
+      'hyfens-0.1.1-windows-x64.zip',
     ];
     for (final name in names) {
       await File(p.join(artifacts.path, name)).writeAsString(name);
@@ -73,7 +110,7 @@ void main() {
       'run',
       '../scripts/cli-release/inventory.dart',
       '--version',
-      '0.1.0',
+      '0.1.1',
       '--artifacts-dir',
       artifacts.path,
       '--output',
@@ -82,7 +119,7 @@ void main() {
     expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
     final body =
         jsonDecode(await inventory.readAsString()) as Map<String, dynamic>;
-    expect(body['releaseVersion'], '0.1.0');
+    expect(body['releaseVersion'], '0.1.1');
     expect((body['artifacts'] as List<dynamic>), hasLength(6));
     final checksums = await File(p.join(artifacts.path, 'SHA256SUMS'))
         .readAsLines();
