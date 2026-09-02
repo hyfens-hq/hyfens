@@ -20,9 +20,9 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Set up Dart
-        uses: dart-lang/setup-dart@v1
+        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
       - name: Resolve locked CLI dependencies
         working-directory: cli
         run: dart pub get --enforce-lockfile --no-example
@@ -65,9 +65,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Set up Dart
-        uses: dart-lang/setup-dart@v1
+        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
       - name: Resolve locked CLI dependencies
         working-directory: cli
         run: dart pub get --enforce-lockfile --no-example
@@ -83,7 +83,7 @@ jobs:
             --architecture "${{ matrix.architecture }}" \
             --output-dir dist
       - name: Upload platform archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hyfens-cli-${{ matrix.platform }}-${{ matrix.architecture }}
           path: cli/dist/*
@@ -100,14 +100,14 @@ jobs:
       contents: write
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Set up Dart
-        uses: dart-lang/setup-dart@v1
+        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
       - name: Resolve locked CLI dependencies
         working-directory: cli
         run: dart pub get --enforce-lockfile --no-example
       - name: Download platform archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: hyfens-cli-*
           path: dist

@@ -18,10 +18,9 @@ import 'project.dart';
 import 'signing.dart';
 import 'source_fingerprints.dart';
 
-// Phase 1C runtime hardening changes the release-embedded interpreter and
-// lifecycle behavior. The tool version is part of release identity, so a
-// hardened release cannot be confused with a Phase 1B runtime baseline.
-const hyfensToolVersion = '0.1.0-phase1c.1';
+// The CLI version is part of release identity and must match cli/pubspec.yaml
+// and the version used by the release workflows.
+const hyfensToolVersion = '0.1.0';
 const _bridgeExtensionType = 9;
 const _rollbackStateVersion = 1;
 const _rollbackTargetBaseAot = 'base-aot';

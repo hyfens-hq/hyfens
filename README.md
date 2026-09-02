@@ -128,6 +128,9 @@ dashboard origin explicitly. Use them only when the instance's
 [self-hosted deployment guide](deploy/self-hosted/README.md) documents the
 operator authentication seam.
 
+For responsible vulnerability disclosure, see the
+[security policy](SECURITY.md).
+
 CI must use a scoped, expirable, revocable service/API key through
 `HYFENS_TOKEN`; do not put a human session or a token value in source control:
 

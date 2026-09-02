@@ -22,5 +22,5 @@ not commit a release baseline. This fixture setting is project-local and does
 not create, revoke, or change organization-wide signing assets.
 
 See [`docs/getting-started.md`](../../docs/getting-started.md) for the local
-workflow and [`docs/research/developer-workflow.md`](../../docs/research/developer-workflow.md)
-for the recorded physical evidence.
+workflow and [`docs/dart-support-matrix.md`](../../docs/dart-support-matrix.md)
+for the public evidence boundary.
