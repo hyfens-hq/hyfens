@@ -50,11 +50,15 @@ session file, token, or private signing key into the checkout.
 
 ## 2. Select an endpoint and authenticate
 
-The managed default is the currently proven Cloud API base:
+The managed default is the canonical Cloud API base:
 
 ```text
-https://api.hyfens.com/p2/
+https://api.hyfens.com/
 ```
+
+Existing profiles using `https://api.hyfens.com/p2/` continue to work and are
+adopted to the canonical root when the CLI reads their session. `/p2/` is a
+legacy deployment alias, not an API version.
 
 Use the default profile for managed work:
 

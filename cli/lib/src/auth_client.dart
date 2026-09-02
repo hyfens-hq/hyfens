@@ -573,9 +573,7 @@ final class AuthClient {
     final metadata = CliProfile(
       name: name,
       endpoint: endpoint,
-      managed:
-          controlPlaneEndpointKey(endpoint) ==
-          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase)),
+      managed: isManagedCloudEndpoint(endpoint),
       organizationId: profile.organizationId,
       applicationId: profile.applicationId,
       environmentId: profile.environmentId,
@@ -673,7 +671,7 @@ final class AuthClient {
   }
 
   void _requireMatchingEndpoint(Uri target, Uri stored) {
-    if (controlPlaneEndpointKey(target) == controlPlaneEndpointKey(stored)) {
+    if (controlPlaneEndpointsMatch(target, stored)) {
       return;
     }
     throw ToolFailure.single(
@@ -872,8 +870,7 @@ void _validateToken(String token, String field) {
 }
 
 String _defaultProfileName(Uri endpoint) {
-  return controlPlaneEndpointKey(endpoint) ==
-          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase))
+  return isManagedCloudEndpoint(endpoint)
       ? managedCloudProfileName
       : 'self-hosted';
 }

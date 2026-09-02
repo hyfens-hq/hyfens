@@ -287,7 +287,7 @@ Uri? _optionalUri(Map<String, Object?> json, List<String> keys) {
 }
 
 bool _supportedDiscoveryVersion(String value) =>
-    value == '1' || value == 'v1' || value == 'p2' || value.startsWith('1.');
+    value == '1' || value == 'v1' || value.startsWith('1.');
 
 Map<String, Object?> _mapStringKeys(Map value) => <String, Object?>{
   for (final entry in value.entries)

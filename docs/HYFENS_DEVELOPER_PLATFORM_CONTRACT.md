@@ -84,7 +84,7 @@ are:
 active_profile = "hyfens-cloud"
 
 [profiles.hyfens-cloud]
-endpoint = "https://api.hyfens.com/p2/"
+endpoint = "https://api.hyfens.com/"
 managed = true
 organization = "org_..."
 application = "app_..."
@@ -108,9 +108,10 @@ A session obtained from one host must never be sent to another host.
 
 ## Managed and self-hosted endpoints
 
-The managed product host is `api.hyfens.com`. The currently proven managed
-API base is `https://api.hyfens.com/p2/`; the CLI Cloud default uses that exact
-base until a different versioned public route is deployed and documented.
+The managed product host is `api.hyfens.com`. The canonical API base is
+`https://api.hyfens.com/`. The older `/p2/` path remains a deployment alias
+for existing CLI profiles during migration; it does not represent API version
+2. The API version is advertised through discovery and is currently `v1`.
 
 Self-hosted login accepts an explicit HTTPS API base or host:
 

@@ -111,4 +111,67 @@ void main() {
       expect(File('${root.path}/credentials').existsSync(), isFalse);
     },
   );
+
+  test(
+    'managed Cloud legacy alias migrates its profile and keyed session',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'hyfens-managed-migration-',
+      );
+      addTearDown(() => root.delete(recursive: true));
+      final storage = AuthStorage(root: root);
+      final legacyKey = controlPlaneEndpointKey(
+        Uri.parse(legacyManagedCloudApiBase),
+      );
+      await storage.profilesFile.parent.create(recursive: true);
+      await storage.profilesFile.writeAsString(
+        jsonEncode(<String, Object?>{
+          'active_profile': managedCloudProfileName,
+          'profiles': <String, Object?>{
+            managedCloudProfileName: <String, Object?>{
+              'endpoint': legacyManagedCloudApiBase,
+              'managed': true,
+            },
+          },
+        }),
+      );
+      await storage.credentialsFile.writeAsString(
+        jsonEncode(<String, Object?>{
+          legacyKey: const AuthSession(
+            accessToken: 'legacy-access',
+            sessionToken: 'legacy-session',
+          ).toJson(),
+        }),
+      );
+
+      final active = await storage.readActiveProfile();
+      expect(active.endpoint.toString(), managedCloudApiBase);
+      final session = await storage.readSession(endpoint: active.endpoint);
+      expect(session?.accessToken, 'legacy-access');
+      expect(session?.sessionToken, 'legacy-session');
+
+      final credentials = jsonDecode(
+        await storage.credentialsFile.readAsString(),
+      ) as Map<String, Object?>;
+      expect(credentials.containsKey(legacyKey), isFalse);
+      expect(
+        credentials.containsKey(
+          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase)),
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test('only managed Cloud aliases share endpoint identity', () {
+    final canonical = Uri.parse(managedCloudApiBase);
+    final legacy = Uri.parse(legacyManagedCloudApiBase);
+    final selfHosted = Uri.parse('https://self-host.example/p2/');
+
+    expect(isManagedCloudEndpoint(canonical), isTrue);
+    expect(isManagedCloudEndpoint(legacy), isTrue);
+    expect(isManagedCloudEndpoint(selfHosted), isFalse);
+    expect(controlPlaneEndpointsMatch(canonical, legacy), isTrue);
+    expect(controlPlaneEndpointsMatch(legacy, selfHosted), isFalse);
+  });
 }

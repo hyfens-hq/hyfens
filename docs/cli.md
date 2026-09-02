@@ -117,14 +117,17 @@ security boundaries.
 
 ## Endpoint and profile selection
 
-With no host override, the managed profile uses the currently proven API base:
+With no host override, the managed profile uses the canonical Cloud API base:
 
 ```text
-https://api.hyfens.com/p2/
+https://api.hyfens.com/
 ```
 
-The value is a versioned API base, not a promise of public signup, hosted
-release downloads, production availability, or a service-level guarantee.
+The older `https://api.hyfens.com/p2/` deployment alias remains accepted for
+existing profiles and compatibility. It is not an API version; the public API
+version is negotiated through discovery (`v1`). The endpoint is not a promise
+of public signup, hosted release downloads, production availability, or a
+service-level guarantee.
 
 Choose a self-hosted control plane explicitly:
 
@@ -144,7 +147,7 @@ metadata like this:
 active_profile = "hyfens-cloud"
 
 [profiles.hyfens-cloud]
-endpoint = "https://api.hyfens.com/p2/"
+endpoint = "https://api.hyfens.com/"
 managed = true
 organization = "org_..."
 application = "app_..."

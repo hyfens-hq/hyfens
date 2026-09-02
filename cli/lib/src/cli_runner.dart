@@ -126,7 +126,7 @@ final class HyfensCommandRunner extends CommandRunner<void> {
     write(usage);
     write('');
     write('Examples:');
-    write('  hyfens login --host https://api.hyfens.com/p2/');
+    write('  hyfens login');
     write('  hyfens release android --metadata-only');
     write('  hyfens patch android');
     write('  hyfens mcp --profile acme');
@@ -1648,8 +1648,7 @@ ProfileScope? _singleProfileScope(Profile? profile) {
 
 ProfileScope? _profileScopeForEndpoint(Profile? profile, Uri endpoint) {
   if (profile == null ||
-      controlPlaneEndpointKey(profile.endpoint) !=
-          controlPlaneEndpointKey(endpoint)) {
+      !controlPlaneEndpointsMatch(profile.endpoint, endpoint)) {
     return null;
   }
   return _singleProfileScope(profile);

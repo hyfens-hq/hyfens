@@ -252,8 +252,7 @@ final class ControlPlaneDeliveryService {
 
 ProfileScope? _profileScopeForEndpoint(Profile? profile, Uri endpoint) {
   if (profile == null ||
-      controlPlaneEndpointKey(profile.endpoint) !=
-          controlPlaneEndpointKey(endpoint) ||
+      !controlPlaneEndpointsMatch(profile.endpoint, endpoint) ||
       profile.profiles.length != 1) {
     return null;
   }

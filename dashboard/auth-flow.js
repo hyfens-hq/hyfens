@@ -20,7 +20,7 @@
     const configured = document.querySelector('meta[name="hyfens-api-base"]')?.content.trim();
     if (configured) return normalizeApiBase(configured);
     if (window.location.hostname === 'app.hyfens.com') {
-      return normalizeApiBase('https://api.hyfens.com/p2/');
+      return normalizeApiBase('https://api.hyfens.com/');
     }
     return normalizeApiBase(`${window.location.origin}/`);
   }

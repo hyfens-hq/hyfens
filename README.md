@@ -120,15 +120,17 @@ validated.
 
 ## Managed and self-hosted control planes
 
-With no host override, the managed profile uses the currently proven Cloud API
-base:
+With no host override, the managed profile uses the canonical Cloud API base:
 
 ```text
-https://api.hyfens.com/p2/
+https://api.hyfens.com/
 ```
 
-That URL is a versioned API base and health/readiness evidence, not a promise
-of public signup, production availability, or a hosted release download.
+The older `https://api.hyfens.com/p2/` deployment alias remains accepted for
+existing profiles and self-hosted compatibility; it is not an API version.
+The public API version is negotiated through discovery (`v1`). This endpoint
+and its health/readiness evidence are not a promise of public signup,
+production availability, or a hosted release download.
 
 For a self-hosted instance, select the endpoint once at login and keep it in a
 named profile:

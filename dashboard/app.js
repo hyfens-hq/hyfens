@@ -593,7 +593,7 @@
     const configured = document.querySelector('meta[name="hyfens-api-base"]')?.content?.trim();
     const runtimeConfigured = window.__HYFENS_RUNTIME_CONFIG__?.apiBase?.trim();
     if (configured || runtimeConfigured) return configured || runtimeConfigured;
-    if (window.location.hostname === 'app.hyfens.com') return 'https://api.hyfens.com/p2/';
+    if (window.location.hostname === 'app.hyfens.com') return 'https://api.hyfens.com/';
     return `${window.location.origin}/`;
   }
 

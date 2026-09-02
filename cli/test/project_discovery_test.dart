@@ -57,6 +57,18 @@ void main() {
     expect(document.supportsBrowserPkce, isTrue);
   });
 
+  test('does not treat the legacy deployment prefix as an API version', () {
+    expect(
+      () => DiscoveryDocument.fromJson(<String, Object?>{
+        'product': 'hyfens',
+        'api_version': 'p2',
+        'auth_methods': <String>['authorization_code_pkce_s256'],
+        'capabilities': <String, Object?>{},
+      }),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
   test(
     'discovers project root, application ID, graph, and source policy',
     () async {
