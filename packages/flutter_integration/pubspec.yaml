@@ -1,0 +1,32 @@
+name: hyfens_flutter_integration
+description: Generated-release bootstrap for the local Hyfens Flutter patch runtime.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  crypto: ^3.0.7
+  hyfens_patch_format:
+    path: ../patch_format
+  instrumentation_e0:
+    path: ../../experiments/instrumentation
+  path_provider: ^2.1.5
+  patch_loading_e1:
+    path: ../../experiments/patch_loading
+
+dev_dependencies:
+  cryptography: ^2.9.0
+  hyfens_control_plane:
+    path: ../control_plane
+  hyfens_runtime:
+    path: ../runtime
+  test: ^1.26.0
+
+# Flutter 3.47's newest Android implementation initializes JNI during the
+# engine's early Dart plugin-registration phase. The Pigeon implementation is
+# compatible with the same path_provider API and keeps this runtime bootstrap
+# independent of that early-JNI ordering.
+dependency_overrides:
+  path_provider_android: 2.2.23

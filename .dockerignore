@@ -1,0 +1,14 @@
+# The public image builds only need the checked-in dashboard, control-plane,
+# patch-format, and license/notice files. Keeping deploy/aws, device builds,
+# Flutter caches, and evidence artifacts out of the context prevents private
+# deployment material from entering a build context.
+*
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!dashboard/
+!dashboard/**
+!packages/
+!packages/patch_format/
+!packages/patch_format/**
+!packages/control_plane/
+!packages/control_plane/**

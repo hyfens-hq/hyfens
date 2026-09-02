@@ -1,0 +1,40 @@
+name: hyfens_tool
+description: Local Phase 1B developer toolchain for the Hyfens Flutter patch runtime.
+version: 0.1.0
+publish_to: none
+
+executables:
+  hyfens: hyfens
+  tool: tool
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  analyzer: ^8.0.0
+  args: ^2.7.0
+  crypto: ^3.0.7
+  cryptography: ^2.9.0
+  hyfens_compiler:
+    path: ../packages/compiler
+  hyfens_control_plane:
+    path: ../packages/control_plane
+  hyfens_flutter_integration:
+    path: ../packages/flutter_integration
+  hyfens_instrumenter:
+    path: ../packages/instrumenter
+  hyfens_patch_format:
+    path: ../packages/patch_format
+  patch_loading_e1:
+    path: ../experiments/patch_loading
+  path: ^1.9.1
+  yaml: ^3.1.3
+
+dev_dependencies:
+  test: ^1.26.0
+
+# Keep the generated Flutter bootstrap on the non-JNI Android path-provider
+# implementation. The JNI-backed implementation initializes before the
+# engine's JNI bridge is ready in a release AOT plugin registrant.
+dependency_overrides:
+  path_provider_android: 2.2.23

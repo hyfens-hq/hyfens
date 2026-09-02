@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0C0C0C">
+    <link rel="icon" href="../../brand-mark.svg" type="image/svg+xml">
+    <meta name="referrer" content="no-referrer">
+    <meta name="hyfens-api-base" content="">
+    <title>Authorize Hyfens CLI</title>
+    <link rel="stylesheet" href="../../tokens.css">
+    <link rel="stylesheet" href="../../auth-flow.css">
+  </head>
+  <body>
+    <main class="auth-flow">
+      <section class="auth-flow-card" aria-labelledby="title">
+        <a class="auth-brand" href="https://hyfens.com/" aria-label="Hyfens home">
+          <img class="auth-brand-mark" src="../../brand-mark.svg" alt="" aria-hidden="true">
+          <span>hyfens</span>
+        </a>
+        <p class="eyebrow">Hyfens CLI access</p>
+        <h1 id="title">Approve this sign-in.</h1>
+        <p class="lede">Authenticate once in your browser. The CLI receives a short-lived authorization code, never your password or session token.</p>
+        <dl id="request-summary" class="request-summary hidden"></dl>
+        <form id="authorize-form" class="hidden">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="username" required>
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+          <div class="auth-actions">
+            <button id="approve" type="submit">Authenticate and approve</button>
+            <button id="cancel" class="button-secondary" type="button">Cancel</button>
+          </div>
+          <p id="message" class="message" role="status" aria-live="polite"></p>
+        </form>
+        <p id="initial-message" class="message" role="status" aria-live="polite">Checking the authorization request…</p>
+        <p class="fine-print">Only the exact loopback callback supplied by the CLI will receive the one-time code.</p>
+      </section>
+    </main>
+    <script src="../../runtime-config.js"></script>
+    <script src="../../auth-flow.js"></script>
+    <script>
+      (() => {
+        'use strict';
+        const required = ['client_id', 'redirect_uri', 'response_type', 'code_challenge', 'code_challenge_method', 'state'];
+        const params = new URLSearchParams(window.location.search);
+        const summary = document.querySelector('#request-summary');
+        const form = document.querySelector('#authorize-form');
+        const initialMessage = document.querySelector('#initial-message');
+        const message = document.querySelector('#message');
+        const password = document.querySelector('#password');
+        const approve = document.querySelector('#approve');
+        const cancel = document.querySelector('#cancel');
+        let request;
+
+        function fail(text) {
+          initialMessage.textContent = text;
+          initialMessage.dataset.state = 'error';
+        }
+
+        function safeCallback(value) {
+          const uri = new URL(value);
+          const loopback = uri.hostname === 'localhost' || uri.hostname === '127.0.0.1' || uri.hostname === '[::1]' || uri.hostname === '::1';
+          if (uri.protocol !== 'https:' && !(uri.protocol === 'http:' && loopback)) throw new Error('The callback is not a secure loopback or HTTPS URI.');
+          if (uri.username || uri.password || uri.hash) throw new Error('The callback URI is invalid.');
+          return uri;
+        }
+
+        function renderRequest(value) {
+          summary.replaceChildren();
+          for (const [label, text] of [['Client', value.client_id], ['Control plane', HyfensAuthFlow.apiBase()], ['Callback', value.redirect_uri]]) {
+            const term = document.createElement('dt');
+            term.textContent = label;
+            const definition = document.createElement('dd');
+            definition.textContent = text;
+            summary.append(term, definition);
+          }
+          summary.classList.remove('hidden');
+          form.classList.remove('hidden');
+          initialMessage.classList.add('hidden');
+        }
+
+        async function start() {
+          if (required.some((key) => !params.get(key)) || params.size !== required.length) throw new Error('The authorization request is incomplete. Restart login from the Hyfens CLI.');
+          if (params.get('response_type') !== 'code' || params.get('code_challenge_method') !== 'S256') throw new Error('This authorization request uses an unsupported flow.');
+          const query = new URLSearchParams();
+          for (const key of required) query.set(key, params.get(key));
+          request = await HyfensAuthFlow.request(`auth/authorize?${query.toString()}`);
+          renderRequest(Object.fromEntries(params.entries()));
+        }
+
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          approve.disabled = true;
+          const email = document.querySelector('#email').value.trim();
+          const enteredPassword = password.value;
+          password.value = '';
+          try {
+            const login = await HyfensAuthFlow.request('auth/login', HyfensAuthFlow.jsonOptions({ email, password: enteredPassword }));
+            const approval = await HyfensAuthFlow.request('auth/authorize', {
+              ...HyfensAuthFlow.jsonOptions({ request_id: request.authorization_request_id }, login.access_token),
+              headers: { Accept: 'application/json', Authorization: `Bearer ${login.access_token}`, 'Content-Type': 'application/json' },
+            });
+            if (approval.state !== params.get('state') || approval.redirect_uri !== params.get('redirect_uri') || !approval.code) throw new Error('The authorization response did not match the original request.');
+            const callback = safeCallback(approval.redirect_uri);
+            callback.searchParams.set('code', approval.code);
+            callback.searchParams.set('state', approval.state);
+            window.location.assign(callback.toString());
+          } catch (error) {
+            HyfensAuthFlow.setMessage(message, error instanceof Error ? error.message : 'Authorization failed.', 'error');
+            approve.disabled = false;
+          }
+        });
+
+        cancel.addEventListener('click', () => {
+          request = null;
+          form.reset();
+          form.classList.add('hidden');
+          summary.classList.add('hidden');
+          initialMessage.classList.remove('hidden');
+          initialMessage.textContent = 'Authorization cancelled. Return to the CLI to try again.';
+          initialMessage.dataset.state = 'success';
+          approve.disabled = true;
+          cancel.disabled = true;
+        });
+
+        start().catch((error) => fail(error instanceof Error ? error.message : 'Authorization request failed.'));
+      })();
+    </script>
+  </body>
+</html>

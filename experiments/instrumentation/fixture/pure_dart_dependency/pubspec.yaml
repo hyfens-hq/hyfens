@@ -1,0 +1,7 @@
+name: pure_dep
+description: Local pure-Dart dependency fixture for package overlay tests.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0

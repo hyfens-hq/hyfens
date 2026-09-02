@@ -1,0 +1,91 @@
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap");
+
+:root {
+  color-scheme: dark;
+
+  --hyfens-orange: #FD5510;
+  --hyfens-void-black: #0C0C0C;
+  --hyfens-white: #FFFFFF;
+  --hyfens-off-white: #F5F3EF;
+  --hyfens-gray-100: #E8E6E3;
+  --hyfens-gray-400: #8A8785;
+  --hyfens-gray-600: #4A4845;
+
+  --hyfens-orange-rgb: 253, 85, 16;
+  --hyfens-void-black-rgb: 12, 12, 12;
+  --hyfens-white-rgb: 255, 255, 255;
+  --hyfens-off-white-rgb: 245, 243, 239;
+  --hyfens-gray-100-rgb: 232, 230, 227;
+  --hyfens-gray-400-rgb: 138, 135, 133;
+  --hyfens-gray-600-rgb: 74, 72, 69;
+
+  --hyfens-font-ui: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --hyfens-font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --hyfens-font-primary: var(--hyfens-font-ui);
+  --hyfens-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  --hyfens-radius-panel: 16px;
+  --hyfens-radius-card: 10px;
+  --hyfens-radius-control: 8px;
+  --hyfens-radius-status: 999px;
+
+  --hyfens-motion-micro: 300ms;
+  --hyfens-motion-page: 600ms;
+  --hyfens-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --hyfens-ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+
+  --hyfens-bg: var(--hyfens-void-black);
+  --hyfens-bg-rgb: var(--hyfens-void-black-rgb);
+  --hyfens-surface: rgba(var(--hyfens-white-rgb), 0.04);
+  --hyfens-surface-raised: rgba(var(--hyfens-white-rgb), 0.08);
+  --hyfens-surface-soft: rgba(var(--hyfens-white-rgb), 0.025);
+  --hyfens-sidebar-surface: rgba(var(--hyfens-white-rgb), 0.02);
+  --hyfens-rail-surface: rgba(var(--hyfens-white-rgb), 0.025);
+  --hyfens-code-surface: rgba(var(--hyfens-white-rgb), 0.025);
+  --hyfens-line: rgba(var(--hyfens-white-rgb), 0.14);
+  --hyfens-line-strong: rgba(var(--hyfens-white-rgb), 0.28);
+  --hyfens-text: var(--hyfens-white);
+  --hyfens-muted: var(--hyfens-gray-400);
+  --hyfens-faint: rgba(var(--hyfens-gray-400-rgb), 0.82);
+  --hyfens-code: var(--hyfens-gray-100);
+  --hyfens-accent: var(--hyfens-orange);
+  --hyfens-accent-text: var(--hyfens-orange);
+  --hyfens-accent-ink: var(--hyfens-void-black);
+  --hyfens-accent-soft: rgba(var(--hyfens-orange-rgb), 0.14);
+  --hyfens-accent-line: rgba(var(--hyfens-orange-rgb), 0.3);
+  --hyfens-accent-hover: rgba(var(--hyfens-orange-rgb), 0.05);
+  --hyfens-warning: var(--hyfens-orange);
+  --hyfens-warning-soft: rgba(var(--hyfens-orange-rgb), 0.12);
+  --hyfens-warning-line: rgba(var(--hyfens-orange-rgb), 0.3);
+  --hyfens-danger: var(--hyfens-gray-100);
+  --hyfens-danger-soft: rgba(var(--hyfens-white-rgb), 0.12);
+  --hyfens-danger-line: rgba(var(--hyfens-white-rgb), 0.3);
+  --hyfens-shadow: 0 22px 70px rgba(var(--hyfens-void-black-rgb), 0.36);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+
+  --hyfens-bg: var(--hyfens-off-white);
+  --hyfens-bg-rgb: var(--hyfens-off-white-rgb);
+  --hyfens-surface: var(--hyfens-white);
+  --hyfens-surface-raised: var(--hyfens-gray-100);
+  --hyfens-surface-soft: rgba(var(--hyfens-white-rgb), 0.72);
+  --hyfens-sidebar-surface: var(--hyfens-gray-100);
+  --hyfens-rail-surface: var(--hyfens-white);
+  --hyfens-code-surface: var(--hyfens-gray-100);
+  --hyfens-line: var(--hyfens-gray-100);
+  --hyfens-line-strong: var(--hyfens-gray-400);
+  --hyfens-text: var(--hyfens-void-black);
+  --hyfens-muted: var(--hyfens-gray-600);
+  --hyfens-faint: var(--hyfens-gray-400);
+  --hyfens-code: var(--hyfens-gray-600);
+  --hyfens-accent-text: var(--hyfens-gray-600);
+  --hyfens-warning: var(--hyfens-gray-600);
+  --hyfens-warning-soft: rgba(var(--hyfens-orange-rgb), 0.12);
+  --hyfens-warning-line: rgba(var(--hyfens-orange-rgb), 0.3);
+  --hyfens-danger: var(--hyfens-gray-600);
+  --hyfens-danger-soft: rgba(var(--hyfens-gray-600-rgb), 0.12);
+  --hyfens-danger-line: rgba(var(--hyfens-gray-600-rgb), 0.3);
+  --hyfens-shadow: 0 22px 70px rgba(var(--hyfens-gray-600-rgb), 0.16);
+}

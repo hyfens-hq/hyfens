@@ -1,0 +1,7 @@
+include: package:lints/recommended.yaml
+
+analyzer:
+  # Patch sources are analyzed by the overlay compiler with Flutter and
+  # release-owned host capabilities, not as standalone package libraries.
+  exclude:
+    - patches/**

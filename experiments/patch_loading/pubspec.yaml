@@ -1,0 +1,21 @@
+name: patch_loading_e1
+description: Local patch lifecycle experiment for the E1 Android proof.
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  crypto: ^3.0.6
+  cryptography: ^2.9.0
+  instrumentation_e0:
+    path: ../instrumentation
+  hyfens_patch_format:
+    path: ../../packages/patch_format
+  hyfens_runtime:
+    path: ../../packages/runtime
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.26.0

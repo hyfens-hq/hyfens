@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-demo",
+  "title": "Find your next feeling",
+  "categories": [
+    {"id": "slow", "label": "Slow mornings", "icon": "coffee"},
+    {"id": "city", "label": "City breaks", "icon": "city"},
+    {"id": "nature", "label": "Open skies", "icon": "mountain"},
+    {"id": "food", "label": "Good tables", "icon": "plate"}
+  ],
+  "collections": [
+    {"id": "first-light", "title": "First light", "subtitle": "Places worth waking up for", "imageAsset": "assets/images/waypoint/reykjavik.svg"},
+    {"id": "warm-colours", "title": "Warm colours", "subtitle": "A softer kind of city break", "imageAsset": "assets/images/waypoint/jaipur.svg"}
+  ],
+  "places": [
+    {
+      "id": "aurora-cabin",
+      "name": "Aurora Cabin",
+      "category": "Nature",
+      "kind": "nature",
+      "location": "Reykjavík, Iceland",
+      "description": "A compact cabin with a wide view and a warm reading nook.",
+      "rating": 4.8,
+      "durationLabel": "2 nights",
+      "distance": "12 km from Reykjavík",
+      "emoji": "✧",
+      "accent": "#5EB9A1",
+      "imageAsset": "assets/images/waypoint/reykjavik.svg",
+      "saved": false
+    },
+    {
+      "id": "rose-courtyard",
+      "name": "Rose Courtyard",
+      "category": "Culture",
+      "kind": "culture",
+      "location": "Jaipur, India",
+      "description": "A shaded courtyard for an early walk through the old city.",
+      "rating": 4.6,
+      "durationLabel": "1 day",
+      "distance": "2.1 km from the old gate",
+      "emoji": "◇",
+      "accent": "#C46868",
+      "imageAsset": "assets/images/waypoint/jaipur.svg",
+      "saved": false
+    },
+    {
+      "id": "coastline-table",
+      "name": "Coastline Table",
+      "category": "Food",
+      "kind": "food",
+      "location": "Cascais, Portugal",
+      "description": "A breezy table for a long lunch after the coastal path.",
+      "rating": 4.9,
+      "durationLabel": "1 afternoon",
+      "distance": "0.5 km from the harbour",
+      "emoji": "○",
+      "accent": "#3C8E9F",
+      "imageAsset": "assets/images/waypoint/hero-coast.svg",
+      "saved": false
+    }
+  ],
+  "searchSuggestions": ["quiet stays", "walkable cities", "weekend by the sea", "local food"]
+}

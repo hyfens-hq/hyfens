@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" role="img" aria-labelledby="title desc">
+  <title id="title">Kyoto evening</title>
+  <desc id="desc">An original vector scene with a temple roof, mountain, and warm lanterns.</desc>
+  <defs>
+    <linearGradient id="night" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1C315A"/>
+      <stop offset="1" stop-color="#C46D61"/>
+    </linearGradient>
+    <linearGradient id="mountain" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#496B73"/>
+      <stop offset="1" stop-color="#1A3B50"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#night)"/>
+  <circle cx="626" cy="126" r="44" fill="#FFE4A8" opacity="0.9"/>
+  <path d="M0 376L142 249L231 330L362 166L513 327L612 239L800 392V600H0Z" fill="url(#mountain)"/>
+  <path d="M0 429C152 391 239 426 355 451C503 484 606 443 800 402V600H0Z" fill="#172D44"/>
+  <path d="M84 438H716V600H84Z" fill="#D7A36A" opacity="0.22"/>
+  <g transform="translate(181 284)">
+    <path d="M0 71H438L405 99H33Z" fill="#DDAE70"/>
+    <path d="M36 65L94 7H346L404 65Z" fill="#3B263B"/>
+    <path d="M56 59L102 22H338L384 59Z" fill="#B34F49"/>
+    <path d="M105 28L125 0H315L335 28Z" fill="#E1B16F"/>
+    <path d="M126 0L158 -24H282L314 0Z" fill="#40263B"/>
+    <rect x="92" y="99" width="34" height="118" fill="#E0AF72"/>
+    <rect x="312" y="99" width="34" height="118" fill="#E0AF72"/>
+    <path d="M150 99V217H288V99" fill="#5D3033"/>
+    <path d="M169 217V129H215V217M231 217V129H277V217" fill="#E0AF72"/>
+  </g>
+  <g transform="translate(90 412)">
+    <path d="M20 0H68L61 15H27Z" fill="#F8D18D"/>
+    <rect x="27" y="15" width="34" height="63" rx="7" fill="#E66B4C"/>
+    <path d="M20 78H68" stroke="#F8D18D" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="44" cy="45" r="10" fill="#FFE7A5"/>
+  </g>
+  <g transform="translate(650 410)">
+    <path d="M20 0H68L61 15H27Z" fill="#F8D18D"/>
+    <rect x="27" y="15" width="34" height="63" rx="7" fill="#E66B4C"/>
+    <path d="M20 78H68" stroke="#F8D18D" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="44" cy="45" r="10" fill="#FFE7A5"/>
+  </g>
+</svg>

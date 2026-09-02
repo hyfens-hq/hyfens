@@ -1,0 +1,30 @@
+{
+  "# template": "Not published; generate after a tagged GitHub Release.",
+  "version": "__VERSION__",
+  "description": "Hyfens developer platform CLI",
+  "homepage": "https://github.com/__GITHUB_OWNER__/__GITHUB_REPOSITORY__",
+  "license": "Apache-2.0",
+  "architecture": {
+    "64bit": {
+      "url": "__WINDOWS_X64_URL__",
+      "hash": "__WINDOWS_X64_SHA256__"
+    },
+    "arm64": {
+      "url": "__WINDOWS_ARM64_URL__",
+      "hash": "__WINDOWS_ARM64_SHA256__"
+    }
+  },
+  "bin": [
+    [
+      "bin/hyfens.exe",
+      "hyfens"
+    ],
+    [
+      "bin/tool.exe",
+      "tool"
+    ]
+  ],
+  "notes": [
+    "The tool command is deprecated; use hyfens."
+  ]
+}

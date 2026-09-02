@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0C0C0C">
+    <link rel="icon" href="brand-mark.svg" type="image/svg+xml">
+    <meta name="referrer" content="no-referrer">
+    <meta name="hyfens-api-base" content="">
+    <meta
+      name="description"
+      content="The Hyfens developer control plane for exact release, patch, deployment, and audit records."
+    >
+    <title>Hyfens | Developer control plane</title>
+    <link rel="stylesheet" href="tokens.css?v=222">
+    <link rel="stylesheet" href="styles.css?v=234">
+  </head>
+  <body class="session-pending">
+    <div id="session-boot" class="session-boot" role="status" aria-live="polite">
+      <div class="session-boot-card">
+        <img class="session-boot-mark" src="brand-mark.svg" alt="" aria-hidden="true">
+        <span>Restoring workspace</span>
+      </div>
+    </div>
+    <div id="login-view" class="auth-layout">
+      <section class="auth-panel" aria-labelledby="login-heading">
+        <div class="auth-topline">
+          <a class="brand-lockup" href="https://hyfens.com/" aria-label="Hyfens home">
+            <img class="brand-mark" src="brand-mark.svg" alt="" aria-hidden="true">
+            <span class="brand-name">hyfens</span>
+            <span class="brand-product">developer platform</span>
+          </a>
+          <span class="auth-session">
+            <span class="status-marker status-marker-muted" aria-hidden="true"></span>
+            Human session
+          </span>
+        </div>
+
+        <div class="auth-copy">
+          <p class="eyebrow">Hyfens / developer platform</p>
+          <h1 id="login-heading">Ship with a complete record.</h1>
+          <p>
+            Sign in to inspect the exact releases, patches, and deployment
+            records your membership can see.
+          </p>
+        </div>
+
+        <div class="auth-mode-switcher" role="tablist" aria-label="Account access">
+          <button
+            id="login-tab"
+            class="auth-mode-tab"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="login-form"
+            data-auth-mode="login"
+          >
+            Sign in
+          </button>
+          <button
+            id="register-tab"
+            class="auth-mode-tab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="register-form"
+            data-auth-mode="register"
+            tabindex="-1"
+          >
+            Create account
+          </button>
+        </div>
+
+        <div class="auth-form-stage" data-auth-form-stage>
+          <form
+            id="login-form"
+            class="auth-form"
+            data-auth-form-mode="login"
+            aria-labelledby="login-form-heading"
+            aria-hidden="false"
+          >
+          <input id="api-base" type="hidden" value="">
+          <div class="auth-form-heading">
+            <div>
+              <span class="form-kicker">Access</span>
+              <h2 id="login-form-heading">Sign in</h2>
+            </div>
+            <span class="form-badge">Live session</span>
+          </div>
+
+          <label for="email">Email</label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            autocomplete="username"
+            required
+          >
+
+          <label for="password">Password</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+          >
+          <p class="field-help">
+            Session material stays in this browser tab and is cleared when you
+            sign out or close the tab.
+          </p>
+
+          <button id="login-submit" class="button button-primary" type="submit">
+            <span>Sign in</span>
+            <span class="button-arrow" aria-hidden="true">
+              <img src="icons/arrow_right_outline_2.svg" width="14" height="14" alt="" aria-hidden="true">
+            </span>
+          </button>
+          <p id="login-message" class="form-message" role="status" aria-live="polite"></p>
+          </form>
+
+          <form
+            id="register-form"
+            class="auth-form"
+            data-auth-form-mode="register"
+            aria-labelledby="register-form-heading"
+            aria-hidden="true"
+            inert
+          >
+          <div class="auth-form-heading">
+            <div>
+              <span class="form-kicker">New membership</span>
+              <h2 id="register-form-heading">Create an account</h2>
+            </div>
+            <span class="form-badge">Client access</span>
+          </div>
+
+          <p class="auth-form-lede">
+            Create a client account to open the dashboard immediately.
+          </p>
+
+          <label for="register-email">Email</label>
+          <input
+            id="register-email"
+            name="email"
+            type="email"
+            autocomplete="email"
+            required
+          >
+
+          <label for="register-password">Password</label>
+          <input
+            id="register-password"
+            name="password"
+            type="password"
+            autocomplete="new-password"
+            required
+          >
+
+          <label for="register-password-confirm">Confirm password</label>
+          <input
+            id="register-password-confirm"
+            name="password-confirm"
+            type="password"
+            autocomplete="new-password"
+            aria-describedby="register-password-help"
+            required
+          >
+          <p id="register-password-error" class="field-error" role="alert"></p>
+          <p id="register-password-help" class="field-help">
+            Your password is used only to create this session and is never saved by the dashboard.
+          </p>
+
+          <button id="register-submit" class="button button-primary" type="submit">
+            <span>Create account</span>
+            <span class="button-arrow" aria-hidden="true">
+              <img src="icons/arrow_right_outline_2.svg" width="14" height="14" alt="" aria-hidden="true">
+            </span>
+          </button>
+          <p id="register-message" class="form-message" role="status" aria-live="polite"></p>
+          </form>
+        </div>
+
+        <div class="discovery-callout" aria-live="polite">
+          <span class="status-marker" aria-hidden="true"></span>
+          <div>
+            <strong id="discovery-status">Checking instance discovery</strong>
+            <p id="discovery-detail">
+              The dashboard checks the configured control plane before sign-in.
+            </p>
+          </div>
+        </div>
+
+        <p class="auth-footnote">
+          The browser uses the configured control plane. Unsupported product
+          capabilities remain visible as unavailable.
+        </p>
+      </section>
+
+      <aside class="auth-rail" aria-label="Dashboard boundaries">
+        <div class="rail-intro">
+          <p class="eyebrow">Traceable by design</p>
+          <h2>One place for identity, artifacts, and evidence.</h2>
+          <p class="rail-copy">
+            The dashboard renders authoritative control-plane records without
+            inventing runtime health or fleet activity.
+          </p>
+        </div>
+        <ol class="rail-list">
+          <li>
+            <span class="rail-index">Identity</span>
+            <div>
+              <strong>Shared membership</strong>
+              <small>The same human authority used by the CLI</small>
+            </div>
+          </li>
+          <li>
+            <span class="rail-index">Artifacts</span>
+            <div>
+              <strong>Exact release history</strong>
+              <small>Immutable release, patch, and rollout references</small>
+            </div>
+          </li>
+          <li>
+            <span class="rail-index">Evidence</span>
+            <div>
+              <strong>Bounded audit context</strong>
+              <small>Redacted records with no client-side assumptions</small>
+            </div>
+          </li>
+        </ol>
+        <div class="rail-boundary">
+          <span class="metadata-label">Boundary</span>
+          <strong>Authority stays with the control plane.</strong>
+          <p>
+            If a safe browser endpoint is not available, the surface says so.
+          </p>
+        </div>
+      </aside>
+    </div>
+
+    <div id="app-view" class="app-view" hidden>
+      <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
+      <aside id="sidebar" class="sidebar" aria-label="Primary navigation">
+        <div class="sidebar-header">
+          <a id="sidebar-brand" class="brand-lockup" href="/" data-view-link="overview" aria-label="Hyfens overview">
+            <img class="brand-mark" src="brand-mark.svg" alt="" aria-hidden="true">
+            <span class="brand-name">hyfens</span>
+            <span class="brand-product">control plane</span>
+          </a>
+          <button id="sidebar-close" class="icon-button sidebar-close" type="button" aria-label="Close navigation">
+            <img src="icons/close_circle_outline.svg" width="18" height="18" alt="" aria-hidden="true">
+          </button>
+        </div>
+
+        <div id="workspace-context" class="workspace-context" aria-label="Current organization">
+          <span class="context-label">Organization</span>
+          <div class="workspace-line">
+            <span class="workspace-glyph" aria-hidden="true">
+              <img src="icons/global_outline.svg" width="18" height="18" alt="" aria-hidden="true">
+            </span>
+            <div>
+              <strong id="workspace-name">Loading organization</strong>
+              <span id="workspace-kind">Membership scope</span>
+            </div>
+          </div>
+          <label class="workspace-context-select" for="organization-context">
+            <span>Switch organization</span>
+            <span class="select-control">
+              <select id="organization-context" aria-label="Organization context"></select>
+              <img class="select-arrow" src="icons/arrow_down_outline.svg" width="14" height="14" alt="" aria-hidden="true">
+            </span>
+          </label>
+        </div>
+
+        <nav class="nav-groups" aria-label="Dashboard sections">
+          <div class="nav-group">
+            <p class="nav-label">Workspace</p>
+            <a href="/" data-view-link="overview"><span class="nav-icon" aria-hidden="true"><img src="icons/home_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Overview</span></a>
+            <a href="/applications" data-view-link="applications"><span class="nav-icon" aria-hidden="true"><img src="icons/category_2_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Applications</span></a>
+            <a href="/environments" data-view-link="environments"><span class="nav-icon" aria-hidden="true"><img src="icons/global_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Environments</span></a>
+          </div>
+          <div class="nav-group">
+            <p class="nav-label">Delivery records</p>
+            <a href="/releases" data-view-link="releases"><span class="nav-icon" aria-hidden="true"><img src="icons/document_text_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Releases</span></a>
+            <a href="/patches" data-view-link="patches"><span class="nav-icon" aria-hidden="true"><img src="icons/clipboard_text_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Patches</span></a>
+            <a href="/artifacts" data-view-link="artifacts"><span class="nav-icon" aria-hidden="true"><img src="icons/box_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Artifacts</span></a>
+            <a href="/deployments" data-view-link="deployments"><span class="nav-icon" aria-hidden="true"><img src="icons/activity_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Deployments</span></a>
+            <a href="/audit" data-view-link="audit"><span class="nav-icon" aria-hidden="true"><img src="icons/clipboard_text_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Audit</span></a>
+          </div>
+          <div class="nav-group">
+            <p class="nav-label">Account</p>
+            <a href="/settings" data-view-link="settings"><span class="nav-icon" aria-hidden="true"><img src="icons/setting_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Settings</span></a>
+          </div>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="sidebar-note">
+            <span class="status-marker status-marker-muted" aria-hidden="true"></span>
+            <span>Read-only surface</span>
+          </div>
+          <p>No browser writes. Runtime authority remains in the installed client.</p>
+          <details
+            id="account-menu"
+            class="account-menu"
+            data-account-menu
+            data-placement="top"
+            data-align="start"
+          >
+            <summary
+              id="account-menu-trigger"
+              class="user-menu sidebar-user-menu"
+              data-account-trigger
+              aria-controls="account-popover"
+              aria-expanded="false"
+              aria-label="Open account menu"
+            >
+              <span id="user-initials" class="user-initials" aria-hidden="true">H</span>
+              <span class="user-details">
+                <strong id="user-name">Operator</strong>
+                <span id="user-email">Not signed in</span>
+              </span>
+              <span class="account-trigger-chevron" aria-hidden="true">
+                <img src="icons/arrow_down_outline.svg" width="16" height="16" alt="" aria-hidden="true">
+              </span>
+            </summary>
+
+            <nav
+              id="account-popover"
+              class="account-popover"
+              data-account-popover
+              aria-label="Account options"
+            >
+              <div class="account-popover-heading" aria-hidden="true">
+                <span class="account-popover-kicker">Account</span>
+                <span class="account-popover-note">Profile and preferences</span>
+              </div>
+              <div class="account-menu-list">
+                <button
+                  class="account-menu-item"
+                  type="button"
+                  data-account-action="my-account"
+                  aria-label="My account"
+                >
+                  <span class="account-menu-icon" aria-hidden="true">
+                    <img src="icons/profile_outline.svg" width="18" height="18" alt="" aria-hidden="true">
+                  </span>
+                  <span>My account</span>
+                </button>
+                <button
+                  class="account-menu-item"
+                  type="button"
+                  data-account-action="privacy-policy"
+                  aria-label="Privacy policy"
+                >
+                  <span class="account-menu-icon" aria-hidden="true">
+                    <img src="icons/shield_security_outline.svg" width="18" height="18" alt="" aria-hidden="true">
+                  </span>
+                  <span>Privacy policy</span>
+                </button>
+                <button
+                  class="account-menu-item"
+                  type="button"
+                  data-account-action="share-feedback"
+                  aria-label="Share feedback"
+                >
+                  <span class="account-menu-icon" aria-hidden="true">
+                    <img src="icons/message_text_outline.svg" width="18" height="18" alt="" aria-hidden="true">
+                  </span>
+                  <span>Share feedback</span>
+                </button>
+                <button
+                  id="logout-button"
+                  class="account-menu-item account-menu-item-danger"
+                  type="button"
+                  data-account-action="sign-out"
+                  aria-label="Sign out"
+                  title="Sign out"
+                >
+                  <span class="account-menu-icon" aria-hidden="true">
+                    <img src="icons/logout_bold.svg" width="18" height="18" alt="" aria-hidden="true">
+                  </span>
+                  <span>Sign out</span>
+                </button>
+              </div>
+            </nav>
+          </details>
+        </div>
+      </aside>
+
+      <div class="app-main">
+        <header class="topbar">
+          <div class="topbar-leading">
+            <button id="sidebar-open" class="menu-button" type="button" aria-expanded="false" aria-controls="sidebar">
+              <span class="menu-lines" aria-hidden="true">
+                <img src="icons/menu_outline_2.svg" width="18" height="18" alt="" aria-hidden="true">
+              </span>
+              Menu
+            </button>
+            <div class="breadcrumbs" aria-label="Breadcrumb">
+              <span class="breadcrumb-root">Hyfens</span>
+              <span aria-hidden="true">/</span>
+              <strong id="topbar-page">Overview</strong>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <form id="dashboard-search-form" class="dashboard-search" role="search" aria-label="Search dashboard records">
+              <label for="global-search">Search records</label>
+              <img class="dashboard-search-icon" src="icons/search_normal_outline.svg" width="16" height="16" alt="" aria-hidden="true">
+              <input
+                id="global-search"
+                name="global-search"
+                type="search"
+                placeholder="Search records"
+                autocomplete="off"
+                spellcheck="false"
+                enterkeyhint="search"
+                aria-keyshortcuts="/"
+                aria-controls="page-region"
+                aria-describedby="global-search-hint"
+              >
+              <span id="global-search-hint" class="search-hint" aria-hidden="true">/</span>
+            </form>
+            <button
+              id="shortcuts-button"
+              class="button button-quiet shortcuts-trigger"
+              type="button"
+              aria-label="Keyboard shortcuts"
+              aria-haspopup="dialog"
+              aria-controls="shortcuts-dialog"
+              aria-expanded="false"
+              aria-keyshortcuts="?"
+              title="Keyboard shortcuts"
+            >
+              <span class="shortcut-trigger-key" aria-hidden="true">?</span>
+              <span class="shortcut-trigger-label">Shortcuts</span>
+            </button>
+            <button
+              id="theme-toggle"
+              class="button button-quiet theme-toggle"
+              type="button"
+              aria-label="Switch to light theme"
+              aria-pressed="false"
+              aria-keyshortcuts="t"
+            >
+              <img id="theme-toggle-icon" class="theme-toggle-icon" src="icons/sun_outline.svg" width="18" height="18" alt="" aria-hidden="true">
+              <span id="theme-toggle-label">Light</span>
+            </button>
+          </div>
+        </header>
+
+        <main class="content">
+          <div class="page-heading">
+            <div class="page-title-block">
+              <div class="heading-meta">
+                <p class="eyebrow">Control plane records</p>
+                <span id="last-fetched" class="last-fetched">Waiting for first request</span>
+              </div>
+              <h1 id="page-title">Overview</h1>
+              <p id="page-description" class="page-description">
+                A read-only view of the selected organization context.
+              </p>
+            </div>
+            <button id="refresh-button" class="button button-secondary" type="button" aria-keyshortcuts="r">
+              <span>Refresh records</span>
+              <span class="button-refresh-mark" aria-hidden="true">
+                <img src="icons/refresh_outline.svg" width="16" height="16" alt="" aria-hidden="true">
+              </span>
+            </button>
+          </div>
+
+          <section class="context-bar" aria-labelledby="context-heading">
+            <div class="context-bar-heading">
+              <div class="context-heading-row">
+                <span class="context-label" id="context-heading">Active context</span>
+                <span id="context-scope-note" class="context-scope-note">Membership scope</span>
+              </div>
+              <strong id="context-organization">Organization context</strong>
+              <code id="context-organization-id">Organization ID unavailable</code>
+            </div>
+            <div class="context-controls">
+              <label>
+                <span>Profile</span>
+                <span class="select-control">
+                  <select id="profile-context" aria-label="Profile context"></select>
+                  <img class="select-arrow" src="icons/arrow_down_outline.svg" width="14" height="14" alt="" aria-hidden="true">
+                </span>
+              </label>
+              <label>
+                <span>Application</span>
+                <span class="select-control">
+                  <select id="application-context" aria-label="Application context"></select>
+                  <img class="select-arrow" src="icons/arrow_down_outline.svg" width="14" height="14" alt="" aria-hidden="true">
+                </span>
+              </label>
+              <label>
+                <span>Environment</span>
+                <span class="select-control">
+                  <select id="environment-context" aria-label="Environment context"></select>
+                  <img class="select-arrow" src="icons/arrow_down_outline.svg" width="14" height="14" alt="" aria-hidden="true">
+                </span>
+              </label>
+            </div>
+          </section>
+
+          <div id="global-banner" class="global-banner" hidden role="status" aria-live="polite"></div>
+          <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+          <div id="page-region" class="page-region" aria-live="polite"></div>
+        </main>
+      </div>
+    </div>
+
+    <div
+      id="record-sheet"
+      class="record-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="record-sheet-title"
+      aria-describedby="record-sheet-content"
+      hidden
+    >
+      <div class="record-sheet-backdrop" data-record-sheet-close aria-hidden="true"></div>
+      <section class="record-sheet-dialog" tabindex="-1">
+        <header class="record-sheet-header">
+          <div>
+            <span class="record-sheet-kicker">Exact record</span>
+            <h2 id="record-sheet-title">Exact record</h2>
+          </div>
+          <button id="record-sheet-close" class="record-sheet-close" type="button" aria-label="Close exact record">
+            <img src="icons/close_circle_outline.svg" width="18" height="18" alt="" aria-hidden="true">
+          </button>
+        </header>
+        <pre id="record-sheet-content" class="record-sheet-content" tabindex="0"></pre>
+      </section>
+    </div>
+
+    <div
+      id="shortcuts-dialog"
+      class="shortcuts-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shortcuts-dialog-title"
+      aria-describedby="shortcuts-dialog-description"
+      hidden
+    >
+      <div class="shortcuts-dialog-backdrop" data-shortcuts-close aria-hidden="true"></div>
+      <section class="shortcuts-dialog-panel" tabindex="-1">
+        <header class="shortcuts-dialog-header">
+          <div>
+            <span class="shortcuts-dialog-kicker">Keyboard</span>
+            <h2 id="shortcuts-dialog-title">Shortcuts</h2>
+          </div>
+          <button
+            id="shortcuts-close"
+            class="record-sheet-close shortcuts-dialog-close"
+            type="button"
+            aria-label="Close keyboard shortcuts"
+            data-shortcuts-close
+          >
+            <img src="icons/close_circle_outline.svg" width="18" height="18" alt="" aria-hidden="true">
+          </button>
+        </header>
+        <div class="shortcuts-dialog-body">
+          <dl class="shortcuts-list">
+            <div>
+              <dt><kbd>?</kbd></dt>
+              <dd>Open keyboard shortcuts</dd>
+            </div>
+            <div>
+              <dt><kbd>/</kbd></dt>
+              <dd>Focus record search</dd>
+            </div>
+            <div>
+              <dt><kbd>R</kbd></dt>
+              <dd>Refresh records</dd>
+            </div>
+            <div>
+              <dt><kbd>T</kbd></dt>
+              <dd>Toggle light or dark theme</dd>
+            </div>
+            <div>
+              <dt><kbd>Esc</kbd></dt>
+              <dd>Close the active menu, drawer, or search</dd>
+            </div>
+          </dl>
+          <p id="shortcuts-dialog-description" class="shortcuts-dialog-note">
+            Use Tab to move between controls. Enter or Space activates the focused control.
+          </p>
+        </div>
+      </section>
+    </div>
+
+    <script src="runtime-config.js" defer></script>
+    <script src="app.js?v=229" defer></script>
+  </body>
+</html>

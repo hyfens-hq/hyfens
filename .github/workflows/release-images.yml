@@ -1,0 +1,86 @@
+name: Container image release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: container-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish control-plane and dashboard images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up multi-architecture emulation
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish release images
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          IMAGE_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag must contain a semantic version after v: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          declared_version="$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p' cli/pubspec.yaml | head -n 1)"
+          if [[ "$version" != "$declared_version" ]]; then
+            echo "Image tag $version does not match cli/pubspec.yaml $declared_version" >&2
+            exit 1
+          fi
+
+          owner="$(printf '%s' "$IMAGE_OWNER" | tr '[:upper:]' '[:lower:]')"
+          registry="ghcr.io/$owner"
+          control_image="$registry/hyfens-control-plane"
+          dashboard_image="$registry/hyfens-dashboard"
+          control_tags=(--tag "$control_image:$version")
+          dashboard_tags=(--tag "$dashboard_image:$version")
+
+          # Pre-releases remain opt-in; only stable tags move latest.
+          if [[ "$version" != *-* ]]; then
+            control_tags+=(--tag "$control_image:latest")
+            dashboard_tags+=(--tag "$dashboard_image:latest")
+          fi
+
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --file deploy/p2/Dockerfile \
+            "${control_tags[@]}" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.version=$version" \
+            --provenance=false \
+            --push .
+
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --file dashboard/Dockerfile \
+            "${dashboard_tags[@]}" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.version=$version" \
+            --provenance=false \
+            --push .

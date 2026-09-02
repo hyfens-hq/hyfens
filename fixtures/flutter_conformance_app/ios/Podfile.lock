@@ -1,0 +1,22 @@
+PODS:
+  - alphax_native (1.0.0-rc.1):
+    - Flutter
+  - Flutter (1.0.0)
+
+DEPENDENCIES:
+  - alphax_native (from `.symlinks/plugins/alphax_native/ios`)
+  - Flutter (from `Flutter`)
+
+EXTERNAL SOURCES:
+  alphax_native:
+    :path: ".symlinks/plugins/alphax_native/ios"
+  Flutter:
+    :path: Flutter
+
+SPEC CHECKSUMS:
+  alphax_native: 6deed102160398ad27468f73bc206c6cee598362
+  Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
+
+PODFILE CHECKSUM: bd5ed60db8a2fd654d2109c3cd5960c3259cbfee
+
+COCOAPODS: 1.16.2

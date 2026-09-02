@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0C0C0C">
+    <link rel="icon" href="../brand-mark.svg" type="image/svg+xml">
+    <meta name="referrer" content="no-referrer">
+    <meta name="hyfens-api-base" content="">
+    <title>Approve Hyfens device</title>
+    <link rel="stylesheet" href="../tokens.css">
+    <link rel="stylesheet" href="../auth-flow.css">
+  </head>
+  <body>
+    <main class="auth-flow">
+      <section class="auth-flow-card" aria-labelledby="title">
+        <a class="auth-brand" href="https://hyfens.com/" aria-label="Hyfens home">
+          <img class="auth-brand-mark" src="../brand-mark.svg" alt="" aria-hidden="true">
+          <span>hyfens</span>
+        </a>
+        <p class="eyebrow">Hyfens device access</p>
+        <h1 id="title">Connect your CLI.</h1>
+        <p class="lede">Enter the short-lived code shown by <code>hyfens login --device</code>. The code is used once and is never placed in this page’s URL.</p>
+        <form id="device-form">
+          <label for="user-code">Device code</label>
+          <input id="user-code" name="user-code" inputmode="text" autocomplete="one-time-code" spellcheck="false" required pattern="[A-Za-z2-9]{4}-[A-Za-z2-9]{4}">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="username" required>
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+          <button id="approve" type="submit">Authenticate and approve</button>
+          <p id="message" class="message" role="status" aria-live="polite"></p>
+        </form>
+        <p class="fine-print">The CLI keeps the device secret locally while it waits. This page receives only the user code.</p>
+      </section>
+    </main>
+    <script src="../runtime-config.js"></script>
+    <script src="../auth-flow.js"></script>
+    <script>
+      (() => {
+        'use strict';
+        const form = document.querySelector('#device-form');
+        const code = document.querySelector('#user-code');
+        const password = document.querySelector('#password');
+        const approve = document.querySelector('#approve');
+        const message = document.querySelector('#message');
+
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          approve.disabled = true;
+          const enteredPassword = password.value;
+          password.value = '';
+          try {
+            const login = await HyfensAuthFlow.request('auth/login', HyfensAuthFlow.jsonOptions({
+              email: document.querySelector('#email').value.trim(),
+              password: enteredPassword,
+            }));
+            await HyfensAuthFlow.request('auth/device/approve', HyfensAuthFlow.jsonOptions({ user_code: code.value.trim().toUpperCase() }, login.access_token));
+            code.value = '';
+            HyfensAuthFlow.setMessage(message, 'Device approved. Return to the CLI.', 'success');
+          } catch (error) {
+            HyfensAuthFlow.setMessage(message, error instanceof Error ? error.message : 'Device approval failed.', 'error');
+            approve.disabled = false;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

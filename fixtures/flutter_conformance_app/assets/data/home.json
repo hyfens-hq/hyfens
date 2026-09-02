@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-demo",
+  "greeting": "Good morning, Asha",
+  "hero": {
+    "eyebrow": "WEEKEND EDIT",
+    "title": "Make room for somewhere new.",
+    "subtitle": "Thoughtful places and flexible plans for your next few days away.",
+    "imageAsset": "assets/images/waypoint/hero-coast.svg",
+    "videoAsset": "assets/video/waypoint-route-preview.mp4",
+    "action": "open_planner",
+    "actionLabel": "Plan a trip"
+  },
+  "banner": {
+    "id": "slow-season-edit",
+    "kind": "time_limited",
+    "title": "A little more time away",
+    "message": "Save a flexible long-weekend plan before this edit ends.",
+    "expiresAt": "2030-06-30T23:59:59Z",
+    "accent": "#E47755",
+    "dismissible": true,
+    "action": "open_planner",
+    "actionLabel": "Build a plan"
+  },
+  "trips": [
+    {
+      "id": "kyoto-notes",
+      "title": "Kyoto field notes",
+      "destination": "Kyoto, Japan",
+      "dateRange": "14–19 Apr 2027",
+      "durationLabel": "5 nights",
+      "coverLabel": "Temples, tea, and quiet lanes",
+      "imageAsset": "assets/images/waypoint/kyoto.svg",
+      "accent": "#D98267",
+      "progress": 0.62,
+      "itinerary": [
+        {"time": "09:30", "title": "Philosopher's Path", "detail": "A slow walk beside the canal", "category": "walk", "done": true},
+        {"time": "13:00", "title": "Tea house reservation", "detail": "A small room in Gion", "category": "food", "done": false},
+        {"time": "18:40", "title": "Lanterns at Yasaka", "detail": "Golden hour in the old quarter", "category": "culture", "done": false}
+      ],
+      "checklist": [
+        {"title": "Reserve rail pass", "detail": "Compare flexible options", "done": true},
+        {"title": "Save a tea house", "detail": "Choose a quiet evening slot", "done": false}
+      ],
+      "documents": [
+        {"name": "Kyoto itinerary.pdf", "kind": "Itinerary", "sizeLabel": "248 KB", "icon": "route"}
+      ]
+    },
+    {
+      "id": "lisbon-light",
+      "title": "Lisbon in soft light",
+      "destination": "Lisbon, Portugal",
+      "dateRange": "02–06 Jun 2027",
+      "durationLabel": "4 nights",
+      "coverLabel": "Hills, tiles, and late dinners",
+      "imageAsset": "assets/images/waypoint/lisbon.svg",
+      "accent": "#E6A24F",
+      "progress": 0.18,
+      "itinerary": [
+        {"time": "10:00", "title": "Alfama photo walk", "detail": "Start before the streets warm up", "category": "walk", "done": false},
+        {"time": "16:30", "title": "Riverside check-in", "detail": "Drop bags near the water", "category": "stay", "done": false}
+      ],
+      "checklist": [
+        {"title": "Pick a neighbourhood", "detail": "Keep the first day walkable", "done": false}
+      ],
+      "documents": []
+    }
+  ],
+  "places": [
+    {
+      "id": "lantern-house",
+      "name": "Lantern House",
+      "category": "Stay",
+      "kind": "stay",
+      "location": "Gion, Kyoto",
+      "description": "A calm machiya stay with a small inner garden.",
+      "rating": 4.9,
+      "durationLabel": "3 nights",
+      "distance": "0.8 km from your route",
+      "emoji": "⌂",
+      "accent": "#D98267",
+      "imageAsset": "assets/images/waypoint/kyoto.svg",
+      "saved": true
+    },
+    {
+      "id": "blue-tram-table",
+      "name": "Blue Tram Table",
+      "category": "Food",
+      "kind": "food",
+      "location": "Graça, Lisbon",
+      "description": "Small plates, local citrus, and a view over the rooftops.",
+      "rating": 4.7,
+      "durationLabel": "1 evening",
+      "distance": "1.4 km from your route",
+      "emoji": "✦",
+      "accent": "#E6A24F",
+      "imageAsset": "assets/images/waypoint/lisbon.svg",
+      "saved": false
+    }
+  ],
+  "activities": [
+    {"title": "Your Kyoto plan was refreshed", "detail": "Two new tea houses match your saved route.", "time": "8 min ago", "icon": "spark", "accent": "#D98267"},
+    {"title": "Asha saved Lantern House", "detail": "It is now on your Kyoto shortlist.", "time": "Yesterday", "icon": "bookmark", "accent": "#4B927B"}
+  ]
+}

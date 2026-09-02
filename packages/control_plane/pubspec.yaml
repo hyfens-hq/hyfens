@@ -1,0 +1,18 @@
+name: hyfens_control_plane
+description: Local single-node, self-hostable Hyfens control-plane foundation.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  crypto: ^3.0.7
+  cryptography: ^2.9.0
+  hyfens_patch_format:
+    path: ../patch_format
+  path: ^1.9.1
+  postgres: ^3.5.9
+
+dev_dependencies:
+  test: ^1.26.0

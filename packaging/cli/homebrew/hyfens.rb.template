@@ -1,0 +1,41 @@
+# TEMPLATE ONLY. Generate and review this formula after a GitHub Release.
+# Do not submit this file directly; all __PLACEHOLDER__ values are required.
+
+class Hyfens < Formula
+  desc "Hyfens developer platform CLI"
+  homepage "https://github.com/__GITHUB_OWNER__/__GITHUB_REPOSITORY__"
+  version "__VERSION__"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "__MACOS_ARM64_URL__"
+      sha256 "__MACOS_ARM64_SHA256__"
+    else
+      url "__MACOS_X64_URL__"
+      sha256 "__MACOS_X64_SHA256__"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "__LINUX_ARM64_URL__"
+      sha256 "__LINUX_ARM64_SHA256__"
+    else
+      url "__LINUX_X64_URL__"
+      sha256 "__LINUX_X64_SHA256__"
+    end
+  end
+
+  def install
+    root_dir = Dir["hyfens-*"].first
+    bin_dir = "#{root_dir}/bin"
+    lib_dir = "#{root_dir}/lib"
+    bin.install "#{bin_dir}/hyfens"
+    bin.install "#{bin_dir}/tool" => "tool"
+    lib.install Dir["#{lib_dir}/*"] if Dir.exist?(lib_dir)
+  end
+
+  test do
+    system bin / "hyfens", "--version"
+  end
+end

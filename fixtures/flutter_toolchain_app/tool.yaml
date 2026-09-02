@@ -1,0 +1,20 @@
+version: 1
+
+instrumentation:
+  include:
+    - lib/**
+  exclude:
+    - lib/generated/**
+
+packages:
+  include_local: true
+  include: []
+
+application_id: dev.hyfens.hyfens_toolchain_app
+
+signing:
+  public_key: .tool/keys/public.key
+  private_key: .tool/keys/private.key
+
+runtime:
+  update_url: http://127.0.0.1:18080/v1/patch

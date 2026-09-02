@@ -1,0 +1,4 @@
+# Keep editor and Python cache files out of the dashboard image build context.
+.DS_Store
+__pycache__/
+*.py[cod]

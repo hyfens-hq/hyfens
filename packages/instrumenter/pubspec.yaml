@@ -1,0 +1,14 @@
+name: hyfens_instrumenter
+description: Phase 1 source instrumentation facade for Flutter/Dart release builds.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  instrumentation_e0:
+    path: ../../experiments/instrumentation
+
+dev_dependencies:
+  test: ^1.26.0

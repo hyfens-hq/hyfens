@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">A quiet coastal route</title>
+  <desc id="desc">An original layered vector illustration of a sunlit coast with a small ferry.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#B9DDF1"/>
+      <stop offset="1" stop-color="#F7E7C5"/>
+    </linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3C8E9F"/>
+      <stop offset="1" stop-color="#174F6A"/>
+    </linearGradient>
+    <linearGradient id="cliff" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6E9B83"/>
+      <stop offset="1" stop-color="#315E58"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="720" fill="url(#sky)"/>
+  <circle cx="934" cy="142" r="70" fill="#F6B85E" opacity="0.95"/>
+  <path d="M0 356C132 292 214 305 334 364C438 414 532 395 638 327C760 248 858 267 958 340C1058 412 1122 406 1200 362V720H0Z" fill="#8AB9A3"/>
+  <path d="M0 430C142 372 253 403 362 463C470 523 558 492 674 406C790 320 891 339 1000 426C1085 493 1137 493 1200 458V720H0Z" fill="url(#cliff)"/>
+  <path d="M0 508C120 472 248 492 369 546C497 602 613 565 728 488C836 416 929 433 1031 514C1106 573 1154 581 1200 566V720H0Z" fill="url(#water)"/>
+  <path d="M0 589C180 545 298 590 420 633C550 679 672 644 807 572C940 501 1051 544 1200 616V720H0Z" fill="#113E58" opacity="0.78"/>
+  <path d="M98 520C262 474 374 518 490 568C610 620 712 600 821 526C940 445 1042 481 1139 546" fill="none" stroke="#BFE6D8" stroke-width="8" stroke-linecap="round" opacity="0.76"/>
+  <path d="M218 592C362 558 449 591 541 624M716 615C806 560 883 552 970 580" fill="none" stroke="#8CC6CB" stroke-width="5" stroke-linecap="round" opacity="0.68"/>
+  <g transform="translate(694 438)">
+    <path d="M0 30H128L104 61H24Z" fill="#F6F0DF"/>
+    <path d="M17 25L32 0H88L108 25Z" fill="#D96254"/>
+    <path d="M45 0V-48" stroke="#173F55" stroke-width="5"/>
+    <path d="M48 -46L89 -29L48 -13Z" fill="#F6B85E"/>
+    <rect x="43" y="32" width="17" height="16" rx="3" fill="#3C8E9F"/>
+    <rect x="76" y="32" width="17" height="16" rx="3" fill="#3C8E9F"/>
+  </g>
+  <g fill="#173F55" opacity="0.8">
+    <circle cx="110" cy="96" r="3"/>
+    <circle cx="132" cy="82" r="2"/>
+    <circle cx="157" cy="104" r="3"/>
+    <circle cx="192" cy="73" r="2"/>
+  </g>
+</svg>

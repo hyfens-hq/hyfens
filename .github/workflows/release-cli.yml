@@ -1,0 +1,132 @@
+name: CLI release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: cli-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-metadata:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+      - name: Resolve locked CLI dependencies
+        working-directory: cli
+        run: dart pub get --enforce-lockfile --no-example
+      - name: Validate tag version
+        id: version
+        working-directory: cli
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          dart run ../scripts/cli-release/build.dart --check-version "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.platform }} ${{ matrix.architecture }}
+    needs: release-metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            architecture: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            architecture: arm64
+          - runner: macos-15-intel
+            platform: macos
+            architecture: x64
+          - runner: macos-15
+            platform: macos
+            architecture: arm64
+          - runner: windows-2025
+            platform: windows
+            architecture: x64
+          - runner: windows-11-arm
+            platform: windows
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+      - name: Resolve locked CLI dependencies
+        working-directory: cli
+        run: dart pub get --enforce-lockfile --no-example
+      - name: Build native archive
+        working-directory: cli
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: |
+          dart run ../scripts/cli-release/build.dart \
+            --version "$RELEASE_VERSION" \
+            --platform "${{ matrix.platform }}" \
+            --architecture "${{ matrix.architecture }}" \
+            --output-dir dist
+      - name: Upload platform archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyfens-cli-${{ matrix.platform }}-${{ matrix.architecture }}
+          path: cli/dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-github-release:
+    name: Assemble GitHub Release
+    needs:
+      - release-metadata
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+      - name: Resolve locked CLI dependencies
+        working-directory: cli
+        run: dart pub get --enforce-lockfile --no-example
+      - name: Download platform archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hyfens-cli-*
+          path: dist
+          merge-multiple: true
+      - name: Create checksums and artifact inventory
+        working-directory: cli
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: |
+          dart run ../scripts/cli-release/inventory.dart \
+            --version "$RELEASE_VERSION" \
+            --artifacts-dir ../dist \
+            --output ../dist/artifact-inventory.json
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: |
+          gh release create "v${RELEASE_VERSION}" dist/* \
+            --verify-tag \
+            --title "Hyfens CLI v${RELEASE_VERSION}" \
+            --generate-notes

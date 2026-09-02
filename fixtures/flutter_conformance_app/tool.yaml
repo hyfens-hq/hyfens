@@ -1,0 +1,17 @@
+version: 1
+
+instrumentation:
+  include:
+    - lib/**
+  exclude:
+    - lib/generated/**
+
+packages:
+  include_local: true
+  include: []
+
+application_id: dev.hyfens.conformance
+
+signing:
+  public_key: .tool/keys/public.key
+  private_key: .tool/keys/private.key
