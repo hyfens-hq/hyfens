@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/insta
 Pin a published release with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash -s -- --version v0.1.1
 ```
 
 The installer detects the host architecture, downloads only from the fixed

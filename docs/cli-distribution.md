@@ -29,7 +29,7 @@ approved.
 ## Install a GitHub Release directly
 
 The bounded macOS/Linux installer resolves `latest` by querying the fixed
-GitHub repository, or accepts an explicit published release such as `v0.1.0`:
+GitHub repository, or accepts an explicit published release such as `v0.1.1`:
 
 ```sh
 # Install the latest published release.
@@ -42,7 +42,7 @@ curl --fail --silent --show-error --location \
 curl --fail --silent --show-error --location \
   --proto '=https' --proto-redir '=https' --tlsv1.2 \
   https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh \
-  | bash -s -- --version v0.1.0
+  | bash -s -- --version v0.1.1
 ```
 
 The installer supports macOS and Linux on x64 and arm64. It downloads the
@@ -63,7 +63,7 @@ below when a native release archive is unavailable.
 On Windows PowerShell:
 
 ```powershell
-$version = "0.1.0"
+$version = "0.1.1"
 $architecture = "arm64"
 $archive = "hyfens-$version-windows-$architecture.zip"
 $base = "https://github.com/hyfens-hq/hyfens/releases/download/v$version"
@@ -87,19 +87,20 @@ corresponding line in `SHA256SUMS` before using the extracted executable. Use
 
 ## Package-manager metadata
 
-The templates under `packaging/cli/` are intentionally not live manifests:
+The current `v0.1.1` release has live Homebrew and Scoop distribution:
 
-- Homebrew supports macOS and Linux formulas;
-- Scoop provides a Windows manifest; and
-- WinGet uses version, installer, and locale Windows YAML manifests.
+- Homebrew: `hyfens-hq/homebrew-tap`, installed with
+  `brew tap hyfens-hq/tap && brew install hyfens`;
+- Scoop: `hyfens-hq/scoop-bucket`, installed with
+  `scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket` and
+  `scoop install hyfens`; and
+- WinGet remains an external Microsoft submission gate.
 
-After a GitHub Release exists, use `artifact-inventory.json` for the release
-version, exact archive names, and SHA-256 values. Construct each URL as
-`https://github.com/hyfens-hq/hyfens/releases/download/v<version>/<archive>`
-and fill the approved WinGet publisher identity separately. Replace the
-template placeholders only after those values and the destination repository
-are verified, then submit through the approved tap, bucket, or WinGet process.
-Do not commit release-specific checksums or URLs before that gate passes.
+The live package metadata points to immutable GitHub Release archives and the
+release-generated SHA-256 values. For future releases, use
+`artifact-inventory.json` to update the approved tap or bucket, and fill the
+approved WinGet publisher identity separately. The templates under
+`packaging/cli/` are not themselves publication channels.
 
 ## Source-checkout fallback
 
