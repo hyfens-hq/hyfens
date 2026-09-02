@@ -212,8 +212,10 @@ instrumentation: false
 
         expect(commands, <String>{
           'help',
+          'version',
           'doctor',
           'status',
+          'mcp',
           'login',
           'logout',
           'profile',

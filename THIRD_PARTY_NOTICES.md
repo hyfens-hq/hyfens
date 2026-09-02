@@ -46,6 +46,7 @@ instead of listing every transitive package.
 | Classification | Dependency family and resolved version(s) | License evidence | Used by |
 | --- | --- | --- | --- |
 | `PERMISSIVE_COMPATIBLE` | `analyzer` 8.4.1, `args` 2.7.0, `crypto` 3.0.7, `package_config` 2.2.0, `path` 1.9.1 | BSD 3-Clause: [analyzer](https://pub.dev/packages/analyzer/versions/8.4.1/license), [args](https://pub.dev/packages/args/versions/2.7.0/license), [crypto](https://pub.dev/packages/crypto/versions/3.0.7/license), [package_config](https://pub.dev/packages/package_config/versions/2.2.0/license), [path](https://pub.dev/packages/path/versions/1.9.1/license) | CLI, instrumentation, control plane, and Flutter integration |
+| `NOTICE_REQUIRED` | `dart_mcp` 0.5.2 with its stdio/JSON-RPC support packages (`async` 2.13.1, `collection` 1.19.1, `json_rpc_2` 4.1.0, `meta` 1.19.0, `stream_channel` 2.1.4, `stream_transform` 2.1.2) | BSD 3-Clause: [dart_mcp](https://pub.dev/packages/dart_mcp/versions/0.5.2/license), [async](https://pub.dev/packages/async/versions/2.13.1/license), [collection](https://pub.dev/packages/collection/versions/1.19.1/license), [json_rpc_2](https://pub.dev/packages/json_rpc_2/versions/4.1.0/license), [meta](https://pub.dev/packages/meta/versions/1.19.0/license), [stream_channel](https://pub.dev/packages/stream_channel/versions/2.1.4/license), [stream_transform](https://pub.dev/packages/stream_transform/versions/2.1.2/license); [source](https://github.com/dart-lang/ai/tree/main/pkgs/dart_mcp) | Built-in CLI MCP server; the archive carries the notice below |
 | `PERMISSIVE_COMPATIBLE` | `yaml` 3.1.3 | MIT: [package license](https://pub.dev/packages/yaml/versions/3.1.3/license) | CLI configuration and project discovery |
 | `PERMISSIVE_COMPATIBLE` | `cryptography` 2.9.0 | Apache-2.0: [upstream LICENSE](https://github.com/dint-dev/cryptography/blob/cryptography-v2.9.0/LICENSE) | CLI signing, control plane, patch loading, and the root experiment |
 | `PERMISSIVE_COMPATIBLE` | `postgres` 3.5.12 | BSD-style package license with source/binary notice: [package license](https://pub.dev/packages/postgres/versions/3.5.12/license), [upstream project](https://github.com/isoos/postgresql-dart) | Control-plane persistence and CLI/runtime support |
@@ -59,11 +60,43 @@ instead of listing every transitive package.
 
 ### Selected test-only source overlay
 
-`collection` 1.19.1 is used only by the pure-Dart instrumentation test to
-copy one resolved source unit into an ephemeral overlay. It is not a product
-runtime dependency. Its BSD 3-Clause license is recorded here for that source
-redistribution: [collection package license](https://pub.dev/packages/collection/versions/1.19.1/license).
-Other test/lint-only packages are intentionally omitted.
+`collection` 1.19.1 is also used by the pure-Dart instrumentation test to copy
+one resolved source unit into an ephemeral overlay. Other test/lint-only
+packages are intentionally omitted.
+
+### Dart MCP SDK notice
+
+The CLI archive redistributes `dart_mcp` 0.5.2. Its BSD 3-Clause license is
+included here because binary redistribution must carry the notice and
+disclaimer:
+
+```text
+Copyright 2025, the Dart project authors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of Google LLC nor the names of its contributors may be
+      used to endorse or promote products derived from this software without
+      specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+```
 
 ### Native dependency requiring review
 

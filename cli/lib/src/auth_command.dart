@@ -44,6 +44,9 @@ final class AuthCommand extends Command<void> {
   String get description => 'Manage the local human CLI session.';
 
   @override
+  void printUsage() => runner.write(usage);
+
+  @override
   Future<void> run() async {}
 }
 
@@ -195,6 +198,9 @@ final class ProfileCommand extends Command<void> {
       'List and select non-secret control-plane profiles.';
 
   @override
+  void printUsage() => runner.write(usage);
+
+  @override
   Future<void> run() async {}
 }
 
@@ -204,6 +210,9 @@ abstract base class _ProfileCommand extends Command<void> {
   }
 
   final HyfensCommandRunner runner;
+
+  @override
+  void printUsage() => runner.write(usage);
 
   bool get jsonMode => runner.jsonMode || argResults?['json'] == true;
 
@@ -408,6 +417,9 @@ abstract base class _AuthCommand extends Command<void> {
   }
 
   final HyfensCommandRunner runner;
+
+  @override
+  void printUsage() => runner.write(usage);
 
   bool get jsonMode =>
       runner.jsonMode ||

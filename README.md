@@ -172,6 +172,24 @@ steps:
 SSH is an infrastructure/operator mechanism, never a developer
 authentication path.
 
+## AI agents / MCP
+
+The v0.1.1 CLI can serve the bounded Hyfens workflow to compatible coding
+agents over local MCP stdio. Authenticate outside the client, then launch the
+server:
+
+```bash
+hyfens login
+hyfens mcp
+```
+
+The server reuses the selected Hyfens profile/session and exposes structured
+project, release, patch, verification, deploy, rollback, and profile tools; it
+does not pass raw credentials to the agent. The generic client process mapping
+is `command: hyfens` with `args: [mcp]`. See the [MCP documentation](docs/mcp.md)
+for self-hosted profiles, isolation details, the exact tool catalog, and
+troubleshooting.
+
 ## What the workflow proves
 
 Within the declared local evidence boundary, Hyfens can build an exact release

@@ -71,24 +71,39 @@ machine-readable inventory.
 ## Public command surface
 
 ```text
+hyfens --help | -h | help
+hyfens --version | -v | version
 hyfens login [--host URL] [--profile NAME] [--device]
 hyfens logout
 hyfens status
 hyfens doctor
+hyfens mcp [--profile NAME] [--debug]
 hyfens profile list|show|use|remove|current
+hyfens auth login|status|logout
 hyfens init
+hyfens analyze
 hyfens release android|ios
 hyfens patch android|ios
-hyfens deploy
 hyfens rollback
+hyfens cleanup
 hyfens inspect
 hyfens verify <patch-file>
+hyfens keys generate|inspect
+hyfens serve
+hyfens deploy
+hyfens rollout create|inspect|transition
+hyfens bundle export|verify|import|admit
 ```
 
-The command surface is intentionally small. Lower-level local helpers may
-exist in a source checkout, but they are not required for the polished public
-workflow. Use `hyfens <command> --help` for options exposed by the installed
-version.
+`hyfens --help`, `hyfens -h`, and `hyfens help` show the same root usage.
+Every listed command and subcommand accepts `--help`; use
+`hyfens <command> --help` (or `hyfens help <command>`) for its options. The
+deprecated `tool` executable delegates to this same help and command surface
+after printing its migration notice.
+
+`hyfens mcp` starts the local stdio MCP server for compatible AI coding agents;
+see [MCP documentation](mcp.md) for profile selection, tool schemas, and
+security boundaries.
 
 ## Endpoint and profile selection
 
