@@ -11,10 +11,11 @@ the `/platform` route root.
 ## Audience and boundary
 
 Platform sessions use an explicit `platform` authorization audience and
-server-side platform capabilities. The current compatibility guard also
-requires the configured platform-admin identity and an eligible platform
-membership. A customer session cannot gain this context by changing a URL or
-by belonging to several organizations.
+server-side platform capabilities. Legacy deployments may retain the
+configured platform-admin identity as a compatibility guard; new staff use an
+explicit `platform_system` membership with a bounded role capability bundle.
+A customer session cannot gain this context by changing a URL or by belonging
+to several organizations.
 
 The Platform Console is not a customer workspace with extra menu items. It has
 its own navigation and context bar, and it does not use the customer
@@ -40,8 +41,9 @@ membership switcher or silently impersonate a customer.
 - **Operations** — the current metrics-backed operational view. It reports only
   signals the control plane actually provides and uses unavailable/unknown
   states instead of implying production availability.
-- **Platform users** — staff identity, status, platform role/capability, and
-  access metadata. Customer members and credential material are excluded.
+- **Platform users** — staff identity, status, platform role/capability,
+  invitation, deactivation/reactivation, and session-revocation controls.
+  Customer members and credential material are excluded.
 - **Plans & entitlements** — read-only plan and subscription metadata without
   payment/provider secrets.
 - **Platform settings** — the current operator access boundary and endpoint
@@ -69,7 +71,17 @@ platform:entitlements:read
 platform:commercial:read
 platform:support:read
 platform:support:write
+platform:staff:manage
+platform:sessions:revoke
 ```
+
+Staff administration is capability-checked. Staff invitations are single-use
+and store only token hashes; staff role changes, deactivation/reactivation,
+and platform-session revocation are audited. Staff administration never
+appears in the Customer Workspace. A recipient can use the generated
+`/staff-invite/<token>` link to create the invited staff account; the
+acceptance response establishes a platform-audience session without exposing
+any existing credential material.
 
 Commercial metrics are sourced from `billing_plans` and
 `billing_subscriptions`. They represent active recurring plan amounts only;
@@ -94,11 +106,14 @@ self-hosted operator may inspect the Customer Workspace on the instance origin
 and use the deployment/operator documentation; an instance-admin surface is a
 separate future capability, not a disguised global console.
 
-Staff role mutation, billing mutation, incident management,
-infrastructure/provider controls, support impersonation, and MFA/network
-hardening remain backlog until their explicit contracts are ready. Support
-inspection is performed through platform APIs, not customer-session
-impersonation.
+Billing mutation, incident management, infrastructure/provider controls, and
+support impersonation remain backlog until their explicit contracts are
+ready. Platform MFA has an enforcement seam controlled by
+`HYFENS_PLATFORM_MFA_REQUIRED`; when enabled, a platform session without a
+verified MFA state is denied with `PLATFORM_MFA_REQUIRED`. The current
+repository does not provide an MFA enrollment/provider flow, so enabling this
+flag requires the deployment's approved MFA integration. Support inspection
+is performed through platform APIs, not customer-session impersonation.
 
 See [dashboard separation architecture](../architecture/dashboard-separation.md)
 for routes and the [security architecture](../architecture/security.md) for

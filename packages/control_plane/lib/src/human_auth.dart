@@ -41,6 +41,9 @@ const String platformEntitlementsReadCapability = 'platform:entitlements:read';
 const String platformCommercialReadCapability = 'platform:commercial:read';
 const String platformSupportReadCapability = 'platform:support:read';
 const String platformSupportWriteCapability = 'platform:support:write';
+const String platformStaffManageCapability = 'platform:staff:manage';
+const String platformSessionsRevokeCapability = 'platform:sessions:revoke';
+const String platformSystemOrganizationId = 'platform_system';
 
 const Set<String> platformCapabilities = <String>{
   platformOverviewCapability,
@@ -53,9 +56,60 @@ const Set<String> platformCapabilities = <String>{
   platformCommercialReadCapability,
   platformSupportReadCapability,
   platformSupportWriteCapability,
+  platformStaffManageCapability,
+  platformSessionsRevokeCapability,
 };
 
 const Set<String> supportedPlatformCapabilities = platformCapabilities;
+
+/// Small, explicit platform staff bundles. Frontends consume the resulting
+/// capability set; role names are only an administration convenience.
+const Map<String, Set<String>> platformRoleCapabilities = <String, Set<String>>{
+  'admin': platformCapabilities,
+  'support': <String>{
+    platformOverviewCapability,
+    platformOrganizationsReadCapability,
+    platformOrganizationsInspectCapability,
+    platformAccountsReadCapability,
+    platformAuditReadCapability,
+    platformSupportReadCapability,
+    platformSupportWriteCapability,
+  },
+  'operations': <String>{
+    platformOverviewCapability,
+    platformOrganizationsReadCapability,
+    platformOrganizationsInspectCapability,
+    platformOperationsReadCapability,
+    platformAuditReadCapability,
+  },
+  'commercial': <String>{
+    platformOverviewCapability,
+    platformOrganizationsReadCapability,
+    platformOrganizationsInspectCapability,
+    platformEntitlementsReadCapability,
+    platformCommercialReadCapability,
+  },
+  'security': <String>{
+    platformOverviewCapability,
+    platformOrganizationsInspectCapability,
+    platformAccountsReadCapability,
+    platformAuditReadCapability,
+    platformOperationsReadCapability,
+    platformSessionsRevokeCapability,
+  },
+};
+
+Set<String> platformCapabilitiesForRole(String role) {
+  final capabilities = platformRoleCapabilities[role];
+  if (capabilities == null) {
+    throw const ControlPlaneException(
+      'INVALID_PLATFORM_ROLE',
+      'The requested platform staff role is not supported',
+      statusCode: 422,
+    );
+  }
+  return Set.unmodifiable(capabilities);
+}
 
 /// Small, capability-based customer role bundles used by invitations and
 /// member administration. Frontends should consume the resulting capability
@@ -170,6 +224,7 @@ final class HumanAuthConfig {
     Iterable<String> allowedAuthorizationRedirectUris = const <String>[],
     String deviceVerificationUri = '/auth/device/verify',
     Iterable<String> platformAdminEmails = const <String>[],
+    this.platformMfaRequired = false,
   }) : issuer = _boundedText(issuer, 'issuer', 256),
        audience = _boundedText(audience, 'audience', 256),
        signingKeySeed = _fixedBytes(signingKeySeed, 32, 'signing key seed'),
@@ -242,6 +297,7 @@ final class HumanAuthConfig {
   final Set<String> allowedAuthorizationRedirectUris;
   final String deviceVerificationUri;
   final Set<String> platformAdminEmails;
+  final bool platformMfaRequired;
 
   /// Reads the auth configuration without inventing a signing secret.
   ///
@@ -265,6 +321,7 @@ final class HumanAuthConfig {
       'HYFENS_AUTH_ALLOWED_REDIRECT_URIS',
       'HYFENS_AUTH_DEVICE_VERIFICATION_URI',
       'HYFENS_PLATFORM_ADMIN_EMAILS',
+      'HYFENS_PLATFORM_MFA_REQUIRED',
     };
     final configured = names.any((name) => _isMeaningfulSetting(values[name]));
     final encodedSeed = values['HYFENS_AUTH_SIGNING_KEY'];
@@ -334,6 +391,10 @@ final class HumanAuthConfig {
       ),
       platformAdminEmails: _parsePlatformAdminEmails(
         values['HYFENS_PLATFORM_ADMIN_EMAILS'],
+      ),
+      platformMfaRequired: _parseBoolean(
+        values['HYFENS_PLATFORM_MFA_REQUIRED'],
+        'HYFENS_PLATFORM_MFA_REQUIRED',
       ),
     );
   }
@@ -436,6 +497,13 @@ final class HumanAuthConfig {
   static List<String> _parsePlatformAdminEmails(String? value) {
     if (value == null || value.isEmpty) return const <String>[];
     return value.split(',');
+  }
+
+  static bool _parseBoolean(String? value, String field) {
+    if (value == null || value.isEmpty) return false;
+    if (value == 'true') return true;
+    if (value == 'false') return false;
+    throw ArgumentError('$field must be true or false');
   }
 
   static String _verificationUri(String value) {
@@ -604,6 +672,7 @@ final class HumanMembership {
     String? environmentId,
     String? profileApplicationId,
     String? profileEnvironmentId,
+    this.active = true,
   }) : organizationId = requireOpaqueId(
          organizationId,
          'membership organization ID',
@@ -667,6 +736,7 @@ final class HumanMembership {
   final String profileName;
   final String audience;
   final Set<String> platformCapabilities;
+  final bool active;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'organizationId': organizationId,
@@ -679,6 +749,7 @@ final class HumanMembership {
     'profileName': profileName,
     'audience': audience,
     'platformCapabilities': platformCapabilities.toList()..sort(),
+    'active': active,
   };
 
   static HumanMembership fromJson(Map<String, Object?> value) {
@@ -707,6 +778,7 @@ final class HumanMembership {
       profileName: value['profileName']! as String,
       audience: value['audience'] as String? ?? customerAuthorizationAudience,
       platformCapabilities: parsedPlatformCapabilities,
+      active: value['active'] as bool? ?? true,
     );
   }
 }
@@ -790,6 +862,7 @@ final class HumanSessionRecord {
     required this.lastUsedAt,
     required this.revokedAt,
     this.audience = customerAuthorizationAudience,
+    this.mfaVerified = false,
   }) : id = requireOpaqueId(id, 'human session ID'),
        userId = requireOpaqueId(userId, 'human session user ID'),
        secretHash = requireNonEmpty(secretHash, 'human session secret hash') {
@@ -806,18 +879,23 @@ final class HumanSessionRecord {
   final DateTime lastUsedAt;
   final DateTime? revokedAt;
   final String audience;
+  final bool mfaVerified;
 
-  HumanSessionRecord copyWith({DateTime? lastUsedAt, DateTime? revokedAt}) =>
-      HumanSessionRecord(
-        id: id,
-        userId: userId,
-        secretHash: secretHash,
-        createdAt: createdAt,
-        expiresAt: expiresAt,
-        lastUsedAt: lastUsedAt ?? this.lastUsedAt,
-        revokedAt: revokedAt ?? this.revokedAt,
-        audience: audience,
-      );
+  HumanSessionRecord copyWith({
+    DateTime? lastUsedAt,
+    DateTime? revokedAt,
+    bool? mfaVerified,
+  }) => HumanSessionRecord(
+    id: id,
+    userId: userId,
+    secretHash: secretHash,
+    createdAt: createdAt,
+    expiresAt: expiresAt,
+    lastUsedAt: lastUsedAt ?? this.lastUsedAt,
+    revokedAt: revokedAt ?? this.revokedAt,
+    audience: audience,
+    mfaVerified: mfaVerified ?? this.mfaVerified,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
@@ -828,6 +906,7 @@ final class HumanSessionRecord {
     'lastUsedAt': lastUsedAt.toUtc().toIso8601String(),
     'revokedAt': revokedAt?.toUtc().toIso8601String(),
     'audience': audience,
+    'mfaVerified': mfaVerified,
   };
 
   static HumanSessionRecord fromJson(Map<String, Object?> value) =>
@@ -842,6 +921,7 @@ final class HumanSessionRecord {
             ? null
             : DateTime.parse(value['revokedAt']! as String),
         audience: value['audience'] as String? ?? customerAuthorizationAudience,
+        mfaVerified: value['mfaVerified'] as bool? ?? false,
       );
 }
 
@@ -1462,6 +1542,215 @@ final class HumanAuthService {
     return _issueSessionForUser(user);
   });
 
+  /// Returns an account record for trusted service-layer invitation flows.
+  /// Callers receive the password hash only inside the control-plane process;
+  /// HTTP projections never expose this method or the record directly.
+  Future<HumanUserRecord?> userByEmail(String email) async {
+    final normalizedEmail = normalizeHumanEmail(email);
+    for (final user in await _users()) {
+      if (user.email == normalizedEmail) return user;
+    }
+    return null;
+  }
+
+  Future<HumanUserRecord?> userById(String userId) async {
+    final value = await store.readJson('users', userId);
+    return value == null ? null : HumanUserRecord.fromJson(value);
+  }
+
+  /// Creates the account portion of a customer invitation acceptance. The
+  /// invitation service owns token validation and membership idempotency.
+  Future<HumanLoginResult> registerInvitedCustomer({
+    required String organizationId,
+    required String email,
+    required String password,
+    required String role,
+    required Set<String> capabilities,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    _validatePassword(password);
+    final normalizedEmail = normalizeHumanEmail(email);
+    final existing = await userByEmail(normalizedEmail);
+    if (existing != null) _emailAlreadyRegistered();
+    final membership = HumanMembership(
+      organizationId: organizationId,
+      role: role,
+      capabilities: capabilities,
+      profileName: 'default',
+      audience: customerAuthorizationAudience,
+    );
+    final user = HumanUserRecord(
+      id: 'usr_${sha256Hex(utf8.encode(normalizedEmail)).substring(0, 32)}',
+      email: normalizedEmail,
+      passwordHash: await _hashPassword(password),
+      active: true,
+      memberships: <HumanMembership>[membership],
+      createdAt: _now(),
+    );
+    await store.createJson('users', user.id, user.toJson());
+    return _issueSessionForUser(user);
+  });
+
+  /// Adds or reactivates a customer membership without changing the user's
+  /// password or any other organization membership.
+  Future<HumanUserRecord> grantCustomerMembership({
+    required String userId,
+    required String organizationId,
+    required String role,
+    required Set<String> capabilities,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    final user = await userById(userId);
+    if (user == null)
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Human user was not found',
+        statusCode: 404,
+      );
+    final memberships = user.memberships.toList();
+    final index = memberships.indexWhere(
+      (membership) =>
+          membership.organizationId == organizationId &&
+          membership.audience == customerAuthorizationAudience,
+    );
+    final next = HumanMembership(
+      organizationId: organizationId,
+      role: role,
+      capabilities: capabilities,
+      profileName: index < 0 ? 'default' : memberships[index].profileName,
+      audience: customerAuthorizationAudience,
+      active: true,
+    );
+    if (index < 0) {
+      memberships.add(next);
+    } else {
+      memberships[index] = next;
+    }
+    final updated = user.copyWith(memberships: memberships, active: true);
+    await store.replaceJson('users', user.id, updated.toJson());
+    return updated;
+  });
+
+  /// Issues a customer-audience session for a user who has already
+  /// authenticated through another Hyfens audience. Invitation acceptance is
+  /// email-bound before this method is called; no password or raw credential
+  /// is accepted here.
+  Future<HumanLoginResult> issueSessionForAuthenticatedUser({
+    required String accessToken,
+    required String audience,
+  }) => _serialized(() async {
+    final context = await _authenticateAccessToken(accessToken);
+    return _issueSessionForUser(context.user, audience: audience);
+  });
+
+  /// Registers an explicit platform-system staff membership. Platform staff
+  /// are not made members of a customer organization.
+  Future<HumanLoginResult> registerInvitedPlatformStaff({
+    required String email,
+    required String password,
+    required String role,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    _validatePassword(password);
+    final normalizedEmail = normalizeHumanEmail(email);
+    if (await userByEmail(normalizedEmail) != null) _emailAlreadyRegistered();
+    final membership = HumanMembership(
+      organizationId: platformSystemOrganizationId,
+      role: role,
+      capabilities: controlScopes,
+      profileName: 'platform-$role',
+      audience: platformAuthorizationAudience,
+      platformCapabilities: platformCapabilitiesForRole(role),
+    );
+    final user = HumanUserRecord(
+      id: 'usr_${sha256Hex(utf8.encode(normalizedEmail)).substring(0, 32)}',
+      email: normalizedEmail,
+      passwordHash: await _hashPassword(password),
+      active: true,
+      memberships: <HumanMembership>[membership],
+      createdAt: _now(),
+    );
+    await store.createJson('users', user.id, user.toJson());
+    return _issueSessionForUser(
+      user,
+      audience: platformAuthorizationAudience,
+      profileName: membership.profileName,
+    );
+  });
+
+  /// Updates an explicit platform-system staff membership. Legacy configured
+  /// super-admin memberships are intentionally not mutated by this method.
+  Future<HumanUserRecord> updatePlatformStaffMembership({
+    required String userId,
+    String? role,
+    bool? active,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    final value = await store.readJson('users', userId);
+    if (value == null)
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Platform user was not found',
+        statusCode: 404,
+      );
+    final user = HumanUserRecord.fromJson(value);
+    final index = user.memberships.indexWhere(
+      (membership) =>
+          membership.audience == platformAuthorizationAudience &&
+          membership.organizationId == platformSystemOrganizationId,
+    );
+    if (index < 0)
+      throw const ControlPlaneException(
+        'LEGACY_PLATFORM_MEMBERSHIP',
+        'This legacy platform owner is managed by deployment configuration',
+        statusCode: 409,
+      );
+    final current = user.memberships[index];
+    final nextRole = role ?? current.role;
+    final nextCapabilities = platformCapabilitiesForRole(nextRole);
+    final nextMembership = HumanMembership(
+      organizationId: platformSystemOrganizationId,
+      role: nextRole,
+      capabilities: controlScopes,
+      profileName: 'platform-$nextRole',
+      audience: platformAuthorizationAudience,
+      platformCapabilities: nextCapabilities,
+      active: active ?? current.active,
+    );
+    final memberships = user.memberships.toList()..[index] = nextMembership;
+    final hasActiveMembership = memberships.any(
+      (membership) => membership.active,
+    );
+    final updated = user.copyWith(
+      memberships: memberships,
+      active: hasActiveMembership,
+    );
+    await store.replaceJson('users', user.id, updated.toJson());
+    return updated;
+  });
+
+  /// Revokes all sessions for one user and audience. The session token and
+  /// access JWT are never returned or persisted by this operation.
+  Future<int> revokeSessionsForUser({
+    required String userId,
+    required String audience,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    var revoked = 0;
+    for (final value in await store.listJson('sessions')) {
+      if (value['userId'] != userId || value['audience'] != audience) continue;
+      final session = HumanSessionRecord.fromJson(value);
+      if (session.revokedAt != null) continue;
+      final result = await store.revokeSessionIfActive(
+        id: session.id,
+        expectedSecretHash: session.secretHash,
+        revokedAt: _now(),
+      );
+      if (result) revoked++;
+    }
+    return revoked;
+  });
+
   Future<HumanLoginResult> login({
     required String email,
     required String password,
@@ -1497,6 +1786,52 @@ final class HumanAuthService {
     if (user == null || !user.active || passwordHash != user.passwordHash) {
       _invalidCredentials();
     }
+    return _issueSessionForUser(
+      user,
+      audience: audience,
+      profileName: profileName,
+    );
+  });
+
+  /// Verifies an invitation recipient's password without requiring the
+  /// account to have an active membership yet. This is intentionally limited
+  /// to the invitation service; ordinary login continues to reject inactive
+  /// accounts and accounts without an active audience membership.
+  Future<HumanUserRecord> verifyInvitationPassword({
+    required String email,
+    required String password,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    _validatePassword(password);
+    final normalizedEmail = normalizeHumanEmail(email);
+    final user = await userByEmail(normalizedEmail);
+    late final String passwordHash;
+    try {
+      passwordHash = user == null
+          ? await _hashPassword(password, salt: _dummySalt)
+          : await _hashPassword(password, encoded: user.passwordHash);
+    } on FormatException {
+      _invalidCredentials();
+    } on TypeError {
+      _invalidCredentials();
+    }
+    if (user == null || passwordHash != user.passwordHash) {
+      _invalidCredentials();
+    }
+    return user;
+  });
+
+  /// Issues a fresh session after a trusted invitation flow has verified the
+  /// account and granted its audience membership. No password or bearer
+  /// secret is accepted by this internal service seam.
+  Future<HumanLoginResult> issueSessionForUserId({
+    required String userId,
+    required String audience,
+    String? profileName,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    final user = await userById(userId);
+    if (user == null || !user.active) _unauthorized();
     return _issueSessionForUser(
       user,
       audience: audience,
@@ -1828,6 +2163,7 @@ final class HumanAuthService {
     }
     final hasMatchingMembership = user.memberships.any((membership) {
       if (membership.audience != audience) return false;
+      if (!membership.active) return false;
       if (requestedProfile != null &&
           membership.profileName != requestedProfile) {
         return false;
@@ -1855,6 +2191,7 @@ final class HumanAuthService {
       lastUsedAt: now,
       revokedAt: null,
       audience: audience,
+      mfaVerified: false,
     );
     await store.createJson('sessions', session.id, session.toJson());
     final issued = await _issueAccessToken(user, session);
@@ -2201,15 +2538,21 @@ final class HumanAuthService {
         statusCode: 403,
       );
     }
-    final permitted =
-        config.platformAdminEmails.contains(context.user.email) &&
-        context.user.memberships.any(
-          (membership) =>
-              _isPlatformMembership(context.user, membership) &&
-              membership.platformCapabilities.contains(capability) &&
-              (requestedProfile == null ||
-                  membership.profileName == requestedProfile),
-        );
+    if (config.platformMfaRequired && !context.session.mfaVerified) {
+      throw const ControlPlaneException(
+        'PLATFORM_MFA_REQUIRED',
+        'MFA verification is required for Platform Console access',
+        statusCode: 403,
+      );
+    }
+    final permitted = context.user.memberships.any(
+      (membership) =>
+          _isPlatformMembership(context.user, membership) &&
+          membership.active &&
+          membership.platformCapabilities.contains(capability) &&
+          (requestedProfile == null ||
+              membership.profileName == requestedProfile),
+    );
     if (!permitted) {
       throw const ControlPlaneException(
         'FORBIDDEN',
@@ -2267,6 +2610,7 @@ final class HumanAuthService {
                 'audience': membership.audience,
                 'applicationId': membership.applicationId,
                 'environmentId': membership.environmentId,
+                'active': membership.active,
                 'capabilities': membership.capabilities.toList()..sort(),
               },
             )
@@ -2558,6 +2902,7 @@ final class HumanAuthService {
     final matches = user.memberships
         .where((membership) {
           if (membership.audience != requiredAudience) return false;
+          if (!membership.active) return false;
           if (organizationId != null &&
               membership.organizationId != organizationId) {
             return false;
@@ -2596,7 +2941,9 @@ final class HumanAuthService {
   }) => HumanIdentity(
     user: user,
     profiles: user.memberships
-        .where((membership) => membership.audience == audience)
+        .where(
+          (membership) => membership.audience == audience && membership.active,
+        )
         .map(
           (membership) => HumanAuthProfile(
             name: membership.profileName,
@@ -2615,15 +2962,44 @@ final class HumanAuthService {
         .toList(growable: false),
   );
 
+  /// Identifies both deployment-configured legacy platform owners and the
+  /// explicit platform-system staff memberships. Inactive memberships are
+  /// recognized for safe staff listing/session revocation, but never for
+  /// authorization.
+  bool isRecognizedPlatformMembership(
+    HumanUserRecord user,
+    HumanMembership membership,
+  ) {
+    if (membership.audience != platformAuthorizationAudience ||
+        membership.platformCapabilities.isEmpty) {
+      return false;
+    }
+    final legacy =
+        config.platformAdminEmails.contains(user.email) &&
+        membership.role == 'owner' &&
+        membership.profileName == 'super-admin';
+    final explicit =
+        membership.organizationId == platformSystemOrganizationId &&
+        platformRoleCapabilities.containsKey(membership.role);
+    return legacy || explicit;
+  }
+
+  bool hasPlatformCapability(
+    HumanUserRecord user,
+    String capability, {
+    String? profileName,
+  }) => user.memberships.any(
+    (membership) =>
+        membership.active &&
+        isRecognizedPlatformMembership(user, membership) &&
+        membership.platformCapabilities.contains(capability) &&
+        (profileName == null || membership.profileName == profileName),
+  );
+
   bool _isPlatformMembership(
     HumanUserRecord user,
     HumanMembership membership,
-  ) =>
-      config.platformAdminEmails.contains(user.email) &&
-      membership.audience == platformAuthorizationAudience &&
-      membership.role == 'owner' &&
-      membership.profileName == 'super-admin' &&
-      membership.platformCapabilities.isNotEmpty;
+  ) => membership.active && isRecognizedPlatformMembership(user, membership);
 
   Future<String> _hashPassword(
     String password, {

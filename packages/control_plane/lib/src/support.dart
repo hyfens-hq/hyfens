@@ -20,6 +20,54 @@ const Set<String> supportCasePriorities = <String>{
 const String customerSupportVisibility = 'customer';
 const String platformInternalSupportVisibility = 'platform_internal';
 
+const Set<String> organizationInvitationStatuses = <String>{
+  'PENDING',
+  'ACCEPTED',
+  'REVOKED',
+  'EXPIRED',
+};
+
+const Set<String> invitationDeliveryStatuses = <String>{
+  'PENDING',
+  'DELIVERED',
+  'FAILED',
+};
+
+/// Delivery is deliberately an adapter. The control plane persists only a
+/// token hash; a configured Cloud/SMTP adapter receives the one-time token
+/// after the invitation record has been committed.
+final class InvitationDeliveryRequest {
+  const InvitationDeliveryRequest({
+    required this.kind,
+    required this.invitationId,
+    required this.email,
+    required this.token,
+    required this.expiresAt,
+    required this.role,
+    required this.capabilities,
+  });
+
+  final String kind;
+  final String invitationId;
+  final String email;
+  final String token;
+  final DateTime expiresAt;
+  final String role;
+  final Set<String> capabilities;
+}
+
+abstract interface class OrganizationInvitationDelivery {
+  Future<void> deliver(InvitationDeliveryRequest request);
+}
+
+final class NoopOrganizationInvitationDelivery
+    implements OrganizationInvitationDelivery {
+  const NoopOrganizationInvitationDelivery();
+
+  @override
+  Future<void> deliver(InvitationDeliveryRequest request) async {}
+}
+
 final class SupportCaseRecord {
   SupportCaseRecord({
     required String id,
@@ -242,7 +290,12 @@ final class OrganizationInvitationRecord {
     required String createdBy,
     required DateTime createdAt,
     required DateTime expiresAt,
+    String status = 'PENDING',
+    String? acceptedBy,
+    DateTime? acceptedAt,
     DateTime? revokedAt,
+    String deliveryStatus = 'PENDING',
+    DateTime? deliveryFailedAt,
   }) : id = requireOpaqueId(id, 'invitation ID'),
        organizationId = requireOpaqueId(
          organizationId,
@@ -255,7 +308,22 @@ final class OrganizationInvitationRecord {
        createdBy = requireNonEmpty(createdBy, 'invitation creator'),
        createdAt = createdAt.toUtc(),
        expiresAt = expiresAt.toUtc(),
-       revokedAt = revokedAt?.toUtc();
+       status = _enumValue(
+         status,
+         organizationInvitationStatuses,
+         'invitation status',
+       ),
+       acceptedBy = acceptedBy == null
+           ? null
+           : requireNonEmpty(acceptedBy, 'invitation accepter'),
+       acceptedAt = acceptedAt?.toUtc(),
+       revokedAt = revokedAt?.toUtc(),
+       deliveryStatus = _enumValue(
+         deliveryStatus,
+         invitationDeliveryStatuses,
+         'invitation delivery status',
+       ),
+       deliveryFailedAt = deliveryFailedAt?.toUtc();
 
   final String id;
   final String organizationId;
@@ -266,24 +334,46 @@ final class OrganizationInvitationRecord {
   final String createdBy;
   final DateTime createdAt;
   final DateTime expiresAt;
+  final String status;
+  final String? acceptedBy;
+  final DateTime? acceptedAt;
   final DateTime? revokedAt;
+  final String deliveryStatus;
+  final DateTime? deliveryFailedAt;
 
-  bool activeAt(DateTime now) =>
-      revokedAt == null && expiresAt.isAfter(now.toUtc());
+  String statusAt(DateTime now) {
+    if (status == 'ACCEPTED' || acceptedAt != null) return 'ACCEPTED';
+    if (status == 'REVOKED' || revokedAt != null) return 'REVOKED';
+    if (!expiresAt.isAfter(now.toUtc())) return 'EXPIRED';
+    return 'PENDING';
+  }
 
-  OrganizationInvitationRecord copyWith({DateTime? revokedAt}) =>
-      OrganizationInvitationRecord(
-        id: id,
-        organizationId: organizationId,
-        email: email,
-        role: role,
-        capabilities: capabilities,
-        tokenHash: tokenHash,
-        createdBy: createdBy,
-        createdAt: createdAt,
-        expiresAt: expiresAt,
-        revokedAt: revokedAt ?? this.revokedAt,
-      );
+  bool activeAt(DateTime now) => statusAt(now) == 'PENDING';
+
+  OrganizationInvitationRecord copyWith({
+    String? status,
+    String? acceptedBy,
+    DateTime? acceptedAt,
+    DateTime? revokedAt,
+    String? deliveryStatus,
+    DateTime? deliveryFailedAt,
+  }) => OrganizationInvitationRecord(
+    id: id,
+    organizationId: organizationId,
+    email: email,
+    role: role,
+    capabilities: capabilities,
+    tokenHash: tokenHash,
+    createdBy: createdBy,
+    createdAt: createdAt,
+    expiresAt: expiresAt,
+    status: status ?? this.status,
+    acceptedBy: acceptedBy ?? this.acceptedBy,
+    acceptedAt: acceptedAt ?? this.acceptedAt,
+    revokedAt: revokedAt ?? this.revokedAt,
+    deliveryStatus: deliveryStatus ?? this.deliveryStatus,
+    deliveryFailedAt: deliveryFailedAt ?? this.deliveryFailedAt,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
@@ -295,10 +385,15 @@ final class OrganizationInvitationRecord {
     'createdBy': createdBy,
     'createdAt': createdAt.toUtc().toIso8601String(),
     'expiresAt': expiresAt.toUtc().toIso8601String(),
+    'status': status,
+    'acceptedBy': acceptedBy,
+    'acceptedAt': acceptedAt?.toUtc().toIso8601String(),
     'revokedAt': revokedAt?.toUtc().toIso8601String(),
+    'deliveryStatus': deliveryStatus,
+    'deliveryFailedAt': deliveryFailedAt?.toUtc().toIso8601String(),
   };
 
-  Map<String, Object?> toMetadataJson() => <String, Object?>{
+  Map<String, Object?> toMetadataJson({DateTime? now}) => <String, Object?>{
     'id': id,
     'organizationId': organizationId,
     'email': email,
@@ -307,9 +402,25 @@ final class OrganizationInvitationRecord {
     'createdBy': createdBy,
     'createdAt': createdAt.toUtc().toIso8601String(),
     'expiresAt': expiresAt.toUtc().toIso8601String(),
+    'status': statusAt((now ?? DateTime.now()).toUtc()),
+    'acceptedBy': acceptedBy,
+    'acceptedAt': acceptedAt?.toUtc().toIso8601String(),
     'revokedAt': revokedAt?.toUtc().toIso8601String(),
-    'active': revokedAt == null,
+    'deliveryStatus': deliveryStatus,
+    'active': statusAt((now ?? DateTime.now()).toUtc()) == 'PENDING',
   };
+
+  /// Public invitation metadata is intentionally smaller than the
+  /// organization-admin projection. It is safe to return before an account
+  /// exists and never reveals creator, accepter, or authorization data.
+  Map<String, Object?> toPublicMetadataJson({DateTime? now}) =>
+      <String, Object?>{
+        'email': email,
+        'role': role,
+        'expiresAt': expiresAt.toUtc().toIso8601String(),
+        'status': statusAt((now ?? DateTime.now()).toUtc()),
+        'active': statusAt((now ?? DateTime.now()).toUtc()) == 'PENDING',
+      };
 
   static OrganizationInvitationRecord fromJson(Map<String, Object?> value) {
     final rawCapabilities = value['capabilities'];
@@ -327,7 +438,12 @@ final class OrganizationInvitationRecord {
       createdBy: value['createdBy']! as String,
       createdAt: DateTime.parse(value['createdAt']! as String),
       expiresAt: DateTime.parse(value['expiresAt']! as String),
+      status: value['status'] as String? ?? 'PENDING',
+      acceptedBy: value['acceptedBy'] as String?,
+      acceptedAt: _timestamp(value['acceptedAt']),
       revokedAt: _timestamp(value['revokedAt']),
+      deliveryStatus: value['deliveryStatus'] as String? ?? 'DELIVERED',
+      deliveryFailedAt: _timestamp(value['deliveryFailedAt']),
     );
   }
 }
@@ -343,6 +459,193 @@ final class IssuedOrganizationInvitation {
 
   Map<String, Object?> toJson() => <String, Object?>{
     ...record.toMetadataJson(),
+    'token': token,
+  };
+}
+
+final class PlatformStaffInvitationRecord {
+  PlatformStaffInvitationRecord({
+    required String id,
+    required String email,
+    required String role,
+    required Set<String> platformCapabilities,
+    required String tokenHash,
+    required String createdBy,
+    required DateTime createdAt,
+    required DateTime expiresAt,
+    String status = 'PENDING',
+    String? acceptedBy,
+    DateTime? acceptedAt,
+    DateTime? revokedAt,
+    String deliveryStatus = 'PENDING',
+    DateTime? deliveryFailedAt,
+  }) : id = requireOpaqueId(id, 'staff invitation ID'),
+       email = requireNonEmpty(email, 'staff invitation email', maxLength: 320),
+       role = requireNonEmpty(role, 'staff invitation role', maxLength: 64),
+       platformCapabilities = Set.unmodifiable(platformCapabilities),
+       tokenHash = requireNonEmpty(tokenHash, 'staff invitation token hash'),
+       createdBy = requireNonEmpty(createdBy, 'staff invitation creator'),
+       createdAt = createdAt.toUtc(),
+       expiresAt = expiresAt.toUtc(),
+       status = _enumValue(
+         status,
+         organizationInvitationStatuses,
+         'staff invitation status',
+       ),
+       acceptedBy = acceptedBy == null
+           ? null
+           : requireNonEmpty(acceptedBy, 'staff invitation accepter'),
+       acceptedAt = acceptedAt?.toUtc(),
+       revokedAt = revokedAt?.toUtc(),
+       deliveryStatus = _enumValue(
+         deliveryStatus,
+         invitationDeliveryStatuses,
+         'staff invitation delivery status',
+       ),
+       deliveryFailedAt = deliveryFailedAt?.toUtc() {
+    if (this.platformCapabilities.isEmpty ||
+        this.platformCapabilities
+            .difference(supportedPlatformCapabilities)
+            .isNotEmpty ||
+        !platformRoleCapabilities.containsKey(role) ||
+        !this.platformCapabilities.containsAll(
+          platformCapabilitiesForRole(role),
+        ) ||
+        !platformCapabilitiesForRole(role)
+            .containsAll(this.platformCapabilities)) {
+      throw const FormatException('Invalid staff invitation capabilities');
+    }
+  }
+
+  final String id;
+  final String email;
+  final String role;
+  final Set<String> platformCapabilities;
+  final String tokenHash;
+  final String createdBy;
+  final DateTime createdAt;
+  final DateTime expiresAt;
+  final String status;
+  final String? acceptedBy;
+  final DateTime? acceptedAt;
+  final DateTime? revokedAt;
+  final String deliveryStatus;
+  final DateTime? deliveryFailedAt;
+
+  String statusAt(DateTime now) {
+    if (status == 'ACCEPTED' || acceptedAt != null) return 'ACCEPTED';
+    if (status == 'REVOKED' || revokedAt != null) return 'REVOKED';
+    if (!expiresAt.isAfter(now.toUtc())) return 'EXPIRED';
+    return 'PENDING';
+  }
+
+  bool activeAt(DateTime now) => statusAt(now) == 'PENDING';
+
+  PlatformStaffInvitationRecord copyWith({
+    String? status,
+    String? acceptedBy,
+    DateTime? acceptedAt,
+    DateTime? revokedAt,
+    String? deliveryStatus,
+    DateTime? deliveryFailedAt,
+  }) => PlatformStaffInvitationRecord(
+    id: id,
+    email: email,
+    role: role,
+    platformCapabilities: platformCapabilities,
+    tokenHash: tokenHash,
+    createdBy: createdBy,
+    createdAt: createdAt,
+    expiresAt: expiresAt,
+    status: status ?? this.status,
+    acceptedBy: acceptedBy ?? this.acceptedBy,
+    acceptedAt: acceptedAt ?? this.acceptedAt,
+    revokedAt: revokedAt ?? this.revokedAt,
+    deliveryStatus: deliveryStatus ?? this.deliveryStatus,
+    deliveryFailedAt: deliveryFailedAt ?? this.deliveryFailedAt,
+  );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'id': id,
+    'email': email,
+    'role': role,
+    'platformCapabilities': platformCapabilities.toList()..sort(),
+    'tokenHash': tokenHash,
+    'createdBy': createdBy,
+    'createdAt': createdAt.toUtc().toIso8601String(),
+    'expiresAt': expiresAt.toUtc().toIso8601String(),
+    'status': status,
+    'acceptedBy': acceptedBy,
+    'acceptedAt': acceptedAt?.toUtc().toIso8601String(),
+    'revokedAt': revokedAt?.toUtc().toIso8601String(),
+    'deliveryStatus': deliveryStatus,
+    'deliveryFailedAt': deliveryFailedAt?.toUtc().toIso8601String(),
+  };
+
+  Map<String, Object?> toMetadataJson({DateTime? now}) => <String, Object?>{
+    'id': id,
+    'email': email,
+    'role': role,
+    'platformCapabilities': platformCapabilities.toList()..sort(),
+    'createdBy': createdBy,
+    'createdAt': createdAt.toUtc().toIso8601String(),
+    'expiresAt': expiresAt.toUtc().toIso8601String(),
+    'status': statusAt((now ?? DateTime.now()).toUtc()),
+    'acceptedBy': acceptedBy,
+    'acceptedAt': acceptedAt?.toUtc().toIso8601String(),
+    'revokedAt': revokedAt?.toUtc().toIso8601String(),
+    'deliveryStatus': deliveryStatus,
+    'active': activeAt((now ?? DateTime.now()).toUtc()),
+  };
+
+  /// Public staff-invitation metadata excludes the issuing operator and the
+  /// capability bundle. The invited recipient only needs role and lifetime
+  /// information to make an informed acceptance decision.
+  Map<String, Object?> toPublicMetadataJson({DateTime? now}) =>
+      <String, Object?>{
+        'email': email,
+        'role': role,
+        'expiresAt': expiresAt.toUtc().toIso8601String(),
+        'status': statusAt((now ?? DateTime.now()).toUtc()),
+        'active': activeAt((now ?? DateTime.now()).toUtc()),
+      };
+
+  static PlatformStaffInvitationRecord fromJson(Map<String, Object?> value) {
+    final rawCapabilities = value['platformCapabilities'];
+    if (rawCapabilities is! List<Object?> ||
+        rawCapabilities.any((item) => item is! String)) {
+      throw const FormatException('Invalid staff invitation capabilities');
+    }
+    return PlatformStaffInvitationRecord(
+      id: value['id']! as String,
+      email: value['email']! as String,
+      role: value['role']! as String,
+      platformCapabilities: rawCapabilities.cast<String>().toSet(),
+      tokenHash: value['tokenHash']! as String,
+      createdBy: value['createdBy']! as String,
+      createdAt: DateTime.parse(value['createdAt']! as String),
+      expiresAt: DateTime.parse(value['expiresAt']! as String),
+      status: value['status'] as String? ?? 'PENDING',
+      acceptedBy: value['acceptedBy'] as String?,
+      acceptedAt: _timestamp(value['acceptedAt']),
+      revokedAt: _timestamp(value['revokedAt']),
+      deliveryStatus: value['deliveryStatus'] as String? ?? 'DELIVERED',
+      deliveryFailedAt: _timestamp(value['deliveryFailedAt']),
+    );
+  }
+}
+
+final class IssuedPlatformStaffInvitation {
+  const IssuedPlatformStaffInvitation({
+    required this.record,
+    required this.token,
+  });
+
+  final PlatformStaffInvitationRecord record;
+  final String token;
+
+  Map<String, Object?> toJson({DateTime? now}) => <String, Object?>{
+    ...record.toMetadataJson(now: now),
     'token': token,
   };
 }

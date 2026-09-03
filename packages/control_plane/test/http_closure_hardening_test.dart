@@ -38,6 +38,7 @@ void main() {
         method: 'POST',
         path: '/v1/organizations/${bootstrap.organization.id}/credentials',
         token: bootstrap.controlCredential.token,
+        idempotencyKey: 'closure-http-credential-1',
         body: <String, Object?>{
           'kind': 'delivery',
           'scopes': deliveryScopes.toList(),
@@ -51,6 +52,27 @@ void main() {
       );
       expect(issued.statusCode, 201, reason: jsonEncode(issued.body));
       expect(issued.body['token'], startsWith('hfy_'));
+
+      final replay = await _request(
+        client,
+        port,
+        method: 'POST',
+        path: '/v1/organizations/${bootstrap.organization.id}/credentials',
+        token: bootstrap.controlCredential.token,
+        idempotencyKey: 'closure-http-credential-1',
+        body: <String, Object?>{
+          'kind': 'delivery',
+          'scopes': deliveryScopes.toList(),
+          'application_id': bootstrap.application.id,
+          'environment_id': bootstrap.environment.id,
+          'expires_at': issued.body['expiresAt'],
+        },
+      );
+      expect(replay.statusCode, 409, reason: jsonEncode(replay.body));
+      expect(
+        (replay.body['error']! as Map<String, Object?>)['code'],
+        'ONE_TIME_SECRET_UNAVAILABLE',
+      );
 
       final audit = await _request(
         client,
@@ -88,6 +110,7 @@ void main() {
         method: 'POST',
         path: '/v1/organizations/${bootstrap.organization.id}/credentials',
         token: bootstrap.deliveryCredential.token,
+        idempotencyKey: 'closure-http-credential-forbidden',
         body: <String, Object?>{
           'kind': 'control',
           'scopes': controlScopes.toList(),
@@ -106,6 +129,7 @@ Future<_Response> _request(
   required String method,
   required String path,
   required String token,
+  String? idempotencyKey,
   Map<String, Object?>? body,
 }) async {
   final request = await client.openUrl(
@@ -116,6 +140,9 @@ Future<_Response> _request(
   request.headers
     ..set('Authorization', 'Bearer $token')
     ..set('X-Request-Id', 'closure-http-request');
+  if (idempotencyKey != null) {
+    request.headers.set('Idempotency-Key', idempotencyKey);
+  }
   if (encoded != null) {
     request.headers
       ..contentType = ContentType.json

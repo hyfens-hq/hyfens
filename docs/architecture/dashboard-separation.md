@@ -112,6 +112,9 @@ implemented bounded projections are:
 | `GET /v1/organizations/{id}/invitations` | Customer | Pending invitation metadata without invitation secrets |
 | `POST /v1/organizations/{id}/invitations` | Customer | One-time invitation issuance; plaintext token is returned once |
 | `POST /v1/organizations/{id}/invitations/{invitation}/revoke` | Customer | Audited invitation revocation |
+| `GET /v1/organization-invitations/{token}` | Public invitation | Safe invitation preview without token persistence or account data |
+| `POST /v1/organization-invitations/{token}` | Public invitation | Recipient-checked, single-use invitation redemption |
+| `POST /v1/organizations/{id}/ownership-transfer` | Customer | Explicit audited owner transfer to an active member |
 | `GET /v1/organizations/{id}/credentials` | Customer | Credential metadata without token hashes or plaintext |
 | `POST /v1/organizations/{id}/credentials/{credential}/revoke` | Customer | Existing bounded credential revocation action |
 | `POST /v1/organizations/{id}/applications` | Customer | Idempotent application identity registration |
@@ -131,6 +134,13 @@ implemented bounded projections are:
 | `GET /v1/platform/organizations/{id}` | Platform | Read-focused organization, application, environment, and count projection |
 | `GET /v1/platform/audit` | Platform | Explicit platform-audience events only |
 | `GET /v1/platform/users` | Platform | Safe platform staff identity, role, capability, and access metadata |
+| `GET /v1/platform/staff/invitations` | Platform | Pending staff invitation metadata |
+| `POST /v1/platform/staff/invitations` | Platform | Single-use staff invitation issuance |
+| `PATCH /v1/platform/staff/{user}` | Platform | Explicit staff role and active-state administration |
+| `POST /v1/platform/staff/{user}/sessions/revoke` | Platform | Audited platform-session revocation |
+| `POST /v1/platform/staff/invitations/{invitation}/revoke` | Platform | Audited staff invitation revocation |
+| `GET /v1/platform-staff-invitations/{token}` | Public invitation | Safe staff invitation preview |
+| `POST /v1/platform-staff-invitations/{token}` | Public invitation | Single-use staff invitation redemption |
 | `GET /v1/platform/entitlements` | Platform | Read-only plan and subscription metadata without provider secrets |
 | `GET /v1/platform/commercial` | Platform | Subscription-derived MRR/ARR projection or an explicit unavailable source state |
 | `GET /v1/platform/support/cases` | Platform | Bounded cross-tenant support queue |
@@ -167,6 +177,8 @@ platform:entitlements:read
 platform:commercial:read
 platform:support:read
 platform:support:write
+platform:staff:manage
+platform:sessions:revoke
 ```
 
 The metrics-backed Operations page currently uses the existing
@@ -175,11 +187,14 @@ operations data contract. The separate `platform:operations:read` capability
 remains available for a future distinct projection and is not used to imply
 functionality that does not exist.
 
-Platform profile eligibility still requires the configured platform-admin
-identity, owner membership, and `super-admin` profile, in addition to the
-explicit platform audience/capabilities. This is a compatibility guard while
-the capability model becomes the durable authorization contract; an email
-address or profile name alone is not sufficient.
+Legacy platform profile eligibility still requires the configured platform-
+admin identity, owner membership, and `super-admin` profile. Explicit staff
+memberships instead use the `platform_system` organization and a bounded role
+capability bundle. In both cases the platform audience and requested
+capability are checked server-side; an email address or profile name alone is
+not sufficient. When `HYFENS_PLATFORM_MFA_REQUIRED=true`, a verified MFA
+session state is also required. Enrollment/provider integration is an explicit
+deployment boundary, not a claim of built-in MFA delivery.
 
 Frontend guards select the correct shell and provide useful fallbacks, but
 they are not the security boundary. Backend negative tests cover ordinary
@@ -214,10 +229,13 @@ following remain backlog until their backend contracts are ready:
   Flutter source tree;
 - browser-side rollback and any deployment action beyond promotion of an
   already admitted release;
-- invitation email delivery/redemption and owner-transfer workflows;
-- full platform account/role administration, entitlement mutation, incidents,
-  infrastructure/provider state, and time-limited support sessions;
-- MFA and additional managed Platform Console access hardening.
+- invitation email delivery provider configuration and time-limited support
+  sessions;
+- entitlement mutation, incidents, and infrastructure/provider state;
+- MFA enrollment/recovery/provider integration and additional managed Platform
+  Console access hardening;
+- browser-side rollback until a server operation exposes the required target
+  and high-water semantics.
 
 The implemented customer actions are idempotent where they create records,
 tenant-scoped, capability-gated, audited, and rendered as honest forms. The

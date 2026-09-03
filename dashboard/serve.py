@@ -86,8 +86,22 @@ PLATFORM_SUPPORT_CASE_PATH = re.compile(
 PLATFORM_SUPPORT_MESSAGE_PATH = re.compile(
     r"^/v1/platform/support/cases/[^/]+/messages$"
 )
+PUBLIC_INVITATION_PATH = re.compile(
+    r"^/v1/(?:organization-invitations|platform-staff-invitations)/[^/]+$"
+)
+OWNERSHIP_TRANSFER_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/ownership-transfer$"
+)
+PLATFORM_STAFF_UPDATE_PATH = re.compile(r"^/v1/platform/staff/[^/]+$")
+PLATFORM_STAFF_SESSIONS_PATH = re.compile(
+    r"^/v1/platform/staff/[^/]+/sessions/revoke$"
+)
+PLATFORM_STAFF_INVITATION_REVOKE_PATH = re.compile(
+    r"^/v1/platform/staff/invitations/[^/]+/revoke$"
+)
 PLATFORM_VIEW_PATH = re.compile(r"^/platform/organizations/[^/]+$")
 PLATFORM_HOST_ORGANIZATION_PATH = re.compile(r"^/organizations/[^/]+$")
+INVITATION_VIEW_PATH = re.compile(r"^/(?:invite|staff-invite)/[^/]+$")
 PLATFORM_HOSTNAMES = {"admin.hyfens.com", "platform.hyfens.com"}
 PLATFORM_HOST_VIEW_PATHS = {
     "/",
@@ -145,6 +159,9 @@ _PROXY_ROUTES = {
     ("GET", "/v1/platform/users"): "platform-users",
     ("GET", "/v1/platform/entitlements"): "platform-entitlements",
     ("GET", "/v1/platform/commercial"): "platform-commercial",
+    ("GET", "/v1/platform/commercial/history"): "platform-commercial-history",
+    ("GET", "/v1/platform/staff/invitations"): "platform-staff-invitations",
+    ("POST", "/v1/platform/staff/invitations"): "platform-staff-invite",
     ("GET", "/v1/platform/support/cases"): "platform-support-cases",
 }
 
@@ -213,6 +230,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if (
             path in DASHBOARD_VIEW_PATHS
             or PLATFORM_VIEW_PATH.fullmatch(path)
+            or INVITATION_VIEW_PATH.fullmatch(path)
             or self._is_platform_host_view(path)
         ):
             self.path = "/"
@@ -274,6 +292,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             parsed.path
         ):
             return "invitation-create"
+        if self.command == "GET" and PUBLIC_INVITATION_PATH.fullmatch(parsed.path):
+            return "invitation-preview"
+        if self.command == "POST" and PUBLIC_INVITATION_PATH.fullmatch(parsed.path):
+            return "invitation-accept"
         if self.command == "POST" and ORGANIZATION_CREDENTIAL_ISSUE_PATH.fullmatch(
             parsed.path
         ):
@@ -302,6 +324,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return "member-remove"
         if self.command == "POST" and ORGANIZATION_INVITATION_REVOKE_PATH.fullmatch(parsed.path):
             return "invitation-revoke"
+        if self.command == "POST" and OWNERSHIP_TRANSFER_PATH.fullmatch(parsed.path):
+            return "ownership-transfer"
+        if self.command == "PATCH" and PLATFORM_STAFF_UPDATE_PATH.fullmatch(parsed.path):
+            return "platform-staff-update"
+        if self.command == "POST" and PLATFORM_STAFF_SESSIONS_PATH.fullmatch(parsed.path):
+            return "platform-staff-sessions-revoke"
+        if self.command == "POST" and PLATFORM_STAFF_INVITATION_REVOKE_PATH.fullmatch(parsed.path):
+            return "platform-staff-invitation-revoke"
         if self.command == "GET" and CUSTOMER_SUPPORT_CASES_PATH.fullmatch(parsed.path):
             return "support-cases"
         if self.command == "POST" and CUSTOMER_SUPPORT_CASES_PATH.fullmatch(parsed.path):
@@ -333,6 +363,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             or route in {
                 "platform-metrics",
                 "platform-commercial",
+                "platform-commercial-history",
                 "platform-organizations",
                 "platform-organization",
                 "platform-audit",
@@ -342,6 +373,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 "platform-support-case",
                 "platform-support-update",
                 "platform-support-message",
+                "platform-staff-invitations",
+                "platform-staff-invite",
+                "platform-staff-update",
+                "platform-staff-sessions-revoke",
+                "platform-staff-invitation-revoke",
                 "support-cases",
             }
             and self._query_is_safe(route, parsed.query)
@@ -354,6 +390,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "overview",
             "platform-metrics",
             "platform-commercial",
+            "platform-commercial-history",
             "platform-organizations",
             "platform-organization",
             "platform-audit",
@@ -380,6 +417,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "member-update",
             "member-remove",
             "invitation-revoke",
+            "ownership-transfer",
+            "platform-staff-invitations",
+            "platform-staff-invite",
+            "platform-staff-update",
+            "platform-staff-sessions-revoke",
+            "platform-staff-invitation-revoke",
             "auth-authorize-post",
             "auth-device-approve",
         }:
@@ -398,6 +441,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "auth-authorize-get",
             "platform-metrics",
             "platform-commercial",
+            "platform-commercial-history",
             "platform-organizations",
             "platform-organization",
             "platform-audit",
@@ -407,6 +451,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "platform-support-case",
             "platform-support-update",
             "platform-support-message",
+            "platform-staff-invitations",
+            "platform-staff-invite",
+            "platform-staff-update",
+            "platform-staff-sessions-revoke",
+            "platform-staff-invitation-revoke",
             "support-cases",
             "support-case",
             "support-message",
@@ -419,6 +468,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "overview",
             "platform-metrics",
             "platform-commercial",
+            "platform-commercial-history",
             "platform-organizations",
             "platform-organization",
             "platform-audit",
@@ -447,6 +497,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "member-update",
             "member-remove",
             "invitation-revoke",
+            "ownership-transfer",
+            "invitation-preview",
+            "invitation-accept",
+            "platform-staff-invitations",
+            "platform-staff-invite",
+            "platform-staff-update",
+            "platform-staff-sessions-revoke",
+            "platform-staff-invitation-revoke",
             "auth-authorize-post",
             "auth-device-approve",
         }:
@@ -521,11 +579,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         allowed = {
             "platform-metrics": {"profile"},
             "platform-commercial": {"profile"},
-            "platform-organizations": {"profile", "q"},
+            "platform-commercial-history": {"profile", "limit", "offset"},
+            "platform-organizations": {"profile", "q", "limit", "offset"},
             "platform-organization": {"profile"},
-            "platform-audit": {"profile", "organization_id"},
-            "platform-users": {"profile"},
+            "platform-audit": {"profile", "organization_id", "limit", "offset"},
+            "platform-users": {"profile", "q", "limit", "offset"},
             "platform-entitlements": {"profile"},
+            "platform-staff-invitations": {"profile"},
+            "platform-staff-invite": {"profile"},
+            "platform-staff-update": {"profile"},
+            "platform-staff-sessions-revoke": {"profile"},
+            "platform-staff-invitation-revoke": {"profile"},
             "platform-support-cases": {
                 "profile",
                 "status",
@@ -576,6 +640,16 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         # Never log request headers: they may contain the control credential.
         message = format % args
+        message = re.sub(
+            r"(/(?:invite|staff-invite)/)[^?\s/]+",
+            r"\1:redacted",
+            message,
+        )
+        message = re.sub(
+            r"(/v1/(?:organization-invitations|platform-staff-invitations)/)[^?\s/]+",
+            r"\1:redacted",
+            message,
+        )
         message = re.sub(r"(\s/[^\s?]*)\?[^\s]*", r"\1?[redacted]", message)
         super().log_message("%s", message)
 

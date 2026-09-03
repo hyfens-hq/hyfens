@@ -81,6 +81,25 @@ abstract interface class RolloutTransitionStore {
   });
 }
 
+/// Optional compare-and-swap seam for metadata whose state transition must be
+/// safe across multiple control-plane processes. Stores that do not implement
+/// this capability remain valid for the single-process file/test contract;
+/// stateful services use the fallback only where that contract is sufficient.
+abstract interface class ConditionalJsonStore {
+  Future<bool> replaceJsonIfCurrent({
+    required String collection,
+    required String id,
+    required Map<String, Object?> expected,
+    required Map<String, Object?> replacement,
+  });
+
+  Future<bool> replaceJsonBatchIfCurrent({
+    required String collection,
+    required Map<String, Map<String, Object?>> expected,
+    required Map<String, Map<String, Object?>> replacements,
+  });
+}
+
 abstract interface class ControlPlaneStore
     implements ArtifactStore, ObservationStore, RolloutTransitionStore {
   Future<void> initialize();
@@ -103,6 +122,16 @@ abstract interface class ControlPlaneStore
     String collection,
     String id,
     Map<String, Object?> value,
+  );
+
+  /// Replaces multiple records as one serialized metadata operation.
+  ///
+  /// PostgreSQL commits the replacements in one transaction. The file store
+  /// serializes the operation and keeps each replacement atomic, which is the
+  /// supported single-process semantics for local self-hosted storage.
+  Future<void> replaceJsonBatch(
+    String collection,
+    Map<String, Map<String, Object?>> values,
   );
 
   /// Touches an active human session only when its secret hash still matches.
@@ -143,7 +172,7 @@ abstract interface class ControlPlaneStore
 /// artifact paths are content addressed and never selected from a caller's
 /// arbitrary filesystem path.
 final class FileControlPlaneStore
-    implements ControlPlaneStore, ArtifactInventory {
+    implements ControlPlaneStore, ArtifactInventory, ConditionalJsonStore {
   FileControlPlaneStore(this.root);
 
   final Directory root;
@@ -173,6 +202,7 @@ final class FileControlPlaneStore
       'waitlist',
       'newsletter',
       'organization_invitations',
+      'platform_staff_invitations',
       'support_cases',
       'support_messages',
     ]) {
@@ -237,6 +267,73 @@ final class FileControlPlaneStore
       throw const StorageConflict('Record does not exist');
     await _writeAtomic(file, utf8.encode('${canonicalJson(value)}\n'));
   }
+
+  @override
+  Future<void> replaceJsonBatch(
+    String collection,
+    Map<String, Map<String, Object?>> values,
+  ) => _metadataOperation(() async {
+    if (values.isEmpty) return;
+    final entries = values.entries.toList()
+      ..sort((left, right) => left.key.compareTo(right.key));
+    for (final entry in entries) {
+      if (!await _jsonFile(collection, entry.key).exists()) {
+        throw const StorageConflict('Record does not exist');
+      }
+    }
+    for (final entry in entries) {
+      await _writeAtomic(
+        _jsonFile(collection, entry.key),
+        utf8.encode('${canonicalJson(entry.value)}\n'),
+      );
+    }
+  });
+
+  @override
+  Future<bool> replaceJsonIfCurrent({
+    required String collection,
+    required String id,
+    required Map<String, Object?> expected,
+    required Map<String, Object?> replacement,
+  }) async {
+    return replaceJsonBatchIfCurrent(
+      collection: collection,
+      expected: <String, Map<String, Object?>>{id: expected},
+      replacements: <String, Map<String, Object?>>{id: replacement},
+    );
+  }
+
+  @override
+  Future<bool> replaceJsonBatchIfCurrent({
+    required String collection,
+    required Map<String, Map<String, Object?>> expected,
+    required Map<String, Map<String, Object?>> replacements,
+  }) => _metadataOperation(() async {
+    if (expected.isEmpty || expected.length != replacements.length) {
+      throw const StorageConflict('Conditional replacement set is invalid');
+    }
+    final expectedKeys = expected.keys.toSet();
+    if (!expectedKeys.containsAll(replacements.keys) ||
+        !replacements.keys.toSet().containsAll(expectedKeys)) {
+      throw const StorageConflict('Conditional replacement set is invalid');
+    }
+    final entries = expected.entries.toList()
+      ..sort((left, right) => left.key.compareTo(right.key));
+    for (final entry in entries) {
+      final current = await readJson(collection, entry.key);
+      if (current == null) {
+        throw const StorageConflict('Record does not exist');
+      }
+      if (canonicalJson(current) != canonicalJson(entry.value)) return false;
+    }
+    for (final entry in entries) {
+      await _writeAtomic(
+        _jsonFile(collection, entry.key),
+        utf8.encode('${canonicalJson(replacements[entry.key]!)}\n'),
+      );
+    }
+    return true;
+  });
 
   @override
   Future<Map<String, Object?>?> touchSessionIfActive({
@@ -452,6 +549,7 @@ final class FileControlPlaneStore
       'result': idempotencyResult,
       'createdAt': DateTime.now().toUtc().toIso8601String(),
     });
+
     await appendAudit(audit['id']! as String, audit);
   }
 
@@ -520,6 +618,17 @@ final class FileControlPlaneStore
     );
     return result;
   }
+
+  Future<T> _metadataOperation<T>(Future<T> Function() action) {
+    final result = _metadataOperationTail.then((_) => action());
+    _metadataOperationTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return result;
+  }
+
+  Future<void> _metadataOperationTail = Future<void>.value();
 
   File _jsonFile(String collection, String id) =>
       File(p.join(root.path, _safeCollection(collection), '${_safe(id)}.json'));

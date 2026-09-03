@@ -301,7 +301,9 @@ void main() {
     expect(export.records, hasLength(1));
     expect(export.chain, hasLength(1));
     expect(export.verification.valid, isTrue);
-    expect(export.verification.entries, 2);
+    // Customer exports expose a rebased tenant-scoped proof chain rather than
+    // leaking positions from the global platform audit chain.
+    expect(export.verification.entries, 1);
   });
 }
 

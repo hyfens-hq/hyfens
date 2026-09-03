@@ -3161,6 +3161,12 @@ final class _AuditFaultControlStore implements ControlPlaneStore {
   ) => delegate.replaceJson(collection, id, value);
 
   @override
+  Future<void> replaceJsonBatch(
+    String collection,
+    Map<String, Map<String, Object?>> values,
+  ) => delegate.replaceJsonBatch(collection, values);
+
+  @override
   Future<Map<String, Object?>?> touchSessionIfActive({
     required String id,
     required String expectedSecretHash,

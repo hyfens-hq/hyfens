@@ -121,7 +121,19 @@ final class ControlPlaneMetrics {
         'organizations' =>
           segments.length >= 3 ? 'v1/organizations/*' : 'v1/organizations',
         'platform' =>
-          segments.length >= 3 ? 'v1/platform/${segments[2]}' : 'v1/platform',
+          segments.length >= 3 &&
+                  const <String>{
+                    'audit',
+                    'commercial',
+                    'entitlements',
+                    'metrics',
+                    'organizations',
+                    'staff',
+                    'support',
+                    'users',
+                  }.contains(segments[2])
+              ? 'v1/platform/${segments[2]}'
+              : 'v1/platform/other',
         'rollouts' => segments.length >= 3 ? 'v1/rollouts/*' : 'v1/rollouts',
         'runtime' =>
           segments.length >= 3 &&
@@ -169,7 +181,13 @@ final class ControlPlaneHttpServer {
            ControlPlaneDiscoveryConfig.fromEnvironment(Platform.environment),
        _operatorOverview = OperatorOverviewProjection(service),
        _publicOnboarding = PublicOnboardingService(store: service.store),
-       _platformConsole = PlatformConsoleProjection(service.store),
+       _platformConsole = PlatformConsoleProjection(
+         service.store,
+         platformMfaRequired:
+             service.humanAuth?.config.platformMfaRequired ?? false,
+         platformMembershipPredicate:
+             service.humanAuth?.isRecognizedPlatformMembership,
+       ),
        _platformCommercial = PlatformCommercialProjection(service.store),
        _platformMetrics = PlatformMetricsProjection(store: service.store),
        _readyCheck = readyCheck ?? service.checkReadiness;
@@ -300,6 +318,55 @@ final class ControlPlaneHttpServer {
       if (request.method == 'GET' &&
           _matches(path, const ['v1', 'platform', 'commercial'])) {
         await _readPlatformCommercial(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'commercial', 'history'])) {
+        await _readPlatformCommercialHistory(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'staff'])) {
+        await _readPlatformStaff(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'staff', 'invitations'])) {
+        await _readPlatformStaffInvitations(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'platform', 'staff', 'invitations'])) {
+        await _invitePlatformStaff(request, requestId);
+        return;
+      }
+      if (request.method == 'PATCH' &&
+          _matches(path, const ['v1', 'platform', 'staff', '*'])) {
+        await _updatePlatformStaff(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'staff',
+            '*',
+            'sessions',
+            'revoke',
+          ])) {
+        await _revokePlatformStaffSessions(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'staff',
+            'invitations',
+            '*',
+            'revoke',
+          ])) {
+        await _revokePlatformStaffInvitation(request, path, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -691,6 +758,16 @@ final class ControlPlaneHttpServer {
         await _removeOrganizationMember(request, path, requestId);
         return;
       }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'ownership-transfer',
+          ])) {
+        await _transferOrganizationOwnership(request, path, requestId);
+        return;
+      }
       if (request.method == 'GET' &&
           _matches(path, const ['v1', 'organizations', '*', 'invitations'])) {
         await _readOrganizationInvitations(request, path, requestId);
@@ -711,6 +788,26 @@ final class ControlPlaneHttpServer {
             'revoke',
           ])) {
         await _revokeOrganizationInvitation(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'organization-invitations', '*'])) {
+        await _previewOrganizationInvitation(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'organization-invitations', '*'])) {
+        await _acceptOrganizationInvitation(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform-staff-invitations', '*'])) {
+        await _previewPlatformStaffInvitation(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'platform-staff-invitations', '*'])) {
+        await _acceptPlatformStaffInvitation(request, path, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -1728,6 +1825,7 @@ final class ControlPlaneHttpServer {
       applicationId: _optionalString(body, 'application_id'),
       environmentId: _optionalString(body, 'environment_id'),
       expiresAt: _optionalDateTime(body, 'expires_at'),
+      idempotencyKey: _idempotency(request),
       requestId: requestId,
     );
     await _json(request.response, 201, <String, Object?>{
@@ -2021,6 +2119,211 @@ final class ControlPlaneHttpServer {
     });
   }
 
+  Future<void> _readPlatformCommercialHistory(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    const allowed = <String>{'profile', 'limit', 'offset'};
+    if (query.keys.any((key) => !allowed.contains(key))) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Commercial history supports profile, limit, and offset',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformCommercialReadCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformCommercial.readHistory(
+      limit: _queryInt(query, 'limit', 50),
+      offset: _queryInt(query, 'offset', 0),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformStaff(HttpRequest request, String requestId) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform staff reads support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformAccountsReadCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformConsole.listUsers();
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformStaffInvitations(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Staff invitation reads support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    final invitations = await service.listPlatformStaffInvitations(
+      accessToken: _bearer(request),
+      profileName: query['profile'],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': true,
+      'invitations': invitations,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _invitePlatformStaff(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Staff invitations support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    final body = await _jsonBody(request);
+    const allowed = <String>{'email', 'role', 'expires_at'};
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(const <String>{'email', 'role'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Staff invitations require email and role',
+        statusCode: 422,
+      );
+    }
+    final invitation = await service.invitePlatformStaff(
+      accessToken: _bearer(request),
+      profileName: query['profile'],
+      email: _string(body, 'email'),
+      role: _string(body, 'role'),
+      expiresAt: _optionalDateTime(body, 'expires_at'),
+      idempotencyKey: _idempotency(request),
+      requestId: requestId,
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...invitation.toJson(now: DateTime.now().toUtc()),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _updatePlatformStaff(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Staff updates support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    final body = await _jsonBody(request);
+    const allowed = <String>{'role', 'active'};
+    if (body.keys.any((key) => !allowed.contains(key)) || body.isEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Staff updates require role or active',
+        statusCode: 422,
+      );
+    }
+    final active = body['active'];
+    if (active != null && active is! bool) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Staff active must be a boolean',
+        statusCode: 422,
+      );
+    }
+    final result = await service.updatePlatformStaff(
+      accessToken: _bearer(request),
+      profileName: query['profile'],
+      userId: path[3],
+      role: _optionalString(body, 'role'),
+      active: active as bool?,
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _revokePlatformStaffSessions(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery &&
+        request.uri.queryParameters.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Session revocation supports only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    final count = await service.revokePlatformStaffSessions(
+      accessToken: _bearer(request),
+      profileName: request.uri.queryParameters['profile'],
+      userId: path[3],
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'status': 'revoked',
+      'session_count': count,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _revokePlatformStaffInvitation(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery &&
+        request.uri.queryParameters.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Staff invitation revocation supports only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    final invitation = await service.revokePlatformStaffInvitation(
+      accessToken: _bearer(request),
+      profileName: request.uri.queryParameters['profile'],
+      invitationId: path[4],
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...invitation.toMetadataJson(now: DateTime.now().toUtc()),
+      'request_id': requestId,
+    });
+  }
+
   Future<void> _readPlatformSupportCases(
     HttpRequest request,
     String requestId,
@@ -2160,20 +2463,29 @@ final class ControlPlaneHttpServer {
     String requestId,
   ) async {
     final query = request.uri.queryParameters;
-    if (query.keys.any((key) => key != 'profile' && key != 'q')) {
+    const allowed = <String>{'profile', 'q', 'limit', 'offset'};
+    if (query.keys.any((key) => !allowed.contains(key))) {
       throw const ControlPlaneException(
         'INVALID_REQUEST',
-        'Platform organizations supports only profile and q query parameters',
+        'Platform organizations supports profile, q, limit, and offset query parameters',
         statusCode: 422,
       );
     }
-    await _humanAuth().authorizePlatformCapability(
+    final auth = _humanAuth();
+    final operator = await auth.authorizePlatformCapability(
       accessToken: _bearer(request),
       capability: platformOrganizationsReadCapability,
       profileName: query['profile'],
     );
-    final projection = await _platformConsole.listOrganizations(
+    final projection = await _platformConsole.listOrganizationsPage(
       query: query['q'],
+      limit: _queryInt(query, 'limit', defaultPlatformOrganizationLimit),
+      offset: _queryInt(query, 'offset', 0),
+      includeCommercial: auth.hasPlatformCapability(
+        operator,
+        platformCommercialReadCapability,
+        profileName: query['profile'],
+      ),
     );
     await _json(request.response, 200, <String, Object?>{
       ...projection,
@@ -2194,12 +2506,20 @@ final class ControlPlaneHttpServer {
         statusCode: 422,
       );
     }
-    await _humanAuth().authorizePlatformCapability(
+    final auth = _humanAuth();
+    final operator = await auth.authorizePlatformCapability(
       accessToken: _bearer(request),
       capability: platformOrganizationsInspectCapability,
       profileName: query['profile'],
     );
-    final projection = await _platformConsole.readOrganization(path[3]);
+    final projection = await _platformConsole.readOrganization(
+      path[3],
+      includeCommercial: auth.hasPlatformCapability(
+        operator,
+        platformCommercialReadCapability,
+        profileName: query['profile'],
+      ),
+    );
     await _json(request.response, 200, <String, Object?>{
       ...projection,
       'request_id': requestId,
@@ -2208,10 +2528,11 @@ final class ControlPlaneHttpServer {
 
   Future<void> _readPlatformAudit(HttpRequest request, String requestId) async {
     final query = request.uri.queryParameters;
-    if (query.keys.any((key) => key != 'profile' && key != 'organization_id')) {
+    const allowed = <String>{'profile', 'organization_id', 'limit', 'offset'};
+    if (query.keys.any((key) => !allowed.contains(key))) {
       throw const ControlPlaneException(
         'INVALID_REQUEST',
-        'Platform audit supports only profile and organization_id query parameters',
+        'Platform audit supports profile, organization_id, limit, and offset query parameters',
         statusCode: 422,
       );
     }
@@ -2230,6 +2551,8 @@ final class ControlPlaneHttpServer {
     }
     final projection = await _platformConsole.readAudit(
       organizationId: organizationId,
+      limit: _queryInt(query, 'limit', defaultPlatformOrganizationLimit),
+      offset: _queryInt(query, 'offset', 0),
     );
     await _json(request.response, 200, <String, Object?>{
       ...projection,
@@ -2239,10 +2562,11 @@ final class ControlPlaneHttpServer {
 
   Future<void> _readPlatformUsers(HttpRequest request, String requestId) async {
     final query = request.uri.queryParameters;
-    if (query.keys.any((key) => key != 'profile')) {
+    const allowed = <String>{'profile', 'q', 'limit', 'offset'};
+    if (query.keys.any((key) => !allowed.contains(key))) {
       throw const ControlPlaneException(
         'INVALID_REQUEST',
-        'Platform users supports only the profile query parameter',
+        'Platform users supports profile, q, limit, and offset query parameters',
         statusCode: 422,
       );
     }
@@ -2251,7 +2575,11 @@ final class ControlPlaneHttpServer {
       capability: platformAccountsReadCapability,
       profileName: query['profile'],
     );
-    final projection = await _platformConsole.listUsers();
+    final projection = await _platformConsole.listUsers(
+      query: query['q'],
+      limit: _queryInt(query, 'limit', defaultPlatformOrganizationLimit),
+      offset: _queryInt(query, 'offset', 0),
+    );
     await _json(request.response, 200, <String, Object?>{
       ...projection,
       'request_id': requestId,
@@ -2419,6 +2747,7 @@ final class ControlPlaneHttpServer {
       email: _string(body, 'email'),
       role: _string(body, 'role'),
       expiresAt: _optionalDateTime(body, 'expires_at'),
+      idempotencyKey: _idempotency(request),
       requestId: requestId,
     );
     await _json(request.response, 201, <String, Object?>{
@@ -2439,8 +2768,122 @@ final class ControlPlaneHttpServer {
       requestId: requestId,
     );
     await _json(request.response, 200, <String, Object?>{
-      ...invitation.toMetadataJson(),
-      'active': false,
+      ...invitation.toMetadataJson(now: DateTime.now().toUtc()),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _transferOrganizationOwnership(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'target_user_id'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Ownership transfer requires target_user_id',
+        statusCode: 422,
+      );
+    }
+    final result = await service.transferOrganizationOwnership(
+      token: _bearer(request),
+      organizationId: path[2],
+      targetUserId: _string(body, 'target_user_id'),
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _previewOrganizationInvitation(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Invitation previews do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    final result = await service.previewOrganizationInvitation(token: path[2]);
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _acceptOrganizationInvitation(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    const allowed = <String>{'email', 'password'};
+    if (body.keys.any((key) => !allowed.contains(key))) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Invitation acceptance supports email and password',
+        statusCode: 422,
+      );
+    }
+    final result = await service.acceptOrganizationInvitation(
+      token: path[2],
+      accessToken: _optionalBearer(request),
+      email: _optionalString(body, 'email'),
+      password: _optionalString(body, 'password'),
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _previewPlatformStaffInvitation(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Invitation previews do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    final result = await service.previewPlatformStaffInvitation(token: path[2]);
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _acceptPlatformStaffInvitation(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'email', 'password'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Staff invitation acceptance requires email and password',
+        statusCode: 422,
+      );
+    }
+    final result = await service.acceptPlatformStaffInvitation(
+      token: path[2],
+      email: _string(body, 'email'),
+      password: _string(body, 'password'),
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
       'request_id': requestId,
     });
   }
@@ -3595,6 +4038,27 @@ final class ControlPlaneHttpServer {
     return token;
   }
 
+  String? _optionalBearer(HttpRequest request) {
+    final value = request.headers.value('authorization');
+    if (value == null) return null;
+    if (!value.startsWith('Bearer ')) {
+      throw const ControlPlaneException(
+        'UNAUTHORIZED',
+        'Bearer credential is invalid',
+        statusCode: 401,
+      );
+    }
+    final token = value.substring(7);
+    if (token.isEmpty || token.contains(RegExp(r'[\r\n]'))) {
+      throw const ControlPlaneException(
+        'UNAUTHORIZED',
+        'Bearer credential is invalid',
+        statusCode: 401,
+      );
+    }
+    return token;
+  }
+
   String _idempotency(HttpRequest request) {
     final value = request.headers.value('idempotency-key');
     if (value == null) {
@@ -3785,11 +4249,22 @@ final class ControlPlaneHttpServer {
         'level': 'ERROR',
         'operation': ControlPlaneMetrics._operation(request),
         'method': request.method,
-        'path': request.uri.path,
+        'path': _redactedLogPath(request.uri.path),
         'code': code,
         'durationMicros': durationMicros,
       }),
     );
+  }
+
+  static String _redactedLogPath(String path) {
+    final segments = Uri.parse(path).pathSegments;
+    if (segments.length == 3 &&
+        segments[0] == 'v1' &&
+        (segments[1] == 'organization-invitations' ||
+            segments[1] == 'platform-staff-invitations')) {
+      return '/v1/${segments[1]}/:token';
+    }
+    return path;
   }
 
   String _string(Map<String, Object?> body, String key) {

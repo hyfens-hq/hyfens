@@ -70,6 +70,14 @@ POST /v1/organizations/{organization_id}/support/cases/{case_id}/messages
 GET/PATCH /v1/platform/support/cases/{case_id}
 POST /v1/platform/support/cases/{case_id}/messages
 GET  /v1/platform/commercial
+GET  /v1/platform/commercial/history
+GET/POST /v1/platform/staff/invitations
+PATCH /v1/platform/staff/{user_id}
+POST /v1/platform/staff/{user_id}/sessions/revoke
+POST /v1/platform/staff/invitations/{invitation_id}/revoke
+GET/POST /v1/organization-invitations/{token}
+GET/POST /v1/platform-staff-invitations/{token}
+POST /v1/organizations/{organization_id}/ownership-transfer
 ```
 
 The proxy also forwards the bounded application, environment, member,
@@ -85,6 +93,12 @@ role, or capability. The waitlist and newsletter routes accept `email` plus
 optional bounded `name` and `source` fields and return
 `{"status":"accepted"}` for both new and duplicate submissions.
 
+Invitation preview and acceptance routes are intentionally public so a
+recipient can redeem a link before signing in. The link bearer is not written
+to proxy logs, and the response contains only the organization/staff context,
+offered role, expiry, and lifecycle status. Authorized administrators retrieve
+new local invitation links once through the authenticated invitation-creation
+response; the browser does not display raw tokens outside that one-time link.
 The CLI approval page is `/cli/authorize/` and the device approval page is
 `/device/`. Both keep password and session material in memory, call the
 shared human-auth routes, and never put a session credential in a URL. The

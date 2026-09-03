@@ -296,6 +296,7 @@ void main() {
         server.port,
         '/v1/organizations/$demoOrganizationId/credentials',
         token: customerToken,
+        idempotencyKey: 'http-credential-create-1',
         body: <String, Object?>{
           'name': 'HTTP test credential',
           'kind': 'control',

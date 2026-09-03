@@ -1,3 +1,4 @@
+import 'errors.dart';
 import 'persistence.dart';
 
 const Set<String> _recurringSubscriptionStatuses = <String>{
@@ -110,6 +111,66 @@ final class PlatformCommercialProjection {
       'historyAvailable': false,
       'cashRevenueAvailable': false,
       'note': 'MRR/ARR reflect active monthly subscription plan amounts; payment and revenue history is not recorded by this control plane.',
+    };
+  }
+
+  /// Returns provider lifecycle history without pretending that webhook
+  /// metadata is cash revenue. Billing events currently contain no amount or
+  /// currency, so the response states that monetary history is unavailable.
+  Future<Map<String, Object?>> readHistory({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    if (limit <= 0 || limit > 100 || offset < 0 || offset > 100000) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Billing history pagination is invalid',
+        statusCode: 422,
+      );
+    }
+    final events =
+        List<Map<String, Object?>>.from(await store.listJson('billing_events'))
+          ..sort((left, right) {
+            final leftAt = DateTime.tryParse('${left['receivedAt']}');
+            final rightAt = DateTime.tryParse('${right['receivedAt']}');
+            final byTime = (rightAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+                .compareTo(leftAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+            if (byTime != 0) {
+              return byTime;
+            }
+            return '${right['id']}'.compareTo('${left['id']}');
+          });
+    final page = events
+        .skip(offset)
+        .take(limit)
+        .map(
+          (event) => <String, Object?>{
+            'id': event['id'],
+            'organizationId': event['organizationId'],
+            'provider': event['provider'],
+            'eventId': event['eventId'],
+            'eventName': event['eventName'],
+            'providerSubscriptionId': event['providerSubscriptionId'],
+            'occurredAt': event['occurredAt'],
+            'receivedAt': event['receivedAt'],
+          },
+        )
+        .toList(growable: false);
+    return <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': true,
+      'scope': 'platform',
+      'status': 'SOURCE_NOT_AVAILABLE',
+      'source': 'billing_events',
+      'historyAvailable': events.isNotEmpty,
+      'cashRevenueAvailable': false,
+      'events': page,
+      'pagination': <String, int>{
+        'limit': limit,
+        'offset': offset,
+        'total': events.length,
+      },
+      'note': 'Billing provider lifecycle events are recorded without monetary amounts; revenue history is unavailable until a monetary ledger is active.',
     };
   }
 }

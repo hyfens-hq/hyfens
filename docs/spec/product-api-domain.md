@@ -451,7 +451,10 @@ body hash. Repeating the same key/body returns the original status and body;
 reusing it with a different body returns `409 IDEMPOTENCY_KEY_REUSED`. The
 retention window is a deployment policy with a documented minimum of 24 hours
 for release, patch, artifact, rollout, and key commands. Event IDs provide
-the equivalent deduplication for observations.
+the equivalent deduplication for observations. For secret-producing credential
+and invitation commands, a successful replay returns
+`409 ONE_TIME_SECRET_UNAVAILABLE`: the operation is not repeated, and the
+plaintext secret/bearer link is never persisted or replayed.
 
 Resources expose strong ETags derived from their canonical version. Commands
 that can change delivery, trust, policy, or environment state require:

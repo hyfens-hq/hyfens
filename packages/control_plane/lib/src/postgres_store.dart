@@ -153,7 +153,7 @@ enum PostgresRolloutTransitionFailurePoint { beforeCommit, afterCommit }
 /// keys and transactional migrations provide cross-process idempotency and
 /// startup safety that a single-process file queue cannot provide.
 final class PostgresControlPlaneStore
-    implements ControlPlaneStore, ArtifactInventory {
+    implements ControlPlaneStore, ArtifactInventory, ConditionalJsonStore {
   PostgresControlPlaneStore(
     String connectionString, {
     ArtifactStore? artifacts,
@@ -407,6 +407,120 @@ final class PostgresControlPlaneStore
     if (result.affectedRows != 1) {
       throw const StorageConflict('Record does not exist');
     }
+  }
+
+  @override
+  Future<void> replaceJsonBatch(
+    String collection,
+    Map<String, Map<String, Object?>> values,
+  ) async {
+    if (values.isEmpty) return;
+    final entries = values.entries.toList()
+      ..sort((left, right) => left.key.compareTo(right.key));
+    await _pool.runTx((session) async {
+      for (final entry in entries) {
+        final result = await session.execute(
+          Sql.named(
+            'SELECT record_id FROM control_plane_records '
+            'WHERE collection = @collection:text AND record_id = @id:text '
+            'FOR UPDATE',
+          ),
+          parameters: <String, Object?>{
+            'collection': collection,
+            'id': entry.key,
+          },
+        );
+        if (result.isEmpty) {
+          throw const StorageConflict('Record does not exist');
+        }
+      }
+      for (final entry in entries) {
+        final result = await session.execute(
+          Sql.named(
+            'UPDATE control_plane_records SET organization_id = @organization:text, '
+            'body = @body:jsonb, updated_at = now() '
+            'WHERE collection = @collection:text AND record_id = @id:text',
+          ),
+          parameters: <String, Object?>{
+            'collection': collection,
+            'id': entry.key,
+            'organization': entry.value['organizationId'],
+            'body': entry.value,
+          },
+        );
+        if (result.affectedRows != 1) {
+          throw const StorageConflict('Record does not exist');
+        }
+      }
+    });
+  }
+
+  @override
+  Future<bool> replaceJsonIfCurrent({
+    required String collection,
+    required String id,
+    required Map<String, Object?> expected,
+    required Map<String, Object?> replacement,
+  }) async {
+    return replaceJsonBatchIfCurrent(
+      collection: collection,
+      expected: <String, Map<String, Object?>>{id: expected},
+      replacements: <String, Map<String, Object?>>{id: replacement},
+    );
+  }
+
+  @override
+  Future<bool> replaceJsonBatchIfCurrent({
+    required String collection,
+    required Map<String, Map<String, Object?>> expected,
+    required Map<String, Map<String, Object?>> replacements,
+  }) async {
+    if (expected.isEmpty || expected.length != replacements.length) {
+      throw const StorageConflict('Conditional replacement set is invalid');
+    }
+    final expectedKeys = expected.keys.toSet();
+    if (!expectedKeys.containsAll(replacements.keys) ||
+        !replacements.keys.toSet().containsAll(expectedKeys)) {
+      throw const StorageConflict('Conditional replacement set is invalid');
+    }
+    final entries = expected.entries.toList()
+      ..sort((left, right) => left.key.compareTo(right.key));
+    return _pool.runTx((session) async {
+      for (final entry in entries) {
+        final result = await session.execute(
+          Sql.named(
+            'SELECT record_id FROM control_plane_records '
+            'WHERE collection = @collection:text AND record_id = @id:text '
+            'AND body = @body:jsonb FOR UPDATE',
+          ),
+          parameters: <String, Object?>{
+            'collection': collection,
+            'id': entry.key,
+            'body': entry.value,
+          },
+        );
+        if (result.isEmpty) return false;
+      }
+      for (final entry in entries) {
+        final result = await session.execute(
+          Sql.named(
+            'UPDATE control_plane_records SET organization_id = @organization:text, '
+            'body = @body:jsonb, updated_at = now() '
+            'WHERE collection = @collection:text AND record_id = @id:text',
+          ),
+          parameters: <String, Object?>{
+            'collection': collection,
+            'id': entry.key,
+            'organization': replacements[entry.key]!['organizationId'],
+            'body': replacements[entry.key],
+          },
+        );
+        if (result.affectedRows != 1) {
+          throw const StorageConflict('Record does not exist');
+        }
+      }
+      return true;
+    });
   }
 
   @override

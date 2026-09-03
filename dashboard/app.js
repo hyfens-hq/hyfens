@@ -260,8 +260,10 @@
     loginView: document.querySelector('#login-view'),
     appView: document.querySelector('#app-view'),
     authModeTabs: [...document.querySelectorAll('[data-auth-mode]')],
+    authModeSwitcher: document.querySelector('.auth-mode-switcher'),
     loginForm: document.querySelector('#login-form'),
     registerForm: document.querySelector('#register-form'),
+    invitationForm: document.querySelector('#invitation-form'),
     apiBase: document.querySelector('#api-base'),
     email: document.querySelector('#email'),
     password: document.querySelector('#password'),
@@ -273,6 +275,13 @@
     registerPasswordError: document.querySelector('#register-password-error'),
     registerSubmit: document.querySelector('#register-submit'),
     registerMessage: document.querySelector('#register-message'),
+    invitationSummary: document.querySelector('#invitation-summary'),
+    invitationFormKicker: document.querySelector('#invitation-form-kicker'),
+    invitationEmail: document.querySelector('#invitation-email'),
+    invitationPassword: document.querySelector('#invitation-password'),
+    invitationPasswordConfirm: document.querySelector('#invitation-password-confirm'),
+    invitationSubmit: document.querySelector('#invitation-submit'),
+    invitationMessage: document.querySelector('#invitation-message'),
     intakeModeTabs: [...document.querySelectorAll('[data-intake-kind][role="tab"]')],
     intakeForm: document.querySelector('#public-intake-form'),
     intakeEmail: document.querySelector('#intake-email'),
@@ -398,7 +407,38 @@
     };
   }
 
+  function readInvitationToken() {
+    const pathSegments = window.location.pathname
+      .replace(/^\/+|\/+$/g, '')
+      .split('/')
+      .filter(Boolean);
+    if ((pathSegments[0] === 'invite' || pathSegments[0] === 'staff-invite') && pathSegments[1]) {
+      try {
+        return decodeURIComponent(pathSegments[1]);
+      } catch (error) {
+        return null;
+      }
+    }
+    const parameters = new URLSearchParams(window.location.search);
+    const queryToken = parameters.get('invitation') ?? parameters.get('staff_invitation');
+    return queryToken?.trim() || null;
+  }
+
+  function readInvitationKind() {
+    const pathSegments = window.location.pathname
+      .replace(/^\/+|\/+$/g, '')
+      .split('/')
+      .filter(Boolean);
+    if (pathSegments[0] === 'staff-invite') return 'platform-staff';
+    if (pathSegments[0] === 'invite') return 'organization';
+    return new URLSearchParams(window.location.search).has('staff_invitation')
+      ? 'platform-staff'
+      : 'organization';
+  }
+
   const initialRoute = readRoute();
+  const initialInvitationToken = readInvitationToken();
+  const initialInvitationKind = readInvitationKind();
   const state = {
     api: null,
     endpoint: '',
@@ -417,10 +457,15 @@
     platformAuditError: null,
     platformUsers: null,
     platformUsersError: null,
+    platformStaffInvitations: null,
+    platformStaffInvitationsError: null,
+    issuedPlatformStaffInvitation: null,
     platformEntitlements: null,
     platformEntitlementsError: null,
     platformCommercial: null,
     platformCommercialError: null,
+    platformCommercialHistory: null,
+    platformCommercialHistoryError: null,
     platformSupportCases: null,
     platformSupportCasesError: null,
     platformSupportCase: null,
@@ -449,6 +494,7 @@
     customerSettingsGeneration: 0,
     shell: initialRoute.shell,
     platformOrganizationId: initialRoute.organizationId,
+    loginAudienceOverride: null,
     loading: false,
     lastFetchedAt: null,
     globalSearchQuery: '',
@@ -675,6 +721,68 @@
       );
     }
 
+    async platformStaffInvitations(profileName, { signal } = {}) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/staff/invitations${query}`, {
+          requiresAuth: true,
+          signal,
+        }),
+      );
+    }
+
+    async invitePlatformStaff(profileName, body, idempotencyKey) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/staff/invitations${query}`, {
+          method: 'POST',
+          body,
+          requiresAuth: true,
+          headers: { 'Idempotency-Key': idempotencyKey },
+        }),
+      );
+    }
+
+    async updatePlatformStaff(profileName, userId, body) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(
+          `v1/platform/staff/${encodeURIComponent(userId)}${query}`,
+          { method: 'PATCH', body, requiresAuth: true },
+        ),
+      );
+    }
+
+    async revokePlatformStaffSessions(profileName, userId) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(
+          `v1/platform/staff/${encodeURIComponent(userId)}/sessions/revoke${query}`,
+          { method: 'POST', body: {}, requiresAuth: true },
+        ),
+      );
+    }
+
+    async revokePlatformStaffInvitation(profileName, invitationId) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(
+          `v1/platform/staff/invitations/${encodeURIComponent(invitationId)}/revoke${query}`,
+          { method: 'POST', body: {}, requiresAuth: true },
+        ),
+      );
+    }
+
     async platformEntitlements(profileName, { signal } = {}) {
       const query = profileName
         ? `?profile=${encodeURIComponent(profileName)}`
@@ -693,6 +801,19 @@
         : '';
       return unwrapPayload(
         await this.request(`v1/platform/commercial${query}`, {
+          requiresAuth: true,
+          signal,
+        }),
+      );
+    }
+
+    async platformCommercialHistory(profileName, { signal } = {}) {
+      const query = new URLSearchParams();
+      if (profileName) query.set('profile', profileName);
+      query.set('limit', '50');
+      const suffix = query.toString() ? `?${query.toString()}` : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/commercial/history${suffix}`, {
           requiresAuth: true,
           signal,
         }),
@@ -778,11 +899,16 @@
       );
     }
 
-    async issueCredential(organizationId, body) {
+    async issueCredential(organizationId, body, idempotencyKey) {
       return unwrapPayload(
         await this.request(
           `v1/organizations/${encodeURIComponent(organizationId)}/credentials`,
-          { method: 'POST', body, requiresAuth: true },
+          {
+            method: 'POST',
+            body,
+            requiresAuth: true,
+            headers: { 'Idempotency-Key': idempotencyKey },
+          },
         ),
       );
     }
@@ -872,11 +998,16 @@
       );
     }
 
-    async inviteOrganizationMember(organizationId, body) {
+    async inviteOrganizationMember(organizationId, body, idempotencyKey) {
       return unwrapPayload(
         await this.request(
           `v1/organizations/${encodeURIComponent(organizationId)}/invitations`,
-          { method: 'POST', body, requiresAuth: true },
+          {
+            method: 'POST',
+            body,
+            requiresAuth: true,
+            headers: { 'Idempotency-Key': idempotencyKey },
+          },
         ),
       );
     }
@@ -886,6 +1017,55 @@
         await this.request(
           `v1/organizations/${encodeURIComponent(organizationId)}/invitations/${encodeURIComponent(invitationId)}/revoke`,
           { method: 'POST', body: {}, requiresAuth: true },
+        ),
+      );
+    }
+
+    async previewOrganizationInvitation(token) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organization-invitations/${encodeURIComponent(token)}`,
+          { retry: false },
+        ),
+      );
+    }
+
+    async acceptOrganizationInvitation(token, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organization-invitations/${encodeURIComponent(token)}`,
+          { method: 'POST', body, retry: false },
+        ),
+      );
+    }
+
+    async previewPlatformStaffInvitation(token) {
+      return unwrapPayload(
+        await this.request(
+          `v1/platform-staff-invitations/${encodeURIComponent(token)}`,
+          { retry: false },
+        ),
+      );
+    }
+
+    async acceptPlatformStaffInvitation(token, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/platform-staff-invitations/${encodeURIComponent(token)}`,
+          { method: 'POST', body, retry: false },
+        ),
+      );
+    }
+
+    async transferOrganizationOwnership(organizationId, targetUserId) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/ownership-transfer`,
+          {
+            method: 'POST',
+            body: { target_user_id: targetUserId },
+            requiresAuth: true,
+          },
         ),
       );
     }
@@ -1172,6 +1352,7 @@
   }
 
   function requestedLoginAudience() {
+    if (state.loginAudienceOverride) return state.loginAudienceOverride;
     return readRoute().shell === 'platform'
       ? PLATFORM_AUTHORIZATION_AUDIENCE
       : CUSTOMER_AUTHORIZATION_AUDIENCE;
@@ -2754,35 +2935,144 @@
       return unavailablePage('Platform users', platformDataUnavailableReason('platform-users'));
     }
     const users = arrayValue(projection.users);
+    const canManage = hasPlatformCapability('platform:staff:manage');
+    const canRevokeSessions = hasPlatformCapability('platform:sessions:revoke');
+    const profileName = stringValue(pick(selectedProfile(), 'name'));
     const panel = makePanel(
       'Hyfens staff',
-      'Platform-audience staff metadata for operator access review. Customer members and credential material are excluded.',
+      'Platform-audience staff metadata for operator access review. Customer members and credential material are excluded. Changes are capability-checked and audited by the control plane.',
       `${users.length} returned`,
     );
     panel.body.append(users.length === 0
-      ? stateBlock('empty', 'No platform staff returned', 'No active platform capability memberships are present in this projection.')
+      ? stateBlock('empty', 'No platform staff returned', 'No platform capability memberships are present in this projection.')
       : recordTable(
-        ['Staff', 'Status', 'Platform role / capabilities', 'Platform scopes', 'Created'],
+        ['Staff', 'Status', 'Platform role / capabilities', 'Platform scopes', 'Created', 'Actions'],
         users,
         (user) => {
           const memberships = arrayValue(pick(user, 'memberships'));
+          const membership = objectValue(memberships[0]) ?? {};
           const capabilities = [...new Set(
-            memberships.flatMap((membership) => arrayValue(pick(membership, 'platformCapabilities'))),
+            memberships.flatMap((item) => arrayValue(pick(item, 'platformCapabilities'))),
           )].sort(compareText);
           const roles = memberships
-            .map((membership) => stringValue(pick(membership, 'role')))
+            .map((item) => stringValue(pick(item, 'role')))
             .filter(Boolean)
             .join(', ');
+          const userId = recordId(user);
+          const actions = element('div', 'action-form-actions');
+          if (canManage && userId && stringValue(pick(membership, 'role'))) {
+            const role = supportSelect(
+              'role',
+              ['admin', 'support', 'operations', 'commercial', 'security'],
+              stringValue(pick(membership, 'role')),
+            );
+            role.dataset.platformStaffRole = userId;
+            role.dataset.previousRole = stringValue(pick(membership, 'role')) ?? '';
+            actions.append(role);
+            const toggle = element(
+              'button',
+              'button button-quiet',
+              pick(membership, 'active') === true ? 'Deactivate' : 'Reactivate',
+            );
+            toggle.type = 'button';
+            toggle.dataset.platformStaffToggle = userId;
+            toggle.dataset.nextActive = String(pick(membership, 'active') !== true);
+            actions.append(toggle);
+          }
+          if (canRevokeSessions && userId) {
+            const revoke = element('button', 'button button-quiet button-danger', 'Revoke sessions');
+            revoke.type = 'button';
+            revoke.dataset.platformStaffRevokeSessions = userId;
+            actions.append(revoke);
+          }
+          if (actions.childElementCount === 0) {
+            actions.append(element('span', 'metadata-value muted', 'Read only'));
+          }
           return tableRow([
-            primaryCell(pick(user, 'email'), pick(user, 'id')),
-            statusTag(pick(user, 'active') === true ? 'active' : 'inactive'),
+            primaryCell(pick(user, 'email'), userId),
+            statusTag(pick(membership, 'active') === true && pick(user, 'active') === true ? 'active' : 'inactive'),
             primaryCell(roles || 'Role not set', `${memberships.length} platform membership${memberships.length === 1 ? '' : 's'}`),
             element('span', 'subvalue', capabilities.join(', ') || 'No capabilities'),
             dateValue(pick(user, 'createdAt')),
+            actions,
           ]);
         },
       ));
+    panel.body.append(renderPlatformStaffInvitationPanel(canManage, profileName));
     return panel.section;
+  }
+
+  function renderPlatformStaffInvitationPanel(canManage, profileName) {
+    const wrapper = element('div', 'action-form-inset');
+    wrapper.append(
+      element('h3', '', 'Invite platform staff'),
+      element(
+        'p',
+        'form-hint',
+        canManage
+          ? 'The invitation link is shown once for delivery through an approved channel. It is never returned by the invitation list.'
+          : 'Staff invitations and staff mutations are not available for the selected profile.',
+      ),
+    );
+    if (canManage) {
+      const form = element('form', 'action-form');
+      form.dataset.dashboardAction = 'platform-staff-invite';
+      const email = element('input');
+      email.type = 'email';
+      email.name = 'email';
+      email.required = true;
+      email.maxLength = 320;
+      email.placeholder = 'operator@example.com';
+      const role = supportSelect('role', ['admin', 'support', 'operations', 'commercial', 'security'], 'support');
+      const fields = element('div', 'action-form-grid');
+      fields.append(formField('Email', email), formField('Role', role));
+      form.append(fields, actionSubmitButton('platform-staff-invite', 'Create staff invitation'));
+      wrapper.append(form);
+    }
+    const issued = objectValue(state.issuedPlatformStaffInvitation);
+    const token = stringValue(issued?.token);
+    if (token) {
+      const link = `${window.location.origin}/staff-invite/${encodeURIComponent(token)}`;
+      const secret = element('div', 'one-time-secret');
+      secret.append(
+        element('strong', '', 'Staff invitation created — copy it now'),
+        element('p', 'form-hint', 'This link is displayed once and is not stored in browser state after the page is refreshed.'),
+        element('code', 'secret-value', link),
+      );
+      wrapper.append(secret);
+    }
+    const invitations = state.platformStaffInvitations;
+    if (!invitations) {
+      wrapper.append(stateBlock('unavailable', 'Staff invitation metadata unavailable', platformDataUnavailableReason('platform-users')));
+      return wrapper;
+    }
+    if (invitations.length > 0) {
+      wrapper.append(element('h3', '', 'Staff invitations'));
+      wrapper.append(recordTable(
+        ['Email', 'Role', 'Status', 'Expires', 'Action'],
+        invitations,
+        (invitation) => {
+          const id = recordId(invitation);
+          const active = pick(invitation, 'active') === true;
+          const action = active && canManage
+            ? (() => {
+              const button = element('button', 'button button-quiet button-danger', 'Revoke');
+              button.type = 'button';
+              button.dataset.platformStaffInvitationRevoke = id ?? '';
+              return button;
+            })()
+            : statusTag(pick(invitation, 'status') ?? (active ? 'PENDING' : 'EXPIRED'));
+          return tableRow([
+            primaryCell(pick(invitation, 'email'), id),
+            stringValue(pick(invitation, 'role')) ?? 'Not set',
+            statusTag(pick(invitation, 'status') ?? (active ? 'PENDING' : 'EXPIRED')),
+            dateValue(pick(invitation, 'expiresAt')),
+            action,
+          ]);
+        },
+      ));
+    }
+    return wrapper;
   }
 
   function formatMinorAmount(value, currency) {
@@ -2892,6 +3182,32 @@
       summary.body.append(element('p', 'collection-note', `Currencies present: ${projection.currencies.join(', ')}`));
     }
     stack.append(summary.section);
+    const history = state.platformCommercialHistory;
+    const historyPanel = makePanel(
+      'Billing history',
+      'Provider lifecycle events are shown only as recorded. They do not represent cash revenue until a monetary ledger supplies amount and currency.',
+      history?.historyAvailable === true ? 'Events available' : 'Source boundary',
+    );
+    if (!history) {
+      historyPanel.body.append(stateBlock('unavailable', 'Billing history unavailable', 'The control plane did not return a billing history projection.'));
+    } else {
+      const events = arrayValue(history.events);
+      historyPanel.body.append(events.length === 0
+        ? stateBlock('empty', 'No billing events recorded', stringValue(history.note) ?? 'Revenue history is not available.')
+        : recordTable(
+          ['Event', 'Organization', 'Provider', 'Occurred', 'Received'],
+          events,
+          (event) => tableRow([
+            primaryCell(pick(event, 'eventName'), pick(event, 'eventId')),
+            codeValue(pick(event, 'organizationId')),
+            stringValue(pick(event, 'provider')) ?? 'Not set',
+            dateValue(pick(event, 'occurredAt')),
+            dateValue(pick(event, 'receivedAt')),
+          ]),
+        ));
+      historyPanel.body.append(element('p', 'settings-note', stringValue(history.note) ?? 'No monetary history is available.'));
+    }
+    stack.append(historyPanel.section);
     return stack;
   }
 
@@ -3773,6 +4089,7 @@
   function renderOrganizationMembersPanel() {
     const members = state.organizationMembers;
     const canManage = hasCustomerCapability('organization:members:write');
+    const isOwner = stringValue(pick(selectedProfile(), 'role')) === 'owner';
     const panel = makePanel(
       'Team members',
       'Members of the selected customer organization. Passwords, sessions, and credential material are never returned.',
@@ -3825,7 +4142,56 @@
         },
       ));
     panel.body.append(renderMemberInvitationPanel(canManage));
+    panel.body.append(renderOwnershipTransferPanel(canManage && isOwner, members));
     return panel.section;
+  }
+
+  function renderOwnershipTransferPanel(canTransfer, members) {
+    const wrapper = element('div', 'action-form-inset');
+    wrapper.append(
+      element('h3', '', 'Transfer organization ownership'),
+      element(
+        'p',
+        'form-hint',
+        canTransfer
+          ? 'Ownership transfer is explicit and audited. The current owner remains an administrator after the transfer.'
+          : 'Only the current organization owner can transfer ownership to another active member.',
+      ),
+    );
+    if (!canTransfer) return wrapper;
+    const targets = members.filter((member) => {
+      const membership = objectValue(arrayValue(pick(member, 'memberships'))[0]);
+      return pick(member, 'active') === true &&
+        pick(membership, 'active') === true &&
+        stringValue(pick(membership, 'role')) !== 'owner' &&
+        recordId(member);
+    });
+    if (targets.length === 0) {
+      wrapper.append(stateBlock('empty', 'No eligible members', 'Invite and activate another organization member before transferring ownership.'));
+      return wrapper;
+    }
+    const form = element('form', 'action-form');
+    form.dataset.dashboardAction = 'owner-transfer';
+    const target = element('select');
+    target.name = 'target_user_id';
+    target.required = true;
+    const placeholder = element('option', '', 'Select a member');
+    placeholder.value = '';
+    placeholder.selected = true;
+    placeholder.disabled = true;
+    target.append(placeholder);
+    for (const member of targets) {
+      const option = element('option', '', stringValue(pick(member, 'email')) ?? recordId(member));
+      option.value = recordId(member);
+      target.append(option);
+    }
+    form.append(
+      formField('New owner', target),
+      actionSubmitButton('owner-transfer', 'Transfer ownership'),
+      actionErrorMessage('owner-transfer'),
+    );
+    wrapper.append(form);
+    return wrapper;
   }
 
   function renderMemberInvitationPanel(canManage) {
@@ -3833,7 +4199,7 @@
     wrapper.append(
       element('h3', '', 'Invite a member'),
       element('p', 'form-hint', canManage
-        ? 'The invitation token is displayed once. Deliver it through an approved channel; Hyfens does not place secrets in browser storage.'
+        ? 'The invitation link is displayed once. Deliver it through an approved channel; Hyfens does not place secrets in browser storage.'
         : 'Member invitations and role changes are not available for the selected profile.'),
     );
     if (canManage) {
@@ -3854,11 +4220,12 @@
     const issued = objectValue(state.issuedInvitation);
     const token = stringValue(issued?.token);
     if (token) {
+      const link = `${window.location.origin}/invite/${encodeURIComponent(token)}`;
       const secret = element('div', 'one-time-secret');
       secret.append(
         element('strong', '', 'Invitation created — copy it now'),
-        element('p', 'form-hint', 'This invitation token is shown once and is not returned by the invitation list.'),
-        element('code', 'secret-value', token),
+        element('p', 'form-hint', 'This invitation link is shown once and is not returned by the invitation list.'),
+        element('code', 'secret-value', link),
       );
       wrapper.append(secret);
     }
@@ -4400,8 +4767,10 @@
   function showAuthMode(mode, { focus = true, focusTarget = 'form' } = {}) {
     const nextMode = mode === 'register' ? 'register' : 'login';
     const register = nextMode === 'register';
+    nodes.authModeSwitcher.hidden = false;
     setAuthFormState(nodes.loginForm, register);
     setAuthFormState(nodes.registerForm, !register);
+    setAuthFormState(nodes.invitationForm, true);
     nodes.authModeTabs.forEach((tab) => {
       const active = tab.dataset.authMode === nextMode;
       tab.setAttribute('aria-selected', String(active));
@@ -4418,6 +4787,20 @@
     }
     const target = register ? nodes.registerEmail : nodes.email;
     target?.focus({ preventScroll: true });
+  }
+
+  function showInvitationMode({ focus = false } = {}) {
+    nodes.authModeSwitcher.hidden = true;
+    nodes.authModeTabs.forEach((tab) => {
+      tab.setAttribute('aria-selected', 'false');
+      tab.tabIndex = -1;
+    });
+    setAuthFormState(nodes.loginForm, true);
+    setAuthFormState(nodes.registerForm, true);
+    setAuthFormState(nodes.invitationForm, false);
+    setLoginMessage('', '');
+    setRegisterMessage('', '');
+    if (focus) nodes.invitationEmail?.focus({ preventScroll: true });
   }
 
   function handleAuthModeKeydown(event) {
@@ -4494,6 +4877,7 @@
         requestedLoginAudience(),
       );
       await establishAuthenticatedSession(api, endpoint, loginPayload);
+      state.loginAudienceOverride = null;
       setLoginMessage('', '');
     } catch (error) {
       discardAuthenticationAttempt(api);
@@ -4541,6 +4925,111 @@
       nodes.registerPassword.value = '';
       nodes.registerPasswordConfirm.value = '';
     }
+  }
+
+  async function bootstrapInvitation() {
+    if (!initialInvitationToken || !nodes.invitationForm) return;
+    showInvitationMode();
+    setInvitationMessage('Checking invitation…', 'pending');
+    nodes.invitationSubmit.disabled = true;
+    try {
+      const endpoint = configuredEndpoint();
+      await probeDiscovery(endpoint);
+      const api = new DashboardApi(endpoint);
+      const staffInvitation = initialInvitationKind === 'platform-staff';
+      const preview = staffInvitation
+        ? await api.previewPlatformStaffInvitation(initialInvitationToken)
+        : await api.previewOrganizationInvitation(initialInvitationToken);
+      const organization = staffInvitation
+        ? 'Hyfens Platform Console'
+        : stringValue(pick(preview, 'organization')) ?? 'your organization';
+      const role = stringValue(pick(preview, 'role')) ?? 'member';
+      const email = stringValue(pick(preview, 'email')) ?? '';
+      const active = pick(preview, 'active') === true;
+      if (nodes.invitationFormKicker) {
+        nodes.invitationFormKicker.textContent = staffInvitation
+          ? 'Platform staff invitation'
+          : 'Organization invitation';
+      }
+      nodes.invitationSummary.textContent = active
+        ? staffInvitation
+          ? `You have been invited to the ${organization} as ${role}. Use the invited email to create your staff account.`
+          : `You have been invited to ${organization} as ${role}. Use the invited email to create your account and join the organization.`
+        : 'This invitation is no longer available.';
+      nodes.invitationEmail.value = email;
+      nodes.invitationEmail.readOnly = Boolean(email);
+      nodes.invitationSubmit.disabled = !active;
+      setInvitationMessage(
+        active
+          ? 'Confirm your invited email and create a password to continue.'
+          : staffInvitation
+            ? 'Request a new invitation from a Hyfens platform administrator.'
+            : 'Request a new invitation from an organization administrator.',
+        active ? '' : 'error',
+      );
+    } catch (error) {
+      nodes.invitationSummary.textContent = 'This invitation could not be loaded.';
+      nodes.invitationSubmit.disabled = true;
+      setInvitationMessage(invitationErrorMessage(error), 'error');
+    }
+  }
+
+  async function handleInvitationAcceptance(event) {
+    event.preventDefault();
+    if (!initialInvitationToken || nodes.invitationSubmit.disabled) return;
+    setInvitationMessage('Accepting invitation…', 'pending');
+    nodes.invitationSubmit.disabled = true;
+    const email = nodes.invitationEmail.value.trim();
+    const password = nodes.invitationPassword.value;
+    const confirmation = nodes.invitationPasswordConfirm.value;
+    let api = null;
+    try {
+      if (!email || !password || !confirmation) {
+        throw new Error('Email and password are required.');
+      }
+      if (password !== confirmation) {
+        throw new Error('Passwords do not match.');
+      }
+      const endpoint = configuredEndpoint();
+      await probeDiscovery(endpoint);
+      api = new DashboardApi(endpoint);
+      const response = initialInvitationKind === 'platform-staff'
+        ? await api.acceptPlatformStaffInvitation(initialInvitationToken, { email, password })
+        : await api.acceptOrganizationInvitation(initialInvitationToken, { email, password });
+      const login = objectValue(pick(response, 'login'));
+      if (!login) {
+        state.loginAudienceOverride = initialInvitationKind === 'platform-staff'
+          ? PLATFORM_AUTHORIZATION_AUDIENCE
+          : CUSTOMER_AUTHORIZATION_AUDIENCE;
+      }
+      clearInvitationRoute();
+      if (login) {
+        await establishAuthenticatedSession(api, endpoint, login);
+        return;
+      }
+      setInvitationMessage('Invitation already accepted. Sign in to continue.', 'success');
+      showAuthMode('login', { focus: true });
+      nodes.email.value = email;
+    } catch (error) {
+      api?.clear();
+      setInvitationMessage(invitationErrorMessage(error), 'error');
+      nodes.invitationSubmit.disabled = false;
+    } finally {
+      nodes.invitationPassword.value = '';
+      nodes.invitationPasswordConfirm.value = '';
+    }
+  }
+
+  function clearInvitationRoute() {
+    const url = new URL(window.location.href);
+    const segments = url.pathname.split('/').filter(Boolean);
+    if (segments[0] === 'invite' || segments[0] === 'staff-invite') {
+      const remaining = segments.slice(2);
+      url.pathname = remaining.length ? `/${remaining.join('/')}` : '/';
+    }
+    url.searchParams.delete('invitation');
+    url.searchParams.delete('staff_invitation');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
   }
 
   async function handlePublicIntake(event) {
@@ -4608,10 +5097,15 @@
     state.platformAuditError = null;
     state.platformUsers = null;
     state.platformUsersError = null;
+    state.platformStaffInvitations = null;
+    state.platformStaffInvitationsError = null;
+    state.issuedPlatformStaffInvitation = null;
     state.platformEntitlements = null;
     state.platformEntitlementsError = null;
     state.platformCommercial = null;
     state.platformCommercialError = null;
+    state.platformCommercialHistory = null;
+    state.platformCommercialHistoryError = null;
     state.platformSupportCases = null;
     state.platformSupportCasesError = null;
     state.platformSupportCase = null;
@@ -4740,12 +5234,17 @@
       state.platformOrganizationError = null;
       state.platformAudit = null;
       state.platformAuditError = null;
-      state.platformUsers = null;
-      state.platformUsersError = null;
+    state.platformUsers = null;
+    state.platformUsersError = null;
+    state.platformStaffInvitations = null;
+    state.platformStaffInvitationsError = null;
+    state.issuedPlatformStaffInvitation = null;
       state.platformEntitlements = null;
       state.platformEntitlementsError = null;
       state.platformCommercial = null;
       state.platformCommercialError = null;
+      state.platformCommercialHistory = null;
+      state.platformCommercialHistoryError = null;
       state.platformSupportCases = null;
       state.platformSupportCasesError = null;
       state.platformSupportCase = null;
@@ -4827,6 +5326,30 @@
     return 'Account creation could not be completed. Check your details and try again.';
   }
 
+  function invitationErrorMessage(error) {
+    const staffInvitation = initialInvitationKind === 'platform-staff';
+    if (error instanceof ApiError && error.status === 403) {
+      return error.code === 'INVITATION_RECIPIENT_MISMATCH'
+        ? 'Use the email address this invitation was sent to.'
+        : 'You are not allowed to accept this invitation.';
+    }
+    if (error instanceof ApiError && error.status === 410) {
+      return staffInvitation
+        ? 'This staff invitation has expired or was revoked. Request a new invitation from a Hyfens platform administrator.'
+        : 'This invitation has expired or was revoked. Request a new invitation from an organization administrator.';
+    }
+    if (error instanceof ApiError && error.status === 409) {
+      return staffInvitation
+        ? 'This staff invitation conflicts with an existing account. Contact a Hyfens platform administrator.'
+        : 'This invitation conflicts with an existing membership. Refresh and try again.';
+    }
+    if (error instanceof ApiError && error.status === 422) {
+      return 'Check the invited email and password, then try again.';
+    }
+    if (error instanceof Error && error.message.includes('endpoint')) return error.message;
+    return 'The invitation could not be completed. Try again or request a new invitation.';
+  }
+
   function intakeErrorMessage(error) {
     if (error instanceof Error && error.message.includes('endpoint')) return error.message;
     return 'This request could not be submitted right now. Please try again.';
@@ -4842,6 +5365,13 @@
     nodes.registerMessage.textContent = text;
     if (stateName) nodes.registerMessage.dataset.state = stateName;
     else delete nodes.registerMessage.dataset.state;
+  }
+
+  function setInvitationMessage(text, stateName) {
+    if (!nodes.invitationMessage) return;
+    nodes.invitationMessage.textContent = text;
+    if (stateName) nodes.invitationMessage.dataset.state = stateName;
+    else delete nodes.invitationMessage.dataset.state;
   }
 
   function setIntakeMessage(text, stateName) {
@@ -4925,6 +5455,7 @@
       state.platformUsers = null;
       state.platformEntitlements = null;
       state.platformCommercial = null;
+      state.platformCommercialHistory = null;
       state.platformSupportCases = null;
       state.platformSupportCase = null;
       state.platformOrganizationError = new ApiError(
@@ -4934,8 +5465,12 @@
       state.platformOrganizationsError = state.platformOrganizationError;
       state.platformAuditError = state.platformOrganizationError;
       state.platformUsersError = state.platformOrganizationError;
+      state.platformStaffInvitations = null;
+      state.platformStaffInvitationsError = state.platformOrganizationError;
+      state.issuedPlatformStaffInvitation = null;
       state.platformEntitlementsError = state.platformOrganizationError;
       state.platformCommercialError = state.platformOrganizationError;
+      state.platformCommercialHistoryError = state.platformOrganizationError;
       state.platformSupportCasesError = state.platformOrganizationError;
       state.platformSupportCaseError = state.platformOrganizationError;
       renderCurrentPage();
@@ -4946,16 +5481,25 @@
     state.platformOrganizationsError = null;
     state.platformAuditError = null;
     state.platformUsersError = null;
+    state.platformStaffInvitationsError = null;
     state.platformEntitlementsError = null;
     state.platformCommercialError = null;
+    state.platformCommercialHistoryError = null;
     state.platformSupportCasesError = null;
     state.platformSupportCaseError = null;
     if (view === 'platform-organizations') state.platformOrganizations = null;
     if (view === 'platform-organization') state.platformOrganization = null;
     if (view === 'platform-audit') state.platformAudit = null;
     if (view === 'platform-users') state.platformUsers = null;
+    if (view === 'platform-users') {
+      state.platformStaffInvitations = null;
+      state.issuedPlatformStaffInvitation = null;
+    }
     if (view === 'platform-entitlements') state.platformEntitlements = null;
-    if (view === 'platform-commercial') state.platformCommercial = null;
+    if (view === 'platform-commercial') {
+      state.platformCommercial = null;
+      state.platformCommercialHistory = null;
+    }
     if (view === 'platform-support') state.platformSupportCases = null;
     renderCurrentPage();
     let loaded = false;
@@ -4979,17 +5523,35 @@
         if (!platformDataRequestIsCurrent(generation, view)) return;
         state.platformAudit = validatePlatformAudit(body);
       } else if (view === 'platform-users') {
-        const body = await api.platformUsers(profileName, {});
+        const [usersResult, invitationsResult] = await Promise.allSettled([
+          api.platformUsers(profileName, {}),
+          api.platformStaffInvitations(profileName, {}),
+        ]);
         if (!platformDataRequestIsCurrent(generation, view)) return;
-        state.platformUsers = validatePlatformUsers(body);
+        if (usersResult.status === 'rejected') throw usersResult.reason;
+        state.platformUsers = validatePlatformUsers(usersResult.value);
+        if (invitationsResult.status === 'fulfilled') {
+          state.platformStaffInvitations = validatePlatformStaffInvitations(invitationsResult.value);
+        } else {
+          state.platformStaffInvitationsError = invitationsResult.reason;
+        }
       } else if (view === 'platform-entitlements') {
         const body = await api.platformEntitlements(profileName, {});
         if (!platformDataRequestIsCurrent(generation, view)) return;
         state.platformEntitlements = validatePlatformEntitlements(body);
       } else if (view === 'platform-commercial') {
-        const body = await api.platformCommercial(profileName, {});
+        const [commercialResult, historyResult] = await Promise.allSettled([
+          api.platformCommercial(profileName, {}),
+          api.platformCommercialHistory(profileName, {}),
+        ]);
         if (!platformDataRequestIsCurrent(generation, view)) return;
-        state.platformCommercial = validatePlatformCommercial(body);
+        if (commercialResult.status === 'rejected') throw commercialResult.reason;
+        state.platformCommercial = validatePlatformCommercial(commercialResult.value);
+        if (historyResult.status === 'fulfilled') {
+          state.platformCommercialHistory = validatePlatformCommercialHistory(historyResult.value);
+        } else {
+          state.platformCommercialHistoryError = historyResult.reason;
+        }
       } else if (view === 'platform-support') {
         const body = await api.platformSupportCases(profileName, {}, {});
         if (!platformDataRequestIsCurrent(generation, view)) return;
@@ -5007,8 +5569,10 @@
       if (view === 'platform-organization') state.platformOrganizationError = error;
       if (view === 'platform-audit') state.platformAuditError = error;
       if (view === 'platform-users') state.platformUsersError = error;
+      if (view === 'platform-users') state.platformStaffInvitationsError = error;
       if (view === 'platform-entitlements') state.platformEntitlementsError = error;
       if (view === 'platform-commercial') state.platformCommercialError = error;
+      if (view === 'platform-commercial') state.platformCommercialHistoryError = error;
       if (view === 'platform-support') state.platformSupportCasesError = error;
     } finally {
       if (!platformDataRequestIsCurrent(generation, view)) return;
@@ -5055,6 +5619,14 @@
     return root;
   }
 
+  function validatePlatformStaffInvitations(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || !Array.isArray(root.invitations)) {
+      throw new ApiError('The control plane did not return safe platform staff invitation metadata.');
+    }
+    return root.invitations;
+  }
+
   function validatePlatformEntitlements(body) {
     const root = unwrapPayload(body);
     if (
@@ -5072,6 +5644,14 @@
     const root = unwrapPayload(body);
     if (root.readOnly !== true || root.scope !== 'platform' || !stringValue(root.status)) {
       throw new ApiError('The control plane did not return the required commercial projection.');
+    }
+    return root;
+  }
+
+  function validatePlatformCommercialHistory(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || root.scope !== 'platform' || !Array.isArray(root.events)) {
+      throw new ApiError('The control plane did not return the required commercial history projection.');
     }
     return root;
   }
@@ -5517,12 +6097,17 @@
     state.platformOrganizationError = null;
     state.platformAudit = null;
     state.platformAuditError = null;
-    state.platformUsers = null;
-    state.platformUsersError = null;
+      state.platformUsers = null;
+      state.platformUsersError = null;
+      state.platformStaffInvitations = null;
+      state.platformStaffInvitationsError = null;
+      state.issuedPlatformStaffInvitation = null;
     state.platformEntitlements = null;
     state.platformEntitlementsError = null;
     state.platformCommercial = null;
     state.platformCommercialError = null;
+    state.platformCommercialHistory = null;
+    state.platformCommercialHistoryError = null;
     state.platformSupportCases = null;
     state.platformSupportCasesError = null;
     state.platformSupportCase = null;
@@ -5790,6 +6375,10 @@
 
   function handleCollectionChange(event) {
     const target = event.target;
+    if (target?.dataset?.platformStaffRole) {
+      void handlePlatformStaffRoleChange(target);
+      return;
+    }
     if (target?.dataset?.memberRole) {
       void handleMemberRoleChange(target);
       return;
@@ -5943,6 +6532,66 @@
     state.platformSupportCases = validateSupportCasePage(body, 'platform');
   }
 
+  function platformProfileName() {
+    return stringValue(pick(selectedProfile(), 'name'));
+  }
+
+  async function handlePlatformStaffInviteSubmit(form, data) {
+    const action = 'platform-staff-invite';
+    const value = (name) => stringValue(data.get(name))?.trim() ?? '';
+    if (!state.api || !hasPlatformCapability('platform:staff:manage')) {
+      state.actionError = { action, message: 'This profile cannot invite platform staff.' };
+      renderCurrentPage();
+      return;
+    }
+    const email = value('email');
+    const role = value('role');
+    if (!email || !role) {
+      state.actionError = { action, message: 'Staff email and role are required.' };
+      renderCurrentPage();
+      return;
+    }
+    state.actionLoading = action;
+    state.actionError = null;
+    renderCurrentPage();
+    try {
+      const response = await state.api.invitePlatformStaff(
+        platformProfileName(),
+        { email, role },
+        makeIdempotencyKey('platform-staff-invite'),
+      );
+      const invitation = unwrapPayload(response);
+      const token = stringValue(pick(invitation, 'token'));
+      if (!token) throw new ApiError('The control plane did not return the one-time staff invitation token.');
+      const metadata = Object.fromEntries(
+        Object.entries(invitation).filter(([key]) => key !== 'token'),
+      );
+      state.platformStaffInvitations = [metadata, ...arrayValue(state.platformStaffInvitations)];
+      state.issuedPlatformStaffInvitation = { token, metadata };
+      state.actionLoading = null;
+      renderCurrentPage();
+      showToast('Staff invitation created. Copy the invitation link now.', 'success');
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      state.actionLoading = null;
+      state.actionError = { action, message: platformActionErrorMessage(error) };
+      renderCurrentPage();
+    }
+  }
+
+  function platformActionErrorMessage(error) {
+    if (error instanceof SessionExpiredError) return 'Your session expired. Sign in again.';
+    if (error instanceof ApiError) {
+      if (error.status === 401 || error.status === 403) return 'This profile is not authorized for that platform action.';
+      if (error.status === 409) return 'That staff record changed or already exists. Refresh and try again.';
+      if (error.status === 422) return 'Check the submitted staff details and try again.';
+    }
+    return 'The platform staff action could not be completed. Try again.';
+  }
+
   async function handleCustomerActionSubmit(event) {
     const form = event.target.closest?.('form[data-dashboard-action]');
     if (!form || !nodes.pageRegion.contains(form)) return;
@@ -5953,6 +6602,10 @@
     const value = (name) => stringValue(data.get(name))?.trim() ?? '';
     if (action.startsWith('platform-support-')) {
       await handlePlatformSupportAction(form, action, data);
+      return;
+    }
+    if (action === 'platform-staff-invite') {
+      await handlePlatformStaffInviteSubmit(form, data);
       return;
     }
     const organizationId = profileOrganizationId();
@@ -6013,7 +6666,11 @@
         const email = value('email');
         const role = value('role');
         if (!email || !role) throw new Error('Member email and role are required.');
-        const response = await state.api.inviteOrganizationMember(organizationId, { email, role });
+        const response = await state.api.inviteOrganizationMember(
+          organizationId,
+          { email, role },
+          makeIdempotencyKey('member-invite'),
+        );
         const invitation = unwrapPayload(response);
         const token = stringValue(pick(invitation, 'token'));
         if (!token) throw new ApiError('The control plane did not return the one-time invitation token.');
@@ -6024,7 +6681,16 @@
         state.issuedInvitation = { token, metadata };
         state.actionLoading = null;
         renderCurrentPage();
-        showToast('Invitation created. Copy the token now.', 'success');
+        showToast('Invitation created. Copy the invitation link now.', 'success');
+        return;
+      }
+      if (action === 'owner-transfer') {
+        const targetUserId = value('target_user_id');
+        if (!targetUserId) throw new Error('Select an active member as the new owner.');
+        if (!window.confirm('Transfer organization ownership to this member? This change is immediate and audited.')) return;
+        await state.api.transferOrganizationOwnership(organizationId, targetUserId);
+        await loadCustomerSettingsData();
+        showToast('Organization ownership transferred.', 'success');
         return;
       }
       if (action === 'credential-issue') {
@@ -6039,7 +6705,11 @@
         if (Number.isInteger(expiryDays) && expiryDays > 0) {
           body.expires_at = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
         }
-        const response = await state.api.issueCredential(organizationId, body);
+        const response = await state.api.issueCredential(
+          organizationId,
+          body,
+          makeIdempotencyKey('credential-issue'),
+        );
         const issued = unwrapPayload(response);
         const token = stringValue(pick(issued, 'token'));
         if (!token) throw new ApiError('The control plane did not return the one-time credential.');
@@ -6122,6 +6792,21 @@
   }
 
   async function handleCustomerSettingsClick(event) {
+    const platformStaffToggle = event.target.closest?.('[data-platform-staff-toggle]');
+    if (platformStaffToggle && !platformStaffToggle.disabled) {
+      await handlePlatformStaffToggle(platformStaffToggle);
+      return;
+    }
+    const platformStaffSessions = event.target.closest?.('[data-platform-staff-revoke-sessions]');
+    if (platformStaffSessions && !platformStaffSessions.disabled) {
+      await handlePlatformStaffSessionsRevoke(platformStaffSessions);
+      return;
+    }
+    const platformStaffInvitation = event.target.closest?.('[data-platform-staff-invitation-revoke]');
+    if (platformStaffInvitation && !platformStaffInvitation.disabled) {
+      await handlePlatformStaffInvitationRevoke(platformStaffInvitation);
+      return;
+    }
     const applicationArchive = event.target.closest?.('[data-application-archive]');
     if (applicationArchive && !applicationArchive.disabled) {
       await handleLifecycleArchive('application', applicationArchive.dataset.applicationArchive, applicationArchive);
@@ -6201,6 +6886,111 @@
       state.actionLoading = null;
       state.actionError = { action: `${kind}-archive`, message: customerActionErrorMessage(`${kind}-archive`, error) };
       renderCurrentPage();
+    }
+  }
+
+  async function refreshPlatformStaff(message) {
+    state.actionLoading = null;
+    state.actionError = null;
+    await loadPlatformViewData();
+    renderCurrentPage();
+    showToast(message, 'success');
+  }
+
+  async function handlePlatformStaffRoleChange(select) {
+    const userId = stringValue(select.dataset.platformStaffRole);
+    const role = stringValue(select.value);
+    const previousRole = stringValue(select.dataset.previousRole) ?? role;
+    if (!userId || !role || !state.api) return;
+    if (!hasPlatformCapability('platform:staff:manage')) {
+      select.value = previousRole;
+      showToast('This profile cannot change platform staff roles.', 'warning');
+      return;
+    }
+    if (!window.confirm(`Change this staff member's role to ${supportLabel(role)}?`)) {
+      select.value = previousRole;
+      return;
+    }
+    select.disabled = true;
+    try {
+      await state.api.updatePlatformStaff(platformProfileName(), userId, { role });
+      await refreshPlatformStaff('Platform staff role updated.');
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      select.value = previousRole;
+      select.disabled = false;
+      showToast(platformActionErrorMessage(error), 'error');
+    }
+  }
+
+  async function handlePlatformStaffToggle(button) {
+    const userId = stringValue(button.dataset.platformStaffToggle);
+    const nextActive = button.dataset.nextActive === 'true';
+    if (!userId || !state.api) return;
+    if (!hasPlatformCapability('platform:staff:manage')) {
+      showToast('This profile cannot change platform staff status.', 'warning');
+      return;
+    }
+    const verb = nextActive ? 'Reactivate' : 'Deactivate';
+    if (!window.confirm(`${verb} this platform staff account?`)) return;
+    button.disabled = true;
+    try {
+      await state.api.updatePlatformStaff(platformProfileName(), userId, { active: nextActive });
+      await refreshPlatformStaff(`Platform staff account ${nextActive ? 'reactivated' : 'deactivated'}.`);
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      button.disabled = false;
+      showToast(platformActionErrorMessage(error), 'error');
+    }
+  }
+
+  async function handlePlatformStaffSessionsRevoke(button) {
+    const userId = stringValue(button.dataset.platformStaffRevokeSessions);
+    if (!userId || !state.api) return;
+    if (!hasPlatformCapability('platform:sessions:revoke')) {
+      showToast('This profile cannot revoke platform sessions.', 'warning');
+      return;
+    }
+    if (!window.confirm('Revoke all active platform sessions for this staff member?')) return;
+    button.disabled = true;
+    try {
+      const result = await state.api.revokePlatformStaffSessions(platformProfileName(), userId);
+      await refreshPlatformStaff(`Revoked ${countValue(pick(result, 'session_count'))} platform session(s).`);
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      button.disabled = false;
+      showToast(platformActionErrorMessage(error), 'error');
+    }
+  }
+
+  async function handlePlatformStaffInvitationRevoke(button) {
+    const invitationId = stringValue(button.dataset.platformStaffInvitationRevoke);
+    if (!invitationId || !state.api) return;
+    if (!hasPlatformCapability('platform:staff:manage')) {
+      showToast('This profile cannot revoke staff invitations.', 'warning');
+      return;
+    }
+    if (!window.confirm('Revoke this platform staff invitation?')) return;
+    button.disabled = true;
+    try {
+      await state.api.revokePlatformStaffInvitation(platformProfileName(), invitationId);
+      await refreshPlatformStaff('Platform staff invitation revoked.');
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      button.disabled = false;
+      showToast(platformActionErrorMessage(error), 'error');
     }
   }
 
@@ -6580,6 +7370,7 @@
   });
   nodes.loginForm.addEventListener('submit', handleLogin);
   nodes.registerForm.addEventListener('submit', handleRegistration);
+  nodes.invitationForm.addEventListener('submit', handleInvitationAcceptance);
   nodes.registerPassword.addEventListener('input', () => {
     nodes.registerPasswordConfirm.removeAttribute('aria-invalid');
     setRegistrationPasswordError('');
@@ -6701,5 +7492,6 @@
     }
   }
 
-  bootstrapSession();
+  if (initialInvitationToken) bootstrapInvitation();
+  else bootstrapSession();
 })();
