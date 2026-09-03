@@ -49,7 +49,8 @@ Release/deployment coordinator.
   supplying certificate and API-origin gates; its DNS A record resolves to the
   managed edge.
 - [-] Complete authenticated Customer Workspace and Platform Console browser
-  acceptance; no authenticated disposable browser session is available.
+  acceptance; the live environment has no supported non-root disposable
+  identity bootstrap available to the deployment SSH account.
 - [x] Re-run the live API regression after the Customer Workspace edge change.
 
 ## Validation
@@ -68,24 +69,39 @@ Completed checks include:
   `access-control-allow-origin: https://platform.hyfens.com`.
 - API health, readiness, discovery, HTTPS redirects, static assets, and
   customer-origin CORS regression remain passing.
+- The credential transport boundary was corrected for the TLS-terminating
+  private proxy path in commit `f5df75e`; live `/auth/me` now reaches normal
+  bearer authentication (`401 UNAUTHORIZED`) and an invalid login reaches
+  credential validation (`401 INVALID_CREDENTIALS`) instead of returning
+  `INSECURE_TRANSPORT`.
+- The focused control-plane ingress test and package analysis pass.
 
 ## Next Action
 
 Complete the bounded authenticated browser acceptance with disposable customer
 and authorized platform sessions. The canonical platform hostname is
 `platform.hyfens.com`; no secondary managed platform hostname is supported.
+The managed instance must first provide a supported disposable bootstrap: public
+registration is disabled, and the documented platform-user helper is root-only
+and seeds the existing scope rather than creating a disposable organization.
 
 ## Blockers
 
-- No authenticated disposable browser session is available in the browser
-  connector, so authenticated customer/platform flows and cross-audience
-  denial remain unproven.
+- Public discovery reports `public_registration: null`, so the supported public
+  registration endpoint cannot create a customer acceptance identity.
+- The documented live platform bootstrap helper is root-only; `sudo -n` from
+  the configured `hyfen` deployment account reports that a password is
+  required. Direct Docker access is also denied for that account.
+- No supported non-root API or helper for creating a disposable organization,
+  customer identity, and platform identity was available to this acceptance
+  run. No real or unknown credentials were used.
 
 ## Outcome
 
 Customer Workspace and the canonical Platform Console deployment are live and
-API-safe. Full live-dashboard acceptance remains externally gated by the lack
-of authenticated disposable browser test sessions.
+API-safe. The TLS-terminated authentication transport defect is fixed and
+deployed, but full live-dashboard acceptance remains externally gated by the
+missing disposable live identity bootstrap.
 
 ## References
 
@@ -105,3 +121,7 @@ of authenticated disposable browser test sessions.
 - 2026-09-04: Activated `platform.hyfens.com`; certificate, edge routing, API
   CORS, health/readiness/discovery, and static asset checks passed. Reconciled
   the remaining authenticated-browser and legacy-alias gates.
+- 2026-09-04: Diagnosed the TLS-termination transport failure, deployed the
+  trusted-private-proxy fix, pushed `f5df75e`, and confirmed normal protected
+  API responses. Authentication remains blocked pending supported disposable
+  identity bootstrap authority.
