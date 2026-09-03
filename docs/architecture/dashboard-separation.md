@@ -58,8 +58,8 @@ change that creates a real product boundary without a framework migration.
 
 ### Customer Workspace
 
-The intended managed host is `app.hyfens.com`; a self-hosted instance uses its
-own origin. The current customer routes are:
+The managed Customer Workspace is deployed at `app.hyfens.com`; a self-hosted
+instance uses its own origin. The current customer routes are:
 
 ```text
 /                         overview
@@ -76,9 +76,11 @@ own origin. The current customer routes are:
 
 ### Platform Console
 
-The recommended managed host is `admin.hyfens.com`. DNS is deliberately not
-changed by this milestone. Local development supports the `/platform` route
-root, while a platform host supports the equivalent root routes:
+The recommended managed host is `admin.hyfens.com`. Its DNS A record now points
+to the managed edge, but the hostname is not active until its certificate
+coverage and control-plane browser-origin allow-list are supplied. Local
+development supports the `/platform` route root, while a platform host
+supports the equivalent root routes:
 
 ```text
 /platform                  overview
@@ -95,8 +97,9 @@ root, while a platform host supports the equivalent root routes:
 
 On `admin.hyfens.com` or `platform.hyfens.com`, the same platform pages are
 addressed as `/`, `/organizations`, `/organizations/:id`, `/audit`,
-`/operations`, `/commercial`, `/support`, and `/settings`. The host/path split is implemented in the
-static route resolver and local server fallback; it is not a DNS claim.
+`/operations`, `/commercial`, `/support`, and `/settings`. The host/path split
+is implemented in the static route resolver and local server fallback; managed
+`admin.hyfens.com` activation remains an external deployment gate.
 
 ## API boundary
 
@@ -245,6 +248,11 @@ CLI handoffs, not fake buttons or direct persistence mutations.
 
 ## Deployment boundary
 
-This milestone changes source routing and local proxy behavior only. It does
-not change DNS, deploy `admin.hyfens.com`, alter production infrastructure, or
-make the Platform Console available in ordinary self-hosted deployments.
+The current managed edge serves the Customer Workspace bundle from
+`app.hyfens.com` and keeps the shared API at `api.hyfens.com`. The Platform
+Console remains a separate product surface and is not exposed through the
+customer host. Its DNS A record is present, but activating
+`admin.hyfens.com` still requires a certificate containing that hostname, an
+explicit API browser-origin allow-list entry, and the separate static edge
+route. Neither surface is automatically made available in ordinary
+self-hosted deployments beyond the documented Customer Workspace.

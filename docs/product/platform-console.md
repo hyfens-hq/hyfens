@@ -5,8 +5,9 @@ Status: AUTHORITATIVE current product guide.
 The Platform Console is the privileged operator surface for Hyfens itself. It
 is intended for authorized Hyfens owners, administrators, support, operations,
 security, and commercial operators where the corresponding capability exists.
-The recommended managed host is `admin.hyfens.com`; local development uses
-the `/platform` route root.
+The recommended managed host is `admin.hyfens.com`; its DNS record currently
+points to the managed edge, while certificate and API-origin activation remain
+deployment prerequisites. Local development uses the `/platform` route root.
 
 ## Audience and boundary
 
