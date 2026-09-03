@@ -53,7 +53,10 @@ final class _TrustedBundleKey {
 /// Forwarded headers describe a proxy's view of a request; they are not an
 /// authentication signal. The adapter binds to loopback by default, and an
 /// explicitly configured reverse proxy must terminate TLS and enforce its own
-/// public-edge policy before forwarding to this process.
+/// public-edge policy before forwarding to this process. A private immediate
+/// proxy peer may provide the exact `X-Forwarded-Proto: https` signal needed to
+/// preserve the credential-transport check across TLS termination; that signal
+/// never changes authorization, rate limiting, or tenant scope.
 final class ControlPlaneIngressTrustPolicy {
   const ControlPlaneIngressTrustPolicy._();
 
@@ -61,6 +64,50 @@ final class ControlPlaneIngressTrustPolicy {
   static const bool forwardedHeadersAffectRateLimit = false;
   static const bool requestIdAffectsAuthorization = false;
   static const bool hostAffectsAuthorization = false;
+
+  /// Returns whether a TLS-terminating private proxy may be trusted for the
+  /// transport check. The proxy must overwrite the header rather than forward
+  /// an untrusted client value, and the control-plane upstream must not be
+  /// publicly reachable.
+  static bool isTrustedForwardedTls({
+    required String? remoteAddress,
+    required String? forwardedProto,
+  }) {
+    if (forwardedProto?.trim().toLowerCase() != 'https') return false;
+    final value = remoteAddress?.trim();
+    if (value == null || value.isEmpty || value == 'localhost') return false;
+    final address = InternetAddress.tryParse(value);
+    if (address == null) return false;
+    final bytes = address.rawAddress;
+    if (address.type == InternetAddressType.IPv4) {
+      return _isTrustedPrivateIpv4(bytes);
+    }
+    if (address.type != InternetAddressType.IPv6 || bytes.length != 16) {
+      return false;
+    }
+    if (_isIpv4Mapped(bytes)) {
+      return _isTrustedPrivateIpv4(bytes.sublist(12));
+    }
+    // Loopback and unique-local IPv6 are the private proxy ranges relevant to
+    // the supported host/container deployment topology.
+    return _isIpv6Loopback(bytes) || (bytes[0] & 0xfe) == 0xfc;
+  }
+
+  static bool _isTrustedPrivateIpv4(List<int> bytes) {
+    if (bytes.length != 4) return false;
+    return bytes[0] == 127 ||
+        bytes[0] == 10 ||
+        (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) ||
+        (bytes[0] == 192 && bytes[1] == 168);
+  }
+
+  static bool _isIpv4Mapped(List<int> bytes) =>
+      bytes.take(10).every((value) => value == 0) &&
+      bytes[10] == 0xff &&
+      bytes[11] == 0xff;
+
+  static bool _isIpv6Loopback(List<int> bytes) =>
+      bytes.take(15).every((value) => value == 0) && bytes[15] == 1;
 }
 
 /// Bounded operator metrics for one control-plane process.
@@ -3851,7 +3898,15 @@ final class ControlPlaneHttpServer {
         remote == '127.0.0.1' ||
         remote == '::1' ||
         remote == '::ffff:127.0.0.1';
-    if (!loopback && request.uri.scheme != 'https' && !allowInsecureAuth) {
+    final proxyTerminatedTls =
+        ControlPlaneIngressTrustPolicy.isTrustedForwardedTls(
+          remoteAddress: remote,
+          forwardedProto: request.headers.value('x-forwarded-proto'),
+        );
+    if (!loopback &&
+        !proxyTerminatedTls &&
+        request.uri.scheme != 'https' &&
+        !allowInsecureAuth) {
       throw const ControlPlaneException(
         'INSECURE_TRANSPORT',
         'Credential-bearing authentication requires HTTPS',
