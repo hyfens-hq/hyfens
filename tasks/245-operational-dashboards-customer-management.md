@@ -1,6 +1,6 @@
 # Operational Platform + Customer Management MVP
 
-Status: [*] In Progress
+Status: [x] Completed
 
 ## Goal
 
@@ -79,27 +79,37 @@ public repository handoff.
   operations views.
 - [x] Update authoritative documentation and domain vocabulary.
 - [x] Review the combined diff and run the relevant validation suite.
-- [*] Commit and push the bounded milestone to `origin/main` without a
+- [x] Commit and push the bounded milestone to `origin/main` without a
   release/tag change.
 
 ## Validation
 
-Planned:
+Completed:
 
-- Scoped Dart format/analyze and focused control-plane tests for new domain,
-  persistence, HTTP, support, commercial, audit, and authorization behavior.
-- Dashboard JavaScript syntax/tests and local proxy route tests.
-- Markdown local-link validation, secret scan, and `git diff --check`.
-- One browser availability check; visual validation is an environment gate if
-  no browser connector is available.
-- Post-push verification that local HEAD equals `origin/main` and protected
-  repositories remain untouched.
+- `dart format --output=none --set-exit-if-changed` on the changed Dart scope:
+  PASS.
+- `dart analyze lib test/operational_mvp_test.dart
+  test/platform_metrics_http_test.dart`: PASS.
+- Focused control-plane tests (`operational_mvp_test.dart` and
+  `platform_metrics_http_test.dart`): 8 passed.
+- Full `dart test`: 269 completed, 31 environment skips, and 16 unrelated
+  pre-existing reconciliation/P3E failures; no changed operational test
+  failed.
+- Dashboard `node --check`, Python compilation, and 35 proxy tests: PASS.
+- Markdown local-link validation: 59 files checked, 0 broken links.
+- Focused secret scan: no high-confidence markers found.
+- `git diff --check`: PASS.
+- Browser availability check: no browser connector available; visual review
+  remains an external environment gate.
+- Post-push verification: implementation commit
+  `226671c74bac7f3237bdd15f4bf179ed3a8668ae` is present on `origin/main`;
+  the working tree was clean before this task-record closure commit.
 
 ## Next Action
 
-Commit and push the reviewed bounded milestone to `origin/main`. No release
-tag, production deployment, DNS change, or work in the separate `backend` and
-`frontend` repositories is authorized by this task.
+No further action is required for this task. A release tag, production
+deployment, DNS change, or work in the separate `backend` and `frontend`
+repositories is outside its authorization.
 
 ## Blockers
 
@@ -148,3 +158,5 @@ provider/payment history, advanced telemetry, support impersonation, and MFA.
   dashboard validation passed; full Dart suite still contains 16 unrelated
   pre-existing reconciliation/P3E failures. Browser visual acceptance is an
   external environment gate because no browser was available.
+- 2026-09-03 — Committed and pushed the milestone to `origin/main` as
+  `226671c74bac7f3237bdd15f4bf179ed3a8668ae`. No release tag was created.
