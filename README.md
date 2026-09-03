@@ -55,7 +55,7 @@ authentication, API transport, and UI system:
   platform-audience audit/operations views.
 
 The intended managed hosts are `app.hyfens.com` for the Customer Workspace and
-`admin.hyfens.com` for the Platform Console. Local development exposes the
+`platform.hyfens.com` for the Platform Console. Local development exposes the
 same split as `/` and `/platform`; a self-hosted instance exposes the Customer
 Workspace on its own instance origin. DNS and production routing remain
 deployment configuration, not a requirement for the shared static bundle.

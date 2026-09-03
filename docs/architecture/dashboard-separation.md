@@ -76,11 +76,10 @@ instance uses its own origin. The current customer routes are:
 
 ### Platform Console
 
-The recommended managed host is `admin.hyfens.com`. Its DNS A record now points
-to the managed edge, but the hostname is not active until its certificate
-coverage and control-plane browser-origin allow-list are supplied. Local
-development supports the `/platform` route root, while a platform host
-supports the equivalent root routes:
+The canonical managed host is `platform.hyfens.com`. Its DNS A record points to
+the managed edge and its certificate and control-plane browser-origin
+allow-list are active. Local development supports the `/platform` route root,
+while a platform host supports the equivalent root routes:
 
 ```text
 /platform                  overview
@@ -95,11 +94,11 @@ supports the equivalent root routes:
 /platform/settings          platform operator settings
 ```
 
-On `admin.hyfens.com` or `platform.hyfens.com`, the same platform pages are
-addressed as `/`, `/organizations`, `/organizations/:id`, `/audit`,
-`/operations`, `/commercial`, `/support`, and `/settings`. The host/path split
-is implemented in the static route resolver and local server fallback; managed
-`admin.hyfens.com` activation remains an external deployment gate.
+On `platform.hyfens.com`, the platform pages are addressed as `/`,
+`/organizations`, `/organizations/:id`, `/audit`, `/operations`, `/commercial`,
+`/support`, and `/settings`. The host/path split is implemented in the static
+route resolver and local server fallback. `admin.hyfens.com` is a retired
+legacy hostname and is not a supported managed endpoint.
 
 ## API boundary
 
@@ -249,10 +248,9 @@ CLI handoffs, not fake buttons or direct persistence mutations.
 ## Deployment boundary
 
 The current managed edge serves the Customer Workspace bundle from
-`app.hyfens.com` and keeps the shared API at `api.hyfens.com`. The Platform
-Console remains a separate product surface and is not exposed through the
-customer host. Its DNS A record is present, but activating
-`admin.hyfens.com` still requires a certificate containing that hostname, an
-explicit API browser-origin allow-list entry, and the separate static edge
-route. Neither surface is automatically made available in ordinary
-self-hosted deployments beyond the documented Customer Workspace.
+`app.hyfens.com`, the Platform Console from `platform.hyfens.com`, and keeps
+the shared API at `api.hyfens.com`. The Platform Console remains a separate
+product surface and is not exposed through the customer host. The retired
+`admin.hyfens.com` name is not part of the supported managed route. Neither
+surface is automatically made available in ordinary self-hosted deployments
+beyond the documented Customer Workspace.

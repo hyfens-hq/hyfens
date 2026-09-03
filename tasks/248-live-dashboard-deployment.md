@@ -45,11 +45,11 @@ Release/deployment coordinator.
 - [x] Activate `app.hyfens.com` through the existing public edge mechanism.
 - [x] Verify app HTTPS, assets, API health/readiness/discovery, and available
   unauthenticated browser behavior.
-- [-] Activate `admin.hyfens.com` after certificate and API-origin gates are
-  supplied; its DNS A record now resolves to the managed edge.
+- [x] Activate the canonical `platform.hyfens.com` Platform Console host after
+  supplying certificate and API-origin gates; its DNS A record resolves to the
+  managed edge.
 - [-] Complete authenticated Customer Workspace and Platform Console browser
-  acceptance; no authenticated disposable browser session is available and the
-  Platform Console hostname is not active.
+  acceptance; no authenticated disposable browser session is available.
 - [x] Re-run the live API regression after the Customer Workspace edge change.
 
 ## Validation
@@ -62,32 +62,35 @@ Completed checks include:
 - Customer app CORS preflight: pass.
 - Browser console: no errors/warnings; desktop and 390px mobile screenshots
   captured; no horizontal overflow.
-- `https://admin.hyfens.com`: DNS resolves to `188.245.62.225`, but the
-  current edge certificate excludes the hostname and the route is not yet
-  configured for the Platform Console.
-- Platform-origin CORS preflight: `403 ORIGIN_NOT_ALLOWED`.
+- `https://platform.hyfens.com`: DNS resolves to `188.245.62.225`, the edge
+  route and certificate are active, and the dashboard returns `200`.
+- Platform-origin CORS preflight: `204` with
+  `access-control-allow-origin: https://platform.hyfens.com`.
+- API health, readiness, discovery, HTTPS redirects, static assets, and
+  customer-origin CORS regression remain passing.
 
 ## Next Action
 
-Add `admin.hyfens.com` to the managed edge certificate and the control-plane
-browser-origin allow-list, configure the separate static Platform Console edge
-route, then repeat the bounded authenticated browser acceptance.
+Complete the bounded authenticated browser acceptance with disposable customer
+and authorized platform sessions. Retire the stale `admin.hyfens.com` DNS
+alias, or issue it a valid certificate and make it an explicit redirect to
+`platform.hyfens.com`; do not leave it publicly resolving with an invalid TLS
+certificate.
 
 ## Blockers
 
-- The current Let's Encrypt certificate covers `api.hyfens.com`,
-  `app.hyfens.com`, `hyfens.com`, and `www.hyfens.com`, but not
-  `admin.hyfens.com`.
-- The control plane returns `ORIGIN_NOT_ALLOWED` for
-  `Origin: https://admin.hyfens.com`.
 - No authenticated disposable browser session is available in the browser
-  connector.
+  connector, so authenticated customer/platform flows and cross-audience
+  denial remain unproven.
+- `admin.hyfens.com` is a stale legacy DNS alias whose certificate does not
+  cover the hostname; it is not the supported Platform Console endpoint.
 
 ## Outcome
 
-Customer Workspace deployment is live and API-safe. Full live-dashboard
-acceptance is blocked by the missing Platform Console certificate/edge/CORS
-configuration and by unavailable authenticated browser test credentials.
+Customer Workspace and the canonical Platform Console deployment are live and
+API-safe. Full live-dashboard acceptance remains externally gated by the lack
+of authenticated disposable browser test sessions. The legacy `admin` alias
+also needs to be retired or converted to a valid redirect.
 
 ## References
 
@@ -104,3 +107,6 @@ configuration and by unavailable authenticated browser test credentials.
   acceptance work.
 - 2026-09-03: Deployed the Customer Workspace edge and recorded the Platform
   Console deployment prerequisites as external blockers.
+- 2026-09-04: Activated `platform.hyfens.com`; certificate, edge routing, API
+  CORS, health/readiness/discovery, and static asset checks passed. Reconciled
+  the remaining authenticated-browser and legacy-alias gates.

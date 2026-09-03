@@ -31,7 +31,7 @@ API transport, design tokens, and UI primitives:
 app.hyfens.com or self-hosted instance origin
   Customer Workspace
 
-admin.hyfens.com
+platform.hyfens.com
   Hyfens Platform Console
 
 api.hyfens.com or self-hosted control-plane origin

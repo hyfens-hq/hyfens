@@ -31,7 +31,7 @@ outside the public documentation tree.
 - [Customer Workspace](product/customer-workspace.md) — the tenant-scoped
   developer workspace at `app.hyfens.com` or a self-hosted origin.
 - [Platform Console](product/platform-console.md) — the privileged Hyfens
-  operator surface at `admin.hyfens.com`.
+  operator surface at `platform.hyfens.com`.
 - [Cloud and self-hosted boundary](HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md) — what
   is provided by the managed service versus the Apache-licensed foundation.
 
