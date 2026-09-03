@@ -25,7 +25,7 @@
     'platform-support',
     'platform-settings',
   ]);
-  const PLATFORM_HOSTNAMES = new Set(['admin.hyfens.com', 'platform.hyfens.com']);
+  const PLATFORM_HOSTNAMES = new Set(['platform.hyfens.com']);
 
   const PAGE_COPY = {
     overview: {

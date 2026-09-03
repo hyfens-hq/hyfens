@@ -7,8 +7,7 @@ is intended for authorized Hyfens owners, administrators, support, operations,
 security, and commercial operators where the corresponding capability exists.
 The canonical managed host is `platform.hyfens.com`; its DNS record, TLS
 certificate, edge route, and API-origin allow-list are active. Local
-development uses the `/platform` route root. `admin.hyfens.com` is a retired
-legacy hostname and is not a supported managed endpoint.
+development uses the `/platform` route root.
 
 ## Audience and boundary
 

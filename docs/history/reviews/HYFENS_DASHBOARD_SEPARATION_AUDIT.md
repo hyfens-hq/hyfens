@@ -32,7 +32,7 @@ hyfens.com
 app.hyfens.com or self-hosted instance origin
     Customer Workspace
 
-admin.hyfens.com or platform.hyfens.com
+platform.hyfens.com
     Hyfens Platform Console
 
 api.hyfens.com or self-hosted control-plane origin
@@ -516,7 +516,7 @@ hyfens.com
 app.hyfens.com
   Customer Workspace: one customer's organization context
 
-admin.hyfens.com  (or platform.hyfens.com; naming to be finalized later)
+platform.hyfens.com
   Platform Console: Hyfens internal operations
 
 api.hyfens.com

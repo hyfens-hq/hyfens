@@ -72,25 +72,20 @@ Completed checks include:
 ## Next Action
 
 Complete the bounded authenticated browser acceptance with disposable customer
-and authorized platform sessions. Retire the stale `admin.hyfens.com` DNS
-alias, or issue it a valid certificate and make it an explicit redirect to
-`platform.hyfens.com`; do not leave it publicly resolving with an invalid TLS
-certificate.
+and authorized platform sessions. The canonical platform hostname is
+`platform.hyfens.com`; no secondary managed platform hostname is supported.
 
 ## Blockers
 
 - No authenticated disposable browser session is available in the browser
   connector, so authenticated customer/platform flows and cross-audience
   denial remain unproven.
-- `admin.hyfens.com` is a stale legacy DNS alias whose certificate does not
-  cover the hostname; it is not the supported Platform Console endpoint.
 
 ## Outcome
 
 Customer Workspace and the canonical Platform Console deployment are live and
 API-safe. Full live-dashboard acceptance remains externally gated by the lack
-of authenticated disposable browser test sessions. The legacy `admin` alias
-also needs to be retired or converted to a valid redirect.
+of authenticated disposable browser test sessions.
 
 ## References
 

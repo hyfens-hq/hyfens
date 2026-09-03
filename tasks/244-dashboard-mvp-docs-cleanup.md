@@ -62,7 +62,7 @@ Coordinator — dashboard MVP integration and documentation governance
 ## Assumptions
 
 - `app.hyfens.com` remains the Customer Workspace concept.
-- `admin.hyfens.com` remains the managed Platform Console concept.
+- `platform.hyfens.com` remains the managed Platform Console concept.
 - Self-hosted instances use the same customer product model with capability-
   driven differences.
 - Backend authorization and audit are authoritative for every new mutation.

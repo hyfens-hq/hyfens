@@ -29,7 +29,7 @@ The intended managed topology is:
 ```text
 hyfens.com       public website
 app.hyfens.com   Customer Workspace
-admin.hyfens.com Platform Console
+platform.hyfens.com Platform Console
 api.hyfens.com   shared control-plane API
 ```
 
@@ -233,7 +233,7 @@ customer: /, /applications, /settings
 platform: /platform, /platform/organizations,
           /platform/organizations/{id}, /platform/audit,
           /platform/operations, /platform/settings
-platform host: admin.hyfens.com equivalent routes
+platform host: platform.hyfens.com equivalent routes
 ```
 
 ## 11. Remaining backlog
@@ -248,7 +248,7 @@ The following are deliberately not part of this bounded implementation:
 - plans/entitlements, incidents, infrastructure/provider state, and advanced
   platform audit feeds;
 - explicit time-limited support sessions and MFA/network hardening;
-- DNS and production deployment of `app.hyfens.com` and `admin.hyfens.com`.
+- DNS and production deployment of `app.hyfens.com` and `platform.hyfens.com`.
 
 These are follow-up product work, not defects in the shell-separation
 boundary.

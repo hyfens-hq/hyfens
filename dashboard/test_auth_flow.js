@@ -67,8 +67,8 @@ test('the managed dashboard keeps its public control-plane fallback', () => {
 
 test('the platform console shares the managed control-plane fallback', () => {
   const { api } = loadAuthFlow({
-    hostname: 'admin.hyfens.com',
-    origin: 'https://admin.hyfens.com',
+    hostname: 'platform.hyfens.com',
+    origin: 'https://platform.hyfens.com',
   });
 
   assert.equal(api.apiBase(), 'https://api.hyfens.com/');

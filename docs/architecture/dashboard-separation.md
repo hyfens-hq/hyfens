@@ -97,8 +97,7 @@ while a platform host supports the equivalent root routes:
 On `platform.hyfens.com`, the platform pages are addressed as `/`,
 `/organizations`, `/organizations/:id`, `/audit`, `/operations`, `/commercial`,
 `/support`, and `/settings`. The host/path split is implemented in the static
-route resolver and local server fallback. `admin.hyfens.com` is a retired
-legacy hostname and is not a supported managed endpoint.
+route resolver and local server fallback use the canonical managed hostname.
 
 ## API boundary
 
@@ -250,7 +249,6 @@ CLI handoffs, not fake buttons or direct persistence mutations.
 The current managed edge serves the Customer Workspace bundle from
 `app.hyfens.com`, the Platform Console from `platform.hyfens.com`, and keeps
 the shared API at `api.hyfens.com`. The Platform Console remains a separate
-product surface and is not exposed through the customer host. The retired
-`admin.hyfens.com` name is not part of the supported managed route. Neither
-surface is automatically made available in ordinary self-hosted deployments
+product surface and is not exposed through the customer host. Neither surface
+is automatically made available in ordinary self-hosted deployments
 beyond the documented Customer Workspace.

@@ -102,7 +102,7 @@ PLATFORM_STAFF_INVITATION_REVOKE_PATH = re.compile(
 PLATFORM_VIEW_PATH = re.compile(r"^/platform/organizations/[^/]+$")
 PLATFORM_HOST_ORGANIZATION_PATH = re.compile(r"^/organizations/[^/]+$")
 INVITATION_VIEW_PATH = re.compile(r"^/(?:invite|staff-invite)/[^/]+$")
-PLATFORM_HOSTNAMES = {"admin.hyfens.com", "platform.hyfens.com"}
+PLATFORM_HOSTNAMES = {"platform.hyfens.com"}
 PLATFORM_HOST_VIEW_PATHS = {
     "/",
     "/organizations",

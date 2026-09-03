@@ -433,7 +433,7 @@ class ProxyRouteTest(unittest.TestCase):
                 status, body = self.request(
                     "GET",
                     path,
-                    headers={"Host": "admin.hyfens.com"},
+                    headers={"Host": "platform.hyfens.com"},
                 )
                 self.assertEqual(status, 200)
                 self.assertIn(b"Platform Console", body)
