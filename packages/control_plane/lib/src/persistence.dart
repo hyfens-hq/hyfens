@@ -172,6 +172,9 @@ final class FileControlPlaneStore
       'observations',
       'waitlist',
       'newsletter',
+      'organization_invitations',
+      'support_cases',
+      'support_messages',
     ]) {
       await Directory(p.join(root.path, name)).create(recursive: true);
     }

@@ -26,6 +26,7 @@ import 'persistence.dart';
 import 'reconciliation.dart';
 import 'release_bundle.dart';
 import 'rollout.dart';
+import 'support.dart';
 
 final class ArtifactPayload {
   const ArtifactPayload({required this.record, required this.bytes});
@@ -722,6 +723,13 @@ final class ControlPlaneService {
     );
     final application = await _application(applicationId);
     _requireTenant(application.organizationId, actor.organizationId);
+    if (application.status == 'archived') {
+      throw const ControlPlaneException(
+        'RESOURCE_ARCHIVED',
+        'Environments cannot be created under an archived application',
+        statusCode: 409,
+      );
+    }
     final normalizedName = requireNonEmpty(
       name.trim(),
       'environment name',
@@ -803,6 +811,127 @@ final class ControlPlaneService {
       },
     );
     return environment;
+  });
+
+  /// Updates mutable customer application metadata. Runtime identity and
+  /// platform are intentionally immutable once registered.
+  Future<ApplicationRecord> updateApplication({
+    required String token,
+    required String organizationId,
+    required String applicationId,
+    required String name,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      applicationWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final current = await _application(applicationId);
+    _requireTenant(current.organizationId, actor.organizationId);
+    final updated = current.copyWith(name: name, updatedAt: _now());
+    await store.replaceJson('applications', current.id, updated.toJson());
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'application.update',
+      resourceType: 'application',
+      resourceId: current.id,
+      metadata: <String, Object?>{'name': updated.name},
+    );
+    return updated;
+  });
+
+  /// Archives an application without deleting its release or audit history.
+  Future<ApplicationRecord> archiveApplication({
+    required String token,
+    required String organizationId,
+    required String applicationId,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      applicationWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final current = await _application(applicationId);
+    _requireTenant(current.organizationId, actor.organizationId);
+    if (current.status == 'archived') return current;
+    final updated = current.copyWith(status: 'archived', updatedAt: _now());
+    await store.replaceJson('applications', current.id, updated.toJson());
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'application.archive',
+      resourceType: 'application',
+      resourceId: current.id,
+      metadata: const <String, Object?>{},
+    );
+    return updated;
+  });
+
+  /// Updates mutable customer environment metadata while preserving its
+  /// version and promotion history.
+  Future<EnvironmentRecord> updateEnvironment({
+    required String token,
+    required String organizationId,
+    required String environmentId,
+    required String name,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      environmentWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final current = await _environment(environmentId);
+    _requireTenant(current.organizationId, actor.organizationId);
+    final updated = current.copyWith(name: name, updatedAt: _now());
+    await store.replaceJson('environments', current.id, updated.toJson());
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'environment.update',
+      resourceType: 'environment',
+      resourceId: current.id,
+      metadata: <String, Object?>{
+        'applicationId': current.applicationId,
+        'name': updated.name,
+      },
+    );
+    return updated;
+  });
+
+  /// Archives an environment without deleting deployment evidence.
+  Future<EnvironmentRecord> archiveEnvironment({
+    required String token,
+    required String organizationId,
+    required String environmentId,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      environmentWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final current = await _environment(environmentId);
+    _requireTenant(current.organizationId, actor.organizationId);
+    if (current.status == 'archived') return current;
+    final updated = current.copyWith(status: 'archived', updatedAt: _now());
+    await store.replaceJson('environments', current.id, updated.toJson());
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'environment.archive',
+      resourceType: 'environment',
+      resourceId: current.id,
+      metadata: <String, Object?>{'applicationId': current.applicationId},
+    );
+    return updated;
   });
 
   /// Issues one short-lived or non-expiring credential and returns its secret
@@ -1920,6 +2049,21 @@ final class ControlPlaneService {
         statusCode: 404,
       );
     }
+    if (environment.status == 'archived') {
+      throw const ControlPlaneException(
+        'RESOURCE_ARCHIVED',
+        'An archived environment cannot receive a deployment',
+        statusCode: 409,
+      );
+    }
+    final application = await _application(environment.applicationId);
+    if (application.status == 'archived') {
+      throw const ControlPlaneException(
+        'RESOURCE_ARCHIVED',
+        'An archived application cannot receive a deployment',
+        statusCode: 409,
+      );
+    }
     final patches = await store.listJson('patches');
     final quarantinedBundlePatchIds = (await store.listJson('bundle_imports'))
         .where(
@@ -1987,6 +2131,8 @@ final class ControlPlaneService {
       version: environment.version + 1,
       promotedReleaseId: release.id,
       createdAt: environment.createdAt,
+      status: environment.status,
+      updatedAt: _now(),
     );
     await store.replaceJson('environments', environment.id, promoted.toJson());
     await _saveIdempotency('promotion', idempotencyKey, body, <String, Object?>{
@@ -4241,6 +4387,563 @@ final class ControlPlaneService {
     );
   }
 
+  Future<List<Map<String, Object?>>> listOrganizationInvitations({
+    required String token,
+    required String organizationId,
+  }) async {
+    await _authorize(
+      token,
+      organizationMembersReadScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final now = _now();
+    final invitations = <Map<String, Object?>>[];
+    for (final value in await store.listJson('organization_invitations')) {
+      final invitation = OrganizationInvitationRecord.fromJson(value);
+      if (invitation.organizationId != organizationId) continue;
+      final metadata = invitation.toMetadataJson();
+      metadata['active'] =
+          invitation.revokedAt == null && invitation.expiresAt.isAfter(now);
+      invitations.add(metadata);
+    }
+    invitations.sort(
+      (left, right) =>
+          '${right['createdAt']}'.compareTo('${left['createdAt']}'),
+    );
+    return List.unmodifiable(invitations);
+  }
+
+  Future<IssuedOrganizationInvitation> inviteOrganizationMember({
+    required String token,
+    required String organizationId,
+    required String email,
+    required String role,
+    DateTime? expiresAt,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      organizationMembersWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    if (humanAuth == null) {
+      throw const ControlPlaneException(
+        'AUTH_UNAVAILABLE',
+        'Human authentication is not configured',
+        statusCode: 503,
+      );
+    }
+    final normalizedEmail = HumanAuthService.normalizeHumanEmail(email);
+    final capabilities = customerCapabilitiesForRole(role);
+    final now = _now();
+    final invitationExpiry = (expiresAt ?? now.add(const Duration(days: 7)))
+        .toUtc();
+    if (!invitationExpiry.isAfter(now) ||
+        invitationExpiry.isAfter(now.add(const Duration(days: 30)))) {
+      throw const ControlPlaneException(
+        'INVALID_INVITATION_EXPIRY',
+        'Invitation expiry must be within 30 days',
+        statusCode: 422,
+      );
+    }
+    final duplicate = (await store.listJson('organization_invitations')).any(
+      (value) =>
+          value['organizationId'] == actor.organizationId &&
+          value['email'] == normalizedEmail &&
+          value['revokedAt'] == null &&
+          value['expiresAt'] is String &&
+          DateTime.tryParse(value['expiresAt']! as String)?.isAfter(now) ==
+              true,
+    );
+    if (duplicate) {
+      throw const ControlPlaneException(
+        'INVITATION_CONFLICT',
+        'An active invitation already exists for this email',
+        statusCode: 409,
+      );
+    }
+    final invitationToken = _secretToken('hvi');
+    final invitation = OrganizationInvitationRecord(
+      id: _id('inv'),
+      organizationId: actor.organizationId,
+      email: normalizedEmail,
+      role: role,
+      capabilities: capabilities,
+      tokenHash: CredentialService.tokenHash(invitationToken),
+      createdBy: actor.id,
+      createdAt: now,
+      expiresAt: invitationExpiry,
+    );
+    await store.createJson(
+      'organization_invitations',
+      invitation.id,
+      invitation.toJson(),
+    );
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'organization.member_invitation.create',
+      resourceType: 'organization_invitation',
+      resourceId: invitation.id,
+      metadata: <String, Object?>{
+        'role': invitation.role,
+        'expiresAt': invitation.expiresAt.toIso8601String(),
+      },
+    );
+    return IssuedOrganizationInvitation(
+      record: invitation,
+      token: invitationToken,
+    );
+  });
+
+  Future<OrganizationInvitationRecord> revokeOrganizationInvitation({
+    required String token,
+    required String organizationId,
+    required String invitationId,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      organizationMembersWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final value = await store.readJson(
+      'organization_invitations',
+      invitationId,
+    );
+    if (value == null) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final invitation = OrganizationInvitationRecord.fromJson(value);
+    _requireTenant(invitation.organizationId, actor.organizationId);
+    if (invitation.revokedAt != null) return invitation;
+    final revoked = invitation.copyWith(revokedAt: _now());
+    await store.replaceJson(
+      'organization_invitations',
+      invitation.id,
+      revoked.toJson(),
+    );
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'organization.member_invitation.revoke',
+      resourceType: 'organization_invitation',
+      resourceId: invitation.id,
+      metadata: const <String, Object?>{},
+    );
+    return revoked;
+  });
+
+  Future<Map<String, Object?>> updateOrganizationMemberRole({
+    required String token,
+    required String organizationId,
+    required String userId,
+    required String role,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      organizationMembersWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final capabilities = customerCapabilitiesForRole(role);
+    final value = await store.readJson('users', userId);
+    if (value == null) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final user = HumanUserRecord.fromJson(value);
+    final index = user.memberships.indexWhere(
+      (membership) =>
+          membership.organizationId == actor.organizationId &&
+          membership.audience == customerAuthorizationAudience,
+    );
+    if (index < 0) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final current = user.memberships[index];
+    if (current.role == 'owner' || role == 'owner') {
+      throw const ControlPlaneException(
+        'OWNER_ROLE_PROTECTED',
+        'Owner membership transfer is not available in this workflow',
+        statusCode: 409,
+      );
+    }
+    final updatedMembership = HumanMembership(
+      organizationId: current.organizationId,
+      applicationId: current.applicationId,
+      environmentId: current.environmentId,
+      profileApplicationId: current.profileApplicationId,
+      profileEnvironmentId: current.profileEnvironmentId,
+      role: role,
+      capabilities: capabilities,
+      profileName: current.profileName,
+      audience: customerAuthorizationAudience,
+    );
+    final memberships = user.memberships.toList();
+    memberships[index] = updatedMembership;
+    final updated = user.copyWith(memberships: memberships, active: true);
+    await store.replaceJson('users', user.id, updated.toJson());
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'organization.member.role_update',
+      resourceType: 'user_membership',
+      resourceId: user.id,
+      metadata: <String, Object?>{'role': role},
+    );
+    return _memberMetadata(updated, actor.organizationId);
+  });
+
+  Future<void> removeOrganizationMember({
+    required String token,
+    required String organizationId,
+    required String userId,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      organizationMembersWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final value = await store.readJson('users', userId);
+    if (value == null) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final user = HumanUserRecord.fromJson(value);
+    final index = user.memberships.indexWhere(
+      (membership) =>
+          membership.organizationId == actor.organizationId &&
+          membership.audience == customerAuthorizationAudience,
+    );
+    if (index < 0) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final current = user.memberships[index];
+    if (current.role == 'owner') {
+      throw const ControlPlaneException(
+        'OWNER_ROLE_PROTECTED',
+        'The organization owner cannot be removed',
+        statusCode: 409,
+      );
+    }
+    final memberships = user.memberships.toList()..removeAt(index);
+    final updated = user.copyWith(
+      memberships: memberships.isEmpty
+          ? <HumanMembership>[current]
+          : memberships,
+      active: memberships.isEmpty ? false : user.active,
+    );
+    await store.replaceJson('users', user.id, updated.toJson());
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'organization.member.remove',
+      resourceType: 'user_membership',
+      resourceId: user.id,
+      metadata: const <String, Object?>{},
+    );
+  });
+
+  Future<Map<String, Object?>> createSupportCase({
+    required String token,
+    required String organizationId,
+    required String subject,
+    required String description,
+    String category = 'general',
+    String priority = 'NORMAL',
+    String? applicationId,
+    String? environmentId,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      supportCreateScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    await _validateSupportScope(
+      organizationId: actor.organizationId,
+      applicationId: applicationId,
+      environmentId: environmentId,
+    );
+    final now = _now();
+    final record = SupportCaseRecord(
+      id: _id('case'),
+      organizationId: actor.organizationId,
+      applicationId: applicationId,
+      environmentId: environmentId,
+      subject: subject,
+      description: description,
+      category: category,
+      priority: priority,
+      createdBy: actor.id,
+      createdAt: now,
+      updatedAt: now,
+      lastCustomerActivity: now,
+    );
+    await store.createJson('support_cases', record.id, record.toJson());
+    final message = SupportMessageRecord(
+      id: _id('msg'),
+      caseId: record.id,
+      organizationId: record.organizationId,
+      authorId: actor.id,
+      authorAudience: customerAuthorizationAudience,
+      body: description,
+      visibility: customerSupportVisibility,
+      createdAt: now,
+    );
+    await store.createJson('support_messages', message.id, message.toJson());
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'support.case.create',
+      resourceType: 'support_case',
+      resourceId: record.id,
+      metadata: <String, Object?>{
+        'priority': record.priority,
+        'category': record.category,
+      },
+    );
+    return _supportCaseView(record, includeInternal: false);
+  });
+
+  Future<Map<String, Object?>> listSupportCases({
+    required String token,
+    required String organizationId,
+    String? status,
+    String? query,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final actor = await _authorize(
+      token,
+      supportReadScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    return _supportCasePage(
+      organizationId: actor.organizationId,
+      status: status,
+      query: query,
+      limit: limit,
+      offset: offset,
+      includeInternal: false,
+    );
+  }
+
+  Future<Map<String, Object?>> readSupportCase({
+    required String token,
+    required String organizationId,
+    required String caseId,
+  }) async {
+    final actor = await _authorize(
+      token,
+      supportReadScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final record = await _supportCase(caseId);
+    _requireTenant(record.organizationId, actor.organizationId);
+    return _supportCaseView(record, includeInternal: false);
+  }
+
+  Future<Map<String, Object?>> replySupportCase({
+    required String token,
+    required String organizationId,
+    required String caseId,
+    required String body,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      supportReplyScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final record = await _supportCase(caseId);
+    _requireTenant(record.organizationId, actor.organizationId);
+    final now = _now();
+    final message = SupportMessageRecord(
+      id: _id('msg'),
+      caseId: record.id,
+      organizationId: record.organizationId,
+      authorId: actor.id,
+      authorAudience: customerAuthorizationAudience,
+      body: body,
+      visibility: customerSupportVisibility,
+      createdAt: now,
+    );
+    await store.createJson('support_messages', message.id, message.toJson());
+    final updated = record.copyWith(updatedAt: now, lastCustomerActivity: now);
+    await store.replaceJson('support_cases', record.id, updated.toJson());
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'support.case.customer_reply',
+      resourceType: 'support_case',
+      resourceId: record.id,
+      metadata: const <String, Object?>{},
+    );
+    return _supportCaseView(updated, includeInternal: false);
+  });
+
+  Future<Map<String, Object?>> listPlatformSupportCases({
+    required String accessToken,
+    String? profileName,
+    String? status,
+    String? query,
+    String? organizationId,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    await _platformUser(
+      accessToken: accessToken,
+      capability: platformSupportReadCapability,
+      profileName: profileName,
+    );
+    return _supportCasePage(
+      organizationId: organizationId,
+      status: status,
+      query: query,
+      limit: limit,
+      offset: offset,
+      includeInternal: true,
+    );
+  }
+
+  Future<Map<String, Object?>> readPlatformSupportCase({
+    required String accessToken,
+    String? profileName,
+    required String caseId,
+  }) async {
+    await _platformUser(
+      accessToken: accessToken,
+      capability: platformSupportReadCapability,
+      profileName: profileName,
+    );
+    return _supportCaseView(await _supportCase(caseId), includeInternal: true);
+  }
+
+  Future<Map<String, Object?>> updatePlatformSupportCase({
+    required String accessToken,
+    String? profileName,
+    required String caseId,
+    String? status,
+    String? priority,
+    String? assignedTo,
+    bool clearAssignedTo = false,
+    String? requestId,
+  }) => _serialized(() async {
+    final staff = await _platformUser(
+      accessToken: accessToken,
+      capability: platformSupportWriteCapability,
+      profileName: profileName,
+    );
+    final current = await _supportCase(caseId);
+    await _validatePlatformAssignee(assignedTo);
+    final now = _now();
+    final nextStatus = status ?? current.status;
+    final updated = current.copyWith(
+      status: nextStatus,
+      priority: priority,
+      assignedTo: assignedTo,
+      clearAssignedTo: clearAssignedTo,
+      updatedAt: now,
+      closedAt: nextStatus == 'CLOSED'
+          ? (current.closedAt ?? now)
+          : current.closedAt,
+      lastStaffActivity: now,
+    );
+    await store.replaceJson('support_cases', current.id, updated.toJson());
+    await _platformAudit(
+      staff: staff,
+      organizationId: current.organizationId,
+      requestId: requestId ?? _id('req'),
+      action: 'support.case.update',
+      resourceId: current.id,
+      metadata: <String, Object?>{
+        'status': updated.status,
+        'priority': updated.priority,
+        'assignedTo': updated.assignedTo,
+      },
+    );
+    return _supportCaseView(updated, includeInternal: true);
+  });
+
+  Future<Map<String, Object?>> replyPlatformSupportCase({
+    required String accessToken,
+    String? profileName,
+    required String caseId,
+    required String body,
+    String visibility = customerSupportVisibility,
+    String? requestId,
+  }) => _serialized(() async {
+    final staff = await _platformUser(
+      accessToken: accessToken,
+      capability: platformSupportWriteCapability,
+      profileName: profileName,
+    );
+    if (visibility != customerSupportVisibility &&
+        visibility != platformInternalSupportVisibility) {
+      throw const ControlPlaneException(
+        'INVALID_SUPPORT_VISIBILITY',
+        'Support visibility is not supported',
+        statusCode: 422,
+      );
+    }
+    final current = await _supportCase(caseId);
+    final now = _now();
+    final message = SupportMessageRecord(
+      id: _id('msg'),
+      caseId: current.id,
+      organizationId: current.organizationId,
+      authorId: staff.id,
+      authorAudience: platformAuthorizationAudience,
+      body: body,
+      visibility: visibility,
+      createdAt: now,
+    );
+    await store.createJson('support_messages', message.id, message.toJson());
+    final updated = current.copyWith(updatedAt: now, lastStaffActivity: now);
+    await store.replaceJson('support_cases', current.id, updated.toJson());
+    await _platformAudit(
+      staff: staff,
+      organizationId: current.organizationId,
+      requestId: requestId ?? _id('req'),
+      action: visibility == platformInternalSupportVisibility
+          ? 'support.case.internal_note'
+          : 'support.case.staff_reply',
+      resourceId: current.id,
+      metadata: <String, Object?>{'visibility': visibility},
+    );
+    return _supportCaseView(updated, includeInternal: true);
+  });
+
   Future<AuditExport> exportAudit({
     required String token,
     required String organizationId,
@@ -4282,6 +4985,270 @@ final class ControlPlaneService {
       chain: List.unmodifiable(chain),
       verification: verification,
     );
+  }
+
+  Future<SupportCaseRecord> _supportCase(String caseId) async {
+    final value = await store.readJson('support_cases', caseId);
+    if (value == null) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    return SupportCaseRecord.fromJson(value);
+  }
+
+  Future<Map<String, Object?>> _supportCaseView(
+    SupportCaseRecord record, {
+    required bool includeInternal,
+  }) async {
+    final messages =
+        (await store.listJson('support_messages'))
+            .map(SupportMessageRecord.fromJson)
+            .where(
+              (message) =>
+                  message.caseId == record.id &&
+                  (includeInternal ||
+                      message.visibility == customerSupportVisibility),
+            )
+            .toList(growable: false)
+          ..sort((left, right) {
+            final byTime = left.createdAt.compareTo(right.createdAt);
+            return byTime != 0 ? byTime : left.id.compareTo(right.id);
+          });
+    return <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': false,
+      'scope': includeInternal ? 'platform' : 'customer',
+      'case': record.toJson(),
+      'messages': messages
+          .map(
+            (message) =>
+                message.toPublicJson(includeVisibility: includeInternal),
+          )
+          .toList(growable: false),
+    };
+  }
+
+  Future<Map<String, Object?>> _supportCasePage({
+    String? organizationId,
+    String? status,
+    String? query,
+    required int limit,
+    required int offset,
+    required bool includeInternal,
+  }) async {
+    if (limit <= 0 || limit > 100 || offset < 0 || offset > 100000) {
+      throw const ControlPlaneException(
+        'INVALID_PAGE',
+        'Support case pagination is outside the supported range',
+        statusCode: 422,
+      );
+    }
+    if (status != null && !supportCaseStatuses.contains(status)) {
+      throw const ControlPlaneException(
+        'INVALID_SUPPORT_STATUS',
+        'Support case status is not supported',
+        statusCode: 422,
+      );
+    }
+    final normalizedQuery = query?.trim().toLowerCase() ?? '';
+    if (normalizedQuery.length > 128) {
+      throw const ControlPlaneException(
+        'INVALID_QUERY',
+        'Support case search is too long',
+        statusCode: 422,
+      );
+    }
+    final cases = <SupportCaseRecord>[];
+    for (final value in await store.listJson('support_cases')) {
+      final record = SupportCaseRecord.fromJson(value);
+      if (organizationId != null && record.organizationId != organizationId) {
+        continue;
+      }
+      if (status != null && record.status != status) continue;
+      if (normalizedQuery.isNotEmpty &&
+          !<String>[
+            record.id,
+            record.organizationId,
+            record.applicationId ?? '',
+            record.environmentId ?? '',
+            record.subject,
+            record.category,
+          ].any((value) => value.toLowerCase().contains(normalizedQuery))) {
+        continue;
+      }
+      cases.add(record);
+    }
+    cases.sort((left, right) {
+      final byTime = right.updatedAt.compareTo(left.updatedAt);
+      return byTime != 0 ? byTime : left.id.compareTo(right.id);
+    });
+    final page = cases.skip(offset).take(limit).toList(growable: false);
+    return <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': false,
+      'scope': includeInternal ? 'platform' : 'customer',
+      'cases': page.map((record) => record.toJson()).toList(growable: false),
+      'counts': <String, Object?>{
+        'matching': cases.length,
+        'returned': page.length,
+        'open': cases
+            .where(
+              (record) =>
+                  record.status != 'CLOSED' && record.status != 'RESOLVED',
+            )
+            .length,
+      },
+      if (offset + page.length < cases.length)
+        'nextOffset': offset + page.length,
+    };
+  }
+
+  Future<void> _validateSupportScope({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+  }) async {
+    if (applicationId == null && environmentId != null) {
+      throw const ControlPlaneException(
+        'INVALID_SCOPE',
+        'An environment requires its application',
+        statusCode: 422,
+      );
+    }
+    if (applicationId != null) {
+      final application = await _application(applicationId);
+      _requireTenant(application.organizationId, organizationId);
+    }
+    if (environmentId != null) {
+      final environment = await _environment(environmentId);
+      _requireTenant(environment.organizationId, organizationId);
+      if (environment.applicationId != applicationId) {
+        throw const ControlPlaneException(
+          'NOT_FOUND',
+          'Resource was not found',
+          statusCode: 404,
+        );
+      }
+    }
+  }
+
+  Future<HumanUserRecord> _platformUser({
+    required String accessToken,
+    required String capability,
+    String? profileName,
+  }) async {
+    final auth = humanAuth;
+    if (auth == null) {
+      throw const ControlPlaneException(
+        'AUTH_UNAVAILABLE',
+        'Human authentication is not configured',
+        statusCode: 503,
+      );
+    }
+    return auth.authorizePlatformCapability(
+      accessToken: accessToken,
+      capability: capability,
+      profileName: profileName,
+    );
+  }
+
+  Future<void> _validatePlatformAssignee(String? userId) async {
+    if (userId == null) return;
+    final value = await store.readJson('users', userId);
+    if (value == null) {
+      throw const ControlPlaneException(
+        'INVALID_SUPPORT_ASSIGNEE',
+        'Support cases can only be assigned to an existing platform user',
+        statusCode: 422,
+      );
+    }
+    final user = HumanUserRecord.fromJson(value);
+    final isPlatformStaff =
+        user.active &&
+        user.memberships.any(
+          (membership) =>
+              membership.audience == platformAuthorizationAudience &&
+              membership.platformCapabilities.isNotEmpty,
+        );
+    if (!isPlatformStaff) {
+      throw const ControlPlaneException(
+        'INVALID_SUPPORT_ASSIGNEE',
+        'Support cases can only be assigned to an active platform user',
+        statusCode: 422,
+      );
+    }
+  }
+
+  Future<void> _platformAudit({
+    required HumanUserRecord staff,
+    required String organizationId,
+    required String requestId,
+    required String action,
+    required String resourceId,
+    required Map<String, Object?> metadata,
+  }) {
+    final actor = CredentialRecord(
+      id: staff.id,
+      organizationId: organizationId,
+      name: 'Platform session',
+      kind: CredentialKind.control,
+      tokenHash: 'platform-session',
+      scopes: controlScopes,
+      applicationId: null,
+      environmentId: null,
+      createdAt: staff.createdAt,
+      expiresAt: null,
+      revoked: false,
+    );
+    return _audit(
+      requestId: requestId,
+      actor: actor,
+      action: action,
+      resourceType: 'support_case',
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        ...metadata,
+        'audience': platformAuthorizationAudience,
+      },
+    );
+  }
+
+  Map<String, Object?> _memberMetadata(
+    HumanUserRecord user,
+    String organizationId,
+  ) {
+    final memberships = user.memberships
+        .where(
+          (membership) =>
+              membership.organizationId == organizationId &&
+              membership.audience == customerAuthorizationAudience,
+        )
+        .map(
+          (membership) => <String, Object?>{
+            'role': membership.role,
+            'profileName': membership.profileName,
+            'audience': membership.audience,
+            'applicationId': membership.applicationId,
+            'environmentId': membership.environmentId,
+            'capabilities': membership.capabilities.toList()..sort(),
+          },
+        )
+        .toList(growable: false);
+    return <String, Object?>{
+      'id': user.id,
+      'email': user.email,
+      'active': user.active,
+      'createdAt': user.createdAt.toUtc().toIso8601String(),
+      'memberships': memberships,
+    };
+  }
+
+  String _secretToken(String prefix) {
+    final bytes = List<int>.generate(32, (_) => _random.nextInt(256));
+    return '$prefix.${base64Url.encode(bytes).replaceAll('=', '')}';
   }
 
   Future<ArtifactReconciliationReport> reconcileArtifacts({

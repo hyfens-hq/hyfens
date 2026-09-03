@@ -21,6 +21,8 @@
     'platform-operations',
     'platform-users',
     'platform-entitlements',
+    'platform-commercial',
+    'platform-support',
     'platform-settings',
   ]);
   const PLATFORM_HOSTNAMES = new Set(['admin.hyfens.com', 'platform.hyfens.com']);
@@ -58,6 +60,14 @@
       title: 'Plans & entitlements',
       description: 'Read-only commercial and quota metadata for platform operations.',
     },
+    'platform-commercial': {
+      title: 'Commercial',
+      description: 'Subscription-backed recurring metrics with an explicit data-source boundary.',
+    },
+    'platform-support': {
+      title: 'Support',
+      description: 'Tenant-aware customer cases and auditable staff assistance.',
+    },
     'platform-settings': {
       title: 'Platform settings',
       description: 'Platform operator settings and access boundary.',
@@ -93,6 +103,10 @@
     settings: {
       title: 'Settings',
       description: 'Human session, membership scope, endpoint, and account surfaces.',
+    },
+    support: {
+      title: 'Support',
+      description: 'Ask Hyfens for help and keep the organization conversation in one auditable place.',
     },
   };
 
@@ -364,6 +378,8 @@
         operations: 'platform-operations',
         users: 'platform-users',
         entitlements: 'platform-entitlements',
+        commercial: 'platform-commercial',
+        support: 'platform-support',
         settings: 'platform-settings',
       };
       return {
@@ -403,10 +419,25 @@
     platformUsersError: null,
     platformEntitlements: null,
     platformEntitlementsError: null,
+    platformCommercial: null,
+    platformCommercialError: null,
+    platformSupportCases: null,
+    platformSupportCasesError: null,
+    platformSupportCase: null,
+    platformSupportCaseError: null,
     platformDataLoading: false,
     platformDataGeneration: 0,
     organizationMembers: null,
     organizationMembersError: null,
+    organizationInvitations: null,
+    organizationInvitationsError: null,
+    issuedInvitation: null,
+    supportCases: null,
+    supportCasesError: null,
+    supportCase: null,
+    supportCaseError: null,
+    supportLoading: false,
+    supportDataGeneration: 0,
     credentials: null,
     credentialsError: null,
     issuedCredential: null,
@@ -656,6 +687,65 @@
       );
     }
 
+    async platformCommercial(profileName, { signal } = {}) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/commercial${query}`, {
+          requiresAuth: true,
+          signal,
+        }),
+      );
+    }
+
+    async platformSupportCases(profileName, options = {}, { signal } = {}) {
+      const parameters = new URLSearchParams();
+      if (profileName) parameters.set('profile', profileName);
+      for (const [key, value] of Object.entries(options)) {
+        if (value !== undefined && value !== null && value !== '') {
+          parameters.set(key, String(value));
+        }
+      }
+      const suffix = parameters.toString() ? `?${parameters.toString()}` : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/support/cases${suffix}`, {
+          requiresAuth: true,
+          signal,
+        }),
+      );
+    }
+
+    async platformSupportCase(profileName, caseId, { signal } = {}) {
+      const query = profileName ? `?profile=${encodeURIComponent(profileName)}` : '';
+      return unwrapPayload(
+        await this.request(
+          `v1/platform/support/cases/${encodeURIComponent(caseId)}${query}`,
+          { requiresAuth: true, signal },
+        ),
+      );
+    }
+
+    async updatePlatformSupportCase(profileName, caseId, body) {
+      const query = profileName ? `?profile=${encodeURIComponent(profileName)}` : '';
+      return unwrapPayload(
+        await this.request(
+          `v1/platform/support/cases/${encodeURIComponent(caseId)}${query}`,
+          { method: 'PATCH', body, requiresAuth: true },
+        ),
+      );
+    }
+
+    async replyPlatformSupportCase(profileName, caseId, body) {
+      const query = profileName ? `?profile=${encodeURIComponent(profileName)}` : '';
+      return unwrapPayload(
+        await this.request(
+          `v1/platform/support/cases/${encodeURIComponent(caseId)}/messages${query}`,
+          { method: 'POST', body, requiresAuth: true },
+        ),
+      );
+    }
+
     async createApplication(organizationId, body, idempotencyKey) {
       return unwrapPayload(
         await this.request(
@@ -666,6 +756,24 @@
             requiresAuth: true,
             headers: { 'Idempotency-Key': idempotencyKey },
           },
+        ),
+      );
+    }
+
+    async updateApplication(organizationId, applicationId, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/applications/${encodeURIComponent(applicationId)}`,
+          { method: 'PATCH', body, requiresAuth: true },
+        ),
+      );
+    }
+
+    async archiveApplication(organizationId, applicationId) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/applications/${encodeURIComponent(applicationId)}/archive`,
+          { method: 'POST', body: {}, requiresAuth: true },
         ),
       );
     }
@@ -689,6 +797,24 @@
             requiresAuth: true,
             headers: { 'Idempotency-Key': idempotencyKey },
           },
+        ),
+      );
+    }
+
+    async updateEnvironment(organizationId, environmentId, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}`,
+          { method: 'PATCH', body, requiresAuth: true },
+        ),
+      );
+    }
+
+    async archiveEnvironment(organizationId, environmentId) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}/archive`,
+          { method: 'POST', body: {}, requiresAuth: true },
         ),
       );
     }
@@ -719,6 +845,51 @@
       );
     }
 
+    async updateOrganizationMember(organizationId, userId, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}`,
+          { method: 'PATCH', body, requiresAuth: true },
+        ),
+      );
+    }
+
+    async removeOrganizationMember(organizationId, userId) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}/remove`,
+          { method: 'POST', body: {}, requiresAuth: true },
+        ),
+      );
+    }
+
+    async organizationInvitations(organizationId, { signal } = {}) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/invitations`,
+          { requiresAuth: true, signal },
+        ),
+      );
+    }
+
+    async inviteOrganizationMember(organizationId, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/invitations`,
+          { method: 'POST', body, requiresAuth: true },
+        ),
+      );
+    }
+
+    async revokeOrganizationInvitation(organizationId, invitationId) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/invitations/${encodeURIComponent(invitationId)}/revoke`,
+          { method: 'POST', body: {}, requiresAuth: true },
+        ),
+      );
+    }
+
     async credentials(organizationId, { signal } = {}) {
       return unwrapPayload(
         await this.request(
@@ -733,6 +904,42 @@
         await this.request(
           `v1/organizations/${encodeURIComponent(organizationId)}/credentials/${encodeURIComponent(credentialId)}/revoke`,
           { method: 'POST', requiresAuth: true, body: {} },
+        ),
+      );
+    }
+
+    async supportCases(organizationId, { signal } = {}) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/support/cases`,
+          { requiresAuth: true, signal },
+        ),
+      );
+    }
+
+    async createSupportCase(organizationId, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/support/cases`,
+          { method: 'POST', body, requiresAuth: true },
+        ),
+      );
+    }
+
+    async supportCase(organizationId, caseId, { signal } = {}) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/support/cases/${encodeURIComponent(caseId)}`,
+          { requiresAuth: true, signal },
+        ),
+      );
+    }
+
+    async replySupportCase(organizationId, caseId, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/support/cases/${encodeURIComponent(caseId)}/messages`,
+          { method: 'POST', body, requiresAuth: true },
         ),
       );
     }
@@ -982,6 +1189,8 @@
       if (view === 'platform-operations') return `${prefix}/operations`;
       if (view === 'platform-users') return `${prefix}/users`;
       if (view === 'platform-entitlements') return `${prefix}/entitlements`;
+      if (view === 'platform-commercial') return `${prefix}/commercial`;
+      if (view === 'platform-support') return `${prefix}/support`;
       if (view === 'platform-settings') return `${prefix}/settings`;
     }
     return view === 'overview' ? '/' : `/${view}`;
@@ -1763,6 +1972,8 @@
       'platform-operations': 'platform:overview',
       'platform-users': 'platform:accounts:read',
       'platform-entitlements': 'platform:entitlements:read',
+      'platform-commercial': 'platform:commercial:read',
+      'platform-support': 'platform:support:read',
       'platform-settings': 'platform:overview',
     }[view] ?? null;
   }
@@ -2296,6 +2507,12 @@
       element('p', 'settings-note', 'Use these measurements for operational orientation. Durable analytics, billing, cohort reporting, and SLA reporting require a separate production telemetry system.'),
     );
     stack.append(intro.section, renderPlatformMetricGrid(snapshot));
+    const operatingContext = element('div', 'overview-grid');
+    const commercialSummary = renderPlatformCommercialSummary();
+    const supportSummary = renderPlatformSupportSummary();
+    if (commercialSummary) operatingContext.append(commercialSummary);
+    if (supportSummary) operatingContext.append(supportSummary);
+    if (operatingContext.childElementCount > 0) stack.append(operatingContext);
     const details = element('div', 'overview-grid');
     details.append(
       renderPlatformActivityPanel(snapshot),
@@ -2303,6 +2520,61 @@
     );
     stack.append(details);
     return stack;
+  }
+
+  function renderPlatformCommercialSummary() {
+    if (!hasPlatformCapability('platform:commercial:read')) return null;
+    const panel = makePanel(
+      'Commercial signal',
+      'Read-only recurring metrics from active subscription and plan records. Payment history is not inferred.',
+      'Platform scope',
+    );
+    const projection = state.platformCommercial;
+    if (!projection) {
+      panel.body.append(stateBlock('unavailable', 'Commercial metrics unavailable', platformDataUnavailableReason('platform-commercial')));
+      return panel.section;
+    }
+    const status = stringValue(pick(projection, 'status')) ?? 'SOURCE_NOT_AVAILABLE';
+    const currency = pick(projection, 'currency');
+    const grid = element('div', 'metric-grid');
+    grid.append(
+      metricCard('MRR', status === 'AVAILABLE' ? formatMinorAmount(pick(projection, 'mrrMinor'), currency) : 'Not available', status === 'AVAILABLE' ? 'Active recurring plans' : supportLabel(status)),
+      metricCard('Paid organizations', countValue(pick(projection, 'paidOrganizations')), 'Unique active subscriptions'),
+      metricCard('Open support cases', countValue(openSupportCaseCount(state.platformSupportCases)), 'Platform support projection'),
+    );
+    panel.body.append(grid, element('p', 'settings-note', pick(projection, 'note') || 'Commercial source is not available.'));
+    return panel.section;
+  }
+
+  function renderPlatformSupportSummary() {
+    if (!hasPlatformCapability('platform:support:read')) return null;
+    const panel = makePanel(
+      'Support queue',
+      'Tenant-aware support cases visible to the authorized platform support audience.',
+      'Platform scope',
+    );
+    if (!state.platformSupportCases) {
+      panel.body.append(stateBlock('unavailable', 'Support queue unavailable', platformDataUnavailableReason('platform-support')));
+      return panel.section;
+    }
+    const cases = arrayValue(state.platformSupportCases.cases);
+    const open = openSupportCaseCount(state.platformSupportCases);
+    const urgent = cases.filter((record) => String(pick(record, 'priority') ?? '').toUpperCase() === 'URGENT' && !['RESOLVED', 'CLOSED'].includes(String(pick(record, 'status') ?? '').toUpperCase())).length;
+    const grid = element('div', 'metric-grid');
+    grid.append(
+      metricCard('Open cases', countValue(open), 'Not resolved or closed'),
+      metricCard('Urgent cases', countValue(urgent), 'Current page projection'),
+      metricCard('Returned', countValue(cases.length), 'Bounded support page'),
+    );
+    panel.body.append(grid, element('p', 'settings-note', 'Open the Support section for assignment, status, and customer-visible replies.'));
+    return panel.section;
+  }
+
+  function openSupportCaseCount(projection) {
+    const counts = objectValue(projection?.counts);
+    if (Number.isInteger(counts?.open) && counts.open >= 0) return counts.open;
+    const cases = arrayValue(projection?.cases);
+    return cases.filter((record) => !['RESOLVED', 'CLOSED'].includes(String(pick(record, 'status') ?? '').toUpperCase())).length;
   }
 
   function platformAccessUnavailable(title) {
@@ -2413,24 +2685,26 @@
     applicationsPanel.body.append(applications.length === 0
       ? stateBlock('empty', 'No applications returned', 'The organization projection contains no application metadata.')
       : recordTable(
-        ['Application', 'Runtime identity', 'Created'],
+        ['Application', 'Runtime identity', 'Status', 'Updated'],
         applications,
         (item) => tableRow([
           primaryCell(recordId(item)),
           codeValue(pick(item, 'runtimeApplicationId')),
-          dateValue(pick(item, 'createdAt')),
+          statusTag(pick(item, 'status') ?? 'active'),
+          dateValue(pick(item, 'updatedAt') ?? pick(item, 'createdAt')),
         ]),
       ));
     const environmentsPanel = makePanel('Environments', 'Environment metadata returned for operational inspection.', `${environments.length} returned`);
     environmentsPanel.body.append(environments.length === 0
       ? stateBlock('empty', 'No environments returned', 'The organization projection contains no environment metadata.')
       : recordTable(
-        ['Environment', 'Application', 'Version', 'Promoted release'],
+        ['Environment', 'Application', 'Version', 'Status', 'Promoted release'],
         environments,
         (item) => tableRow([
           primaryCell(pick(item, 'name'), recordId(item)),
           codeValue(pick(item, 'applicationId')),
           stringValue(pick(item, 'version')) ?? 'Not set',
+          statusTag(pick(item, 'status') ?? 'active'),
           codeValue(pick(item, 'promotedReleaseId')),
         ]),
       ));
@@ -2571,6 +2845,208 @@
       ));
     stack.append(plansPanel.section, subscriptionsPanel.section);
     return stack;
+  }
+
+  const SUPPORT_STATUSES = [
+    'OPEN',
+    'IN_PROGRESS',
+    'WAITING_FOR_CUSTOMER',
+    'WAITING_FOR_HYFENS',
+    'RESOLVED',
+    'CLOSED',
+  ];
+  const SUPPORT_PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT'];
+
+  function supportLabel(value) {
+    return stringValue(value)?.replaceAll('_', ' ').toLowerCase()
+      .replace(/(^|\s)\S/g, (letter) => letter.toUpperCase())
+      ?? 'Not set';
+  }
+
+  function renderPlatformCommercialPage() {
+    if (!hasPlatformCapability('platform:commercial:read')) {
+      return platformAccessUnavailable('Commercial');
+    }
+    const projection = state.platformCommercial;
+    if (!projection) {
+      return unavailablePage('Commercial', platformDataUnavailableReason('platform-commercial'));
+    }
+    const stack = element('div', 'page-stack');
+    const status = stringValue(pick(projection, 'status')) ?? 'SOURCE_NOT_AVAILABLE';
+    const currency = pick(projection, 'currency');
+    const summary = makePanel(
+      'Commercial overview',
+      'Recurring metrics are derived only from active control-plane subscriptions and their authoritative plan amounts.',
+      status === 'AVAILABLE' ? 'Subscription source' : supportLabel(status),
+    );
+    const grid = element('div', 'metric-grid');
+    grid.append(
+      metricCard('MRR', status === 'AVAILABLE' ? formatMinorAmount(pick(projection, 'mrrMinor'), currency) : 'Not available', 'Active recurring plans only'),
+      metricCard('ARR', status === 'AVAILABLE' ? formatMinorAmount(pick(projection, 'arrMinor'), currency) : 'Not available', 'MRR × 12'),
+      metricCard('Active subscriptions', countValue(pick(projection, 'activeSubscriptions')), 'Authenticated/active records'),
+      metricCard('Paid organizations', countValue(pick(projection, 'paidOrganizations')), 'Unique subscribed organizations'),
+    );
+    summary.body.append(grid);
+    summary.body.append(element('p', 'settings-note', pick(projection, 'note') || 'No commercial source note was returned.'));
+    if (Array.isArray(projection.currencies)) {
+      summary.body.append(element('p', 'collection-note', `Currencies present: ${projection.currencies.join(', ')}`));
+    }
+    stack.append(summary.section);
+    return stack;
+  }
+
+  function metricCard(label, value, source) {
+    const card = element('div', 'metric-card');
+    card.append(
+      element('span', 'metric-label', label),
+      element('strong', 'metric-value', value),
+      element('span', 'metric-source', source),
+    );
+    return card;
+  }
+
+  function supportCaseButton(record, platform = false) {
+    const id = recordId(record) ?? pick(record, 'id');
+    const button = element('button', 'button button-quiet', stringValue(pick(record, 'subject')) ?? id ?? 'Open case');
+    button.type = 'button';
+    if (platform) button.dataset.platformSupportCase = id ?? '';
+    else button.dataset.customerSupportCase = id ?? '';
+    return button;
+  }
+
+  function renderPlatformSupportPage() {
+    if (!hasPlatformCapability('platform:support:read')) {
+      return platformAccessUnavailable('Support');
+    }
+    const projection = state.platformSupportCases;
+    if (!projection) {
+      return unavailablePage('Support', platformDataUnavailableReason('platform-support'));
+    }
+    const cases = arrayValue(projection.cases);
+    const stack = element('div', 'page-stack');
+    const panel = makePanel(
+      'Customer support queue',
+      'Explicit tenant-aware support cases. Staff notes and customer-visible replies use separate visibility values.',
+      `${countValue(pick(pick(projection, 'counts'), 'matching'))} matching`,
+    );
+    panel.body.append(cases.length === 0
+      ? stateBlock('empty', 'No support cases', 'The support queue is clear for the current platform scope.')
+      : recordTable(
+        ['Case', 'Organization', 'Status', 'Priority', 'Assigned', 'Updated'],
+        cases,
+        (record) => tableRow([
+          primaryCell(supportCaseButton(record, true), recordId(record)),
+          codeValue(pick(record, 'organizationId')),
+          statusTag(pick(record, 'status')),
+          statusTag(pick(record, 'priority')),
+          stringValue(pick(record, 'assignedTo')) ?? 'Unassigned',
+          dateValue(pick(record, 'updatedAt')),
+        ]),
+      ));
+    stack.append(panel.section);
+    if (state.platformSupportCase) {
+      stack.append(renderSupportCaseDetail(state.platformSupportCase, true));
+    }
+    return stack;
+  }
+
+  function renderSupportCaseMessages(messages, platform) {
+    const list = element('ol', 'support-message-list');
+    if (messages.length === 0) {
+      list.append(element('li', 'collection-note', 'No messages have been recorded.'));
+      return list;
+    }
+    for (const message of messages) {
+      const item = element('li', 'support-message');
+      const header = element('div', 'record-meta');
+      header.append(
+        element('strong', '', pick(message, 'authorAudience') === 'platform' ? 'Hyfens staff' : 'Customer'),
+        statusTag(pick(message, 'visibility') ?? (platform ? 'customer' : 'visible')),
+        dateValue(pick(message, 'createdAt')),
+      );
+      item.append(header, element('p', '', pick(message, 'body') ?? ''));
+      list.append(item);
+    }
+    return list;
+  }
+
+  function renderSupportCaseDetail(projection, platform) {
+    const record = objectValue(projection.case) ?? {};
+    const title = stringValue(pick(record, 'subject')) ?? 'Support case';
+    const panel = makePanel(
+      title,
+      platform
+        ? 'Support inspection is explicit and audited. This does not impersonate a customer session.'
+        : 'Only members of this organization can see this case and its customer-visible conversation.',
+      supportLabel(pick(record, 'status')),
+    );
+    const fields = element('div', 'field-grid');
+    fields.append(
+      metadataItem('Case ID', pick(record, 'id'), { code: true }),
+      metadataItem('Organization', pick(record, 'organizationId'), { code: true }),
+      metadataItem('Priority', supportLabel(pick(record, 'priority'))),
+      metadataItem('Category', pick(record, 'category')),
+      metadataItem('Application', pick(record, 'applicationId'), { code: true }),
+      metadataItem('Environment', pick(record, 'environmentId'), { code: true }),
+      metadataItem('Assigned to', pick(record, 'assignedTo') ?? 'Unassigned'),
+      metadataItem('Updated', formatDateText(pick(record, 'updatedAt'))),
+    );
+    panel.body.append(fields);
+    panel.body.append(renderSupportCaseMessages(arrayValue(projection.messages), platform));
+    if (platform && hasPlatformCapability('platform:support:write')) {
+      const updateForm = element('form', 'action-form-inset');
+      updateForm.dataset.dashboardAction = 'platform-support-update';
+      updateForm.dataset.caseId = recordId(record) ?? '';
+      updateForm.append(element('h3', '', 'Update case'));
+      const status = supportSelect('status', SUPPORT_STATUSES, pick(record, 'status'));
+      const priority = supportSelect('priority', SUPPORT_PRIORITIES, pick(record, 'priority'));
+      const assignee = element('input');
+      assignee.type = 'text';
+      assignee.name = 'assigned_to';
+      assignee.value = stringValue(pick(record, 'assignedTo')) ?? '';
+      assignee.placeholder = 'Staff user ID (optional)';
+      const fieldsGrid = element('div', 'action-form-grid');
+      fieldsGrid.append(formField('Status', status), formField('Priority', priority), formField('Assigned to', assignee));
+      updateForm.append(fieldsGrid, actionSubmitButton('platform-support-update', 'Save case'));
+      panel.body.append(updateForm);
+      const replyForm = supportReplyForm(true, recordId(record));
+      panel.body.append(replyForm);
+    } else if (!platform && hasCustomerCapability('support:reply')) {
+      panel.body.append(supportReplyForm(false, recordId(record)));
+    }
+    return panel.section;
+  }
+
+  function supportSelect(name, values, selected) {
+    const select = element('select');
+    select.name = name;
+    for (const value of values) {
+      const option = element('option', '', supportLabel(value));
+      option.value = value;
+      option.selected = value === selected;
+      select.append(option);
+    }
+    return select;
+  }
+
+  function supportReplyForm(platform, caseId) {
+    const form = element('form', 'action-form-inset');
+    form.dataset.dashboardAction = platform ? 'platform-support-reply' : 'support-reply';
+    form.dataset.caseId = caseId ?? '';
+    form.append(element('h3', '', platform ? 'Add support response' : 'Reply to Hyfens'));
+    const body = element('textarea');
+    body.name = 'body';
+    body.rows = 4;
+    body.maxLength = 8000;
+    body.required = true;
+    body.placeholder = platform ? 'Write a customer response or internal note.' : 'Describe what you need help with or add an update.';
+    const fields = element('div', 'action-form-grid');
+    fields.append(formField('Message', body));
+    if (platform) {
+      fields.append(formField('Visibility', supportSelect('visibility', ['customer', 'platform_internal'], 'customer'), 'Internal notes never appear in Customer Workspace.'));
+    }
+    form.append(fields, actionSubmitButton(platform ? 'platform-support-reply' : 'support-reply', platform ? 'Send response' : 'Send reply'));
+    return form;
   }
 
   function renderPlatformSettingsPage() {
@@ -2789,19 +3265,51 @@
         'applications',
         'Applications',
         'Runtime application identities registered for the selected organization.',
-        ['Application', 'Runtime identity', 'Platform', 'Created', 'Exact record'],
+        ['Application', 'Runtime identity', 'Platform', 'Status', 'Created', 'Actions', 'Exact record'],
         items,
         (item) => tableRow([
           primaryCell(pick(item, 'name') || recordId(item), recordId(item)),
           codeValue(pick(item, 'runtimeApplicationId')),
           statusTag(pick(item, 'platform'), 'Not specified'),
+          statusTag(pick(item, 'status') ?? 'active'),
           dateValue(pick(item, 'createdAt')),
+          renderApplicationActions(item),
           exactRecordDetails(item),
         ]),
         'The control plane returned no application records for this membership scope.',
       ),
     );
     return stack;
+  }
+
+  function renderApplicationActions(item) {
+    if (!hasCustomerCapability('application:write')) {
+      return element('span', 'metadata-value muted', 'Not authorized');
+    }
+    const wrapper = element('div', 'resource-actions');
+    const form = element('form', 'inline-action-form');
+    form.dataset.dashboardAction = 'application-update';
+    form.dataset.resourceId = recordId(item) ?? '';
+    const name = element('input');
+    name.type = 'text';
+    name.name = 'name';
+    name.value = stringValue(pick(item, 'name')) ?? '';
+    name.maxLength = 120;
+    name.required = true;
+    name.setAttribute('aria-label', 'Application display name');
+    const save = element('button', 'button button-quiet', 'Save');
+    save.type = 'submit';
+    save.disabled = state.actionLoading !== null;
+    form.append(name, save);
+    wrapper.append(form);
+    if (String(pick(item, 'status') ?? 'active').toLowerCase() !== 'archived') {
+      const archive = element('button', 'button button-quiet button-danger', 'Archive');
+      archive.type = 'button';
+      archive.dataset.applicationArchive = recordId(item) ?? '';
+      archive.disabled = state.actionLoading !== null;
+      wrapper.append(archive);
+    }
+    return wrapper;
   }
 
   function renderEnvironmentCreatePanel() {
@@ -2867,20 +3375,52 @@
         'environments',
         'Environments',
         'Environment version pointers and promoted release references.',
-        ['Environment', 'Application', 'Version', 'Promoted release', 'Created', 'Exact record'],
+        ['Environment', 'Application', 'Version', 'Promoted release', 'Status', 'Created', 'Actions', 'Exact record'],
         items,
         (item) => tableRow([
           primaryCell(pick(item, 'name'), recordId(item)),
           codeValue(pick(item, 'applicationId')),
           stringValue(pick(item, 'version')) ?? 'Not set',
           codeValue(pick(item, 'promotedReleaseId')),
+          statusTag(pick(item, 'status') ?? 'active'),
           dateValue(pick(item, 'createdAt')),
+          renderEnvironmentActions(item),
           exactRecordDetails(item),
         ]),
         'The control plane returned no environment records for this membership scope.',
       ),
     );
     return stack;
+  }
+
+  function renderEnvironmentActions(item) {
+    if (!hasCustomerCapability('environment:write')) {
+      return element('span', 'metadata-value muted', 'Not authorized');
+    }
+    const wrapper = element('div', 'resource-actions');
+    const form = element('form', 'inline-action-form');
+    form.dataset.dashboardAction = 'environment-update';
+    form.dataset.resourceId = recordId(item) ?? '';
+    const name = element('input');
+    name.type = 'text';
+    name.name = 'name';
+    name.value = stringValue(pick(item, 'name')) ?? '';
+    name.maxLength = 64;
+    name.required = true;
+    name.setAttribute('aria-label', 'Environment name');
+    const save = element('button', 'button button-quiet', 'Save');
+    save.type = 'submit';
+    save.disabled = state.actionLoading !== null;
+    form.append(name, save);
+    wrapper.append(form);
+    if (String(pick(item, 'status') ?? 'active').toLowerCase() !== 'archived') {
+      const archive = element('button', 'button button-quiet button-danger', 'Archive');
+      archive.type = 'button';
+      archive.dataset.environmentArchive = recordId(item) ?? '';
+      archive.disabled = state.actionLoading !== null;
+      wrapper.append(archive);
+    }
+    return wrapper;
   }
 
   function renderReleasesPage() {
@@ -3132,6 +3672,82 @@
     return stack;
   }
 
+  function renderCustomerSupportPage() {
+    const stack = element('div', 'page-stack');
+    const createPanel = makePanel(
+      'Contact Hyfens',
+      'Create an auditable support case for the selected organization. Do not include passwords, tokens, or other secrets.',
+      hasCustomerCapability('support:create') ? 'Customer action' : 'CLI / support handoff',
+    );
+    if (hasCustomerCapability('support:create')) {
+      const form = element('form', 'action-form');
+      form.dataset.dashboardAction = 'support-create';
+      const subject = element('input');
+      subject.type = 'text';
+      subject.name = 'subject';
+      subject.maxLength = 200;
+      subject.required = true;
+      subject.placeholder = 'Unable to promote a patch';
+      const category = element('input');
+      category.type = 'text';
+      category.name = 'category';
+      category.maxLength = 64;
+      category.value = 'general';
+      category.placeholder = 'general';
+      const priority = supportSelect('priority', SUPPORT_PRIORITIES, 'NORMAL');
+      const description = element('textarea');
+      description.name = 'description';
+      description.rows = 5;
+      description.maxLength = 8000;
+      description.required = true;
+      description.placeholder = 'Describe the problem, the command you ran, and the result.';
+      const fields = element('div', 'action-form-grid');
+      fields.append(
+        formField('Subject', subject),
+        formField('Category', category),
+        formField('Priority', priority),
+        formField('Description', description),
+      );
+      form.append(fields, actionSubmitButton('support-create', 'Create support case'));
+      createPanel.body.append(form);
+    } else {
+      createPanel.body.append(cliHandoff(
+        'Support case creation is unavailable',
+        'The selected customer profile does not have the support:create capability.',
+        ['hyfens status', 'hyfens doctor'],
+      ));
+    }
+    stack.append(createPanel.section);
+
+    const projection = state.supportCases;
+    if (!projection) {
+      stack.append(unavailablePage('Support cases', customerSupportUnavailableReason('cases')));
+      return stack;
+    }
+    const cases = arrayValue(projection.cases);
+    const panel = makePanel(
+      'Your support cases',
+      'Cases and replies are visible only within the selected customer organization.',
+      `${countValue(pick(pick(projection, 'counts'), 'matching'))} matching`,
+    );
+    panel.body.append(cases.length === 0
+      ? stateBlock('empty', 'No support cases', 'There are no support cases for this organization.')
+      : recordTable(
+        ['Case', 'Status', 'Priority', 'Category', 'Updated'],
+        cases,
+        (record) => tableRow([
+          primaryCell(supportCaseButton(record), recordId(record)),
+          statusTag(pick(record, 'status')),
+          statusTag(pick(record, 'priority')),
+          stringValue(pick(record, 'category')) ?? 'General',
+          dateValue(pick(record, 'updatedAt')),
+        ]),
+      ));
+    stack.append(panel.section);
+    if (state.supportCase) stack.append(renderSupportCaseDetail(state.supportCase, false));
+    return stack;
+  }
+
   function safeAuditRecord(record) {
     return safeAuditValue(record, SAFE_AUDIT_RECORD_KEYS) ?? {};
   }
@@ -3156,6 +3772,7 @@
 
   function renderOrganizationMembersPanel() {
     const members = state.organizationMembers;
+    const canManage = hasCustomerCapability('organization:members:write');
     const panel = makePanel(
       'Team members',
       'Members of the selected customer organization. Passwords, sessions, and credential material are never returned.',
@@ -3165,36 +3782,118 @@
       panel.body.append(stateBlock('unavailable', 'Member metadata unavailable', customerSettingsUnavailableReason('members')));
       return panel.section;
     }
-    if (members.length === 0) {
-      panel.body.append(stateBlock('empty', 'No members returned', 'The selected organization has no member metadata in the current projection.'));
-      return panel.section;
-    }
-    panel.body.append(recordTable(
-      ['Member', 'Status', 'Role / capabilities', 'Application / environment', 'Joined'],
-      members,
-      (member) => {
-        const membership = objectValue(arrayValue(pick(member, 'memberships'))[0]);
-        const capabilities = arrayValue(pick(membership, 'capabilities'))
-          .map(stringValue)
-          .filter(Boolean);
-        const roleDetails = [
-          stringValue(pick(membership, 'profileName')) && `Profile ${pick(membership, 'profileName')}`,
-          capabilities.length > 0 ? `Capabilities: ${capabilities.join(', ')}` : null,
-        ].filter(Boolean).join(' · ');
-        return tableRow([
-          primaryCell(pick(member, 'email'), pick(member, 'id')),
-          statusTag(pick(member, 'active') === true ? 'active' : 'inactive'),
-          primaryCell(pick(membership, 'role'), roleDetails || undefined),
-          primaryCell(
-            pick(membership, 'applicationId') ?? 'All applications',
-            pick(membership, 'environmentId') ?? 'All environments',
-          ),
-          dateValue(pick(member, 'createdAt')),
-        ]);
-      },
-    ));
-    panel.body.append(element('p', 'settings-note', 'Member invitations and role changes are not exposed until their server contracts are available. This view is metadata-only.'));
+    panel.body.append(members.length === 0
+      ? stateBlock('empty', 'No members returned', 'The selected organization has no member metadata in the current projection.')
+      : recordTable(
+        ['Member', 'Status', 'Role / capabilities', 'Application / environment', 'Joined', 'Actions'],
+        members,
+        (member) => {
+          const membership = objectValue(arrayValue(pick(member, 'memberships'))[0]);
+          const capabilities = arrayValue(pick(membership, 'capabilities'))
+            .map(stringValue)
+            .filter(Boolean);
+          const roleDetails = [
+            stringValue(pick(membership, 'profileName')) && `Profile ${pick(membership, 'profileName')}`,
+            capabilities.length > 0 ? `Capabilities: ${capabilities.join(', ')}` : null,
+          ].filter(Boolean).join(' · ');
+          const userId = recordId(member);
+          const currentRole = stringValue(pick(membership, 'role')) ?? '';
+          const actions = element('div', 'action-form-actions');
+          if (canManage && currentRole !== 'owner' && userId) {
+            const role = supportSelect('role', ['admin', 'developer', 'release-manager', 'auditor'], currentRole);
+            role.dataset.memberRole = userId;
+            role.dataset.previousRole = currentRole;
+            actions.append(role);
+            const remove = element('button', 'button button-quiet button-danger', 'Remove');
+            remove.type = 'button';
+            remove.dataset.memberRemove = userId;
+            actions.append(remove);
+          } else {
+            actions.append(element('span', 'metadata-value muted', currentRole === 'owner' ? 'Owner protected' : 'Not authorized'));
+          }
+          return tableRow([
+            primaryCell(pick(member, 'email'), userId),
+            statusTag(pick(member, 'active') === true ? 'active' : 'inactive'),
+            primaryCell(currentRole, roleDetails || undefined),
+            primaryCell(
+              pick(membership, 'applicationId') ?? 'All applications',
+              pick(membership, 'environmentId') ?? 'All environments',
+            ),
+            dateValue(pick(member, 'createdAt')),
+            actions,
+          ]);
+        },
+      ));
+    panel.body.append(renderMemberInvitationPanel(canManage));
     return panel.section;
+  }
+
+  function renderMemberInvitationPanel(canManage) {
+    const wrapper = element('div', 'action-form-inset');
+    wrapper.append(
+      element('h3', '', 'Invite a member'),
+      element('p', 'form-hint', canManage
+        ? 'The invitation token is displayed once. Deliver it through an approved channel; Hyfens does not place secrets in browser storage.'
+        : 'Member invitations and role changes are not available for the selected profile.'),
+    );
+    if (canManage) {
+      const form = element('form', 'action-form');
+      form.dataset.dashboardAction = 'member-invite';
+      const email = element('input');
+      email.type = 'email';
+      email.name = 'email';
+      email.required = true;
+      email.maxLength = 320;
+      email.placeholder = 'developer@example.com';
+      const role = supportSelect('role', ['admin', 'developer', 'release-manager', 'auditor'], 'developer');
+      const fields = element('div', 'action-form-grid');
+      fields.append(formField('Email', email), formField('Role', role));
+      form.append(fields, actionSubmitButton('member-invite', 'Create invitation'));
+      wrapper.append(form);
+    }
+    const issued = objectValue(state.issuedInvitation);
+    const token = stringValue(issued?.token);
+    if (token) {
+      const secret = element('div', 'one-time-secret');
+      secret.append(
+        element('strong', '', 'Invitation created — copy it now'),
+        element('p', 'form-hint', 'This invitation token is shown once and is not returned by the invitation list.'),
+        element('code', 'secret-value', token),
+      );
+      wrapper.append(secret);
+    }
+    const invitations = state.organizationInvitations;
+    if (!invitations) {
+      wrapper.append(stateBlock('unavailable', 'Invitation metadata unavailable', customerSettingsUnavailableReason('invitations')));
+      return wrapper;
+    }
+    if (invitations.length > 0) {
+      wrapper.append(element('h3', '', 'Pending invitations'));
+      wrapper.append(recordTable(
+        ['Email', 'Role', 'Status', 'Expires', 'Action'],
+        invitations,
+        (invitation) => {
+          const id = recordId(invitation);
+          const active = pick(invitation, 'active') === true;
+          const action = active && canManage
+            ? (() => {
+              const button = element('button', 'button button-quiet button-danger', 'Revoke');
+              button.type = 'button';
+              button.dataset.invitationRevoke = id ?? '';
+              return button;
+            })()
+            : statusTag(active ? 'active' : 'revoked');
+          return tableRow([
+            primaryCell(pick(invitation, 'email'), id),
+            stringValue(pick(invitation, 'role')) ?? 'Not set',
+            statusTag(active ? 'active' : 'expired'),
+            dateValue(pick(invitation, 'expiresAt')),
+            action,
+          ]);
+        },
+      ));
+    }
+    return wrapper;
   }
 
   function credentialScopePresets() {
@@ -3430,9 +4129,13 @@
         ? state.platformOrganizationError
         : view === 'platform-audit'
           ? state.platformAuditError
-          : view === 'platform-users'
-            ? state.platformUsersError
-            : state.platformEntitlementsError;
+            : view === 'platform-users'
+              ? state.platformUsersError
+              : view === 'platform-entitlements'
+                ? state.platformEntitlementsError
+                : view === 'platform-commercial'
+                  ? state.platformCommercialError
+                  : state.platformSupportCasesError;
     if (error?.status === 404) return 'The configured control plane does not expose this Platform Console projection.';
     if (error?.status === 401) return 'The human session could not be authenticated for this Platform Console projection.';
     if (error?.status === 403) return 'The selected profile is not authorized for this Platform Console projection.';
@@ -3444,13 +4147,25 @@
   function customerSettingsUnavailableReason(kind) {
     const error = kind === 'members'
       ? state.organizationMembersError
-      : state.credentialsError;
+      : kind === 'invitations'
+        ? state.organizationInvitationsError
+        : state.credentialsError;
     if (error?.status === 404) return 'The configured control plane does not expose this customer settings projection.';
     if (error?.status === 401) return 'The human session could not be authenticated for this customer settings projection.';
     if (error?.status === 403) return 'The selected organization membership cannot read this customer settings projection.';
     if (error?.status === 503) return 'Human authentication is unavailable on this control plane.';
     if (error) return 'The control plane did not return safe customer settings metadata. Check the endpoint and try again.';
     return 'The dashboard has not received this customer settings projection yet.';
+  }
+
+  function customerSupportUnavailableReason(kind = 'cases') {
+    const error = kind === 'case' ? state.supportCaseError : state.supportCasesError;
+    if (error?.status === 404) return 'The configured control plane does not expose customer support yet.';
+    if (error?.status === 401) return 'The human session could not be authenticated for customer support.';
+    if (error?.status === 403) return 'The selected organization membership cannot access customer support.';
+    if (error?.status === 503) return 'Human authentication is unavailable on this control plane.';
+    if (error) return 'The control plane did not return safe customer support data. Check the endpoint and try again.';
+    return 'The dashboard has not received customer support data yet.';
   }
 
   function formatDateText(value) {
@@ -3895,10 +4610,25 @@
     state.platformUsersError = null;
     state.platformEntitlements = null;
     state.platformEntitlementsError = null;
+    state.platformCommercial = null;
+    state.platformCommercialError = null;
+    state.platformSupportCases = null;
+    state.platformSupportCasesError = null;
+    state.platformSupportCase = null;
+    state.platformSupportCaseError = null;
     state.platformDataLoading = false;
     invalidatePlatformDataRequest();
     state.organizationMembers = null;
     state.organizationMembersError = null;
+    state.organizationInvitations = null;
+    state.organizationInvitationsError = null;
+    state.issuedInvitation = null;
+    state.supportCases = null;
+    state.supportCasesError = null;
+    state.supportCase = null;
+    state.supportCaseError = null;
+    state.supportLoading = false;
+    state.supportDataGeneration += 1;
     state.credentials = null;
     state.credentialsError = null;
     state.issuedCredential = null;
@@ -4010,10 +4740,29 @@
       state.platformOrganizationError = null;
       state.platformAudit = null;
       state.platformAuditError = null;
+      state.platformUsers = null;
+      state.platformUsersError = null;
+      state.platformEntitlements = null;
+      state.platformEntitlementsError = null;
+      state.platformCommercial = null;
+      state.platformCommercialError = null;
+      state.platformSupportCases = null;
+      state.platformSupportCasesError = null;
+      state.platformSupportCase = null;
+      state.platformSupportCaseError = null;
       state.platformDataLoading = false;
       invalidatePlatformDataRequest();
       state.organizationMembers = null;
       state.organizationMembersError = null;
+      state.organizationInvitations = null;
+      state.organizationInvitationsError = null;
+      state.issuedInvitation = null;
+      state.supportCases = null;
+      state.supportCasesError = null;
+      state.supportCase = null;
+      state.supportCaseError = null;
+      state.supportLoading = false;
+      state.supportDataGeneration += 1;
       state.credentials = null;
       state.credentialsError = null;
       clearIssuedCredential();
@@ -4153,6 +4902,7 @@
       return loadPlatformViewData({ announce });
     }
     if (state.currentView === 'settings') return loadCustomerSettingsData({ announce });
+    if (state.currentView === 'support') return loadSupportData({ announce });
     return loadOverview({ announce });
   }
 
@@ -4174,6 +4924,9 @@
       state.platformAudit = null;
       state.platformUsers = null;
       state.platformEntitlements = null;
+      state.platformCommercial = null;
+      state.platformSupportCases = null;
+      state.platformSupportCase = null;
       state.platformOrganizationError = new ApiError(
         'The selected profile is not authorized for the Platform Console.',
         { status: 403 },
@@ -4182,6 +4935,9 @@
       state.platformAuditError = state.platformOrganizationError;
       state.platformUsersError = state.platformOrganizationError;
       state.platformEntitlementsError = state.platformOrganizationError;
+      state.platformCommercialError = state.platformOrganizationError;
+      state.platformSupportCasesError = state.platformOrganizationError;
+      state.platformSupportCaseError = state.platformOrganizationError;
       renderCurrentPage();
       return;
     }
@@ -4191,11 +4947,16 @@
     state.platformAuditError = null;
     state.platformUsersError = null;
     state.platformEntitlementsError = null;
+    state.platformCommercialError = null;
+    state.platformSupportCasesError = null;
+    state.platformSupportCaseError = null;
     if (view === 'platform-organizations') state.platformOrganizations = null;
     if (view === 'platform-organization') state.platformOrganization = null;
     if (view === 'platform-audit') state.platformAudit = null;
     if (view === 'platform-users') state.platformUsers = null;
     if (view === 'platform-entitlements') state.platformEntitlements = null;
+    if (view === 'platform-commercial') state.platformCommercial = null;
+    if (view === 'platform-support') state.platformSupportCases = null;
     renderCurrentPage();
     let loaded = false;
     try {
@@ -4225,6 +4986,14 @@
         const body = await api.platformEntitlements(profileName, {});
         if (!platformDataRequestIsCurrent(generation, view)) return;
         state.platformEntitlements = validatePlatformEntitlements(body);
+      } else if (view === 'platform-commercial') {
+        const body = await api.platformCommercial(profileName, {});
+        if (!platformDataRequestIsCurrent(generation, view)) return;
+        state.platformCommercial = validatePlatformCommercial(body);
+      } else if (view === 'platform-support') {
+        const body = await api.platformSupportCases(profileName, {}, {});
+        if (!platformDataRequestIsCurrent(generation, view)) return;
+        state.platformSupportCases = validateSupportCasePage(body, 'platform');
       }
       state.lastFetchedAt = new Date().toISOString();
       loaded = true;
@@ -4239,6 +5008,8 @@
       if (view === 'platform-audit') state.platformAuditError = error;
       if (view === 'platform-users') state.platformUsersError = error;
       if (view === 'platform-entitlements') state.platformEntitlementsError = error;
+      if (view === 'platform-commercial') state.platformCommercialError = error;
+      if (view === 'platform-support') state.platformSupportCasesError = error;
     } finally {
       if (!platformDataRequestIsCurrent(generation, view)) return;
       state.platformDataLoading = false;
@@ -4297,12 +5068,48 @@
     return root;
   }
 
+  function validatePlatformCommercial(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || root.scope !== 'platform' || !stringValue(root.status)) {
+      throw new ApiError('The control plane did not return the required commercial projection.');
+    }
+    return root;
+  }
+
+  function validateSupportCasePage(body, scope) {
+    const root = unwrapPayload(body);
+    if (
+      !Array.isArray(root.cases) ||
+      root.scope !== scope ||
+      typeof root.readOnly !== 'boolean'
+    ) {
+      throw new ApiError('The control plane did not return the required support projection.');
+    }
+    return root;
+  }
+
+  function validateSupportCase(body, scope) {
+    const root = unwrapPayload(body);
+    if (!objectValue(root.case) || root.scope !== scope || !Array.isArray(root.messages)) {
+      throw new ApiError('The control plane did not return the required support case.');
+    }
+    return root;
+  }
+
   function validateOrganizationMembers(body) {
     const root = unwrapPayload(body);
     if (root.readOnly !== true || !Array.isArray(root.members)) {
       throw new ApiError('The control plane did not return safe organization member metadata.');
     }
     return root.members;
+  }
+
+  function validateOrganizationInvitations(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || !Array.isArray(root.invitations)) {
+      throw new ApiError('The control plane did not return safe organization invitation metadata.');
+    }
+    return root.invitations;
   }
 
   function validateCredentials(body) {
@@ -4333,6 +5140,9 @@
     state.customerSettingsLoading = true;
     state.organizationMembers = null;
     state.organizationMembersError = null;
+    state.organizationInvitations = null;
+    state.organizationInvitationsError = null;
+    state.issuedInvitation = null;
     state.credentials = null;
     state.credentialsError = null;
     clearIssuedCredential();
@@ -4341,6 +5151,7 @@
     if (!organizationId) {
       state.customerSettingsLoading = false;
       state.organizationMembersError = new ApiError('Organization membership is unavailable.');
+      state.organizationInvitationsError = state.organizationMembersError;
       state.credentialsError = state.organizationMembersError;
       renderCurrentPage();
       return;
@@ -4349,12 +5160,14 @@
     renderCurrentPage();
     let loaded = false;
     try {
-      const [membersBody, credentialsBody] = await Promise.all([
+      const [membersBody, invitationsBody, credentialsBody] = await Promise.all([
         api.organizationMembers(organizationId),
+        api.organizationInvitations(organizationId),
         api.credentials(organizationId),
       ]);
       if (!customerSettingsRequestIsCurrent(generation, api, organizationId)) return;
       state.organizationMembers = validateOrganizationMembers(membersBody);
+      state.organizationInvitations = validateOrganizationInvitations(invitationsBody);
       state.credentials = validateCredentials(credentialsBody);
       state.lastFetchedAt = new Date().toISOString();
       loaded = true;
@@ -4365,6 +5178,7 @@
         return;
       }
       state.organizationMembersError = error;
+      state.organizationInvitationsError = error;
       state.credentialsError = error;
     } finally {
       if (!customerSettingsRequestIsCurrent(generation, api, organizationId)) return;
@@ -4373,6 +5187,66 @@
       if (announce) {
         showToast(
           loaded ? 'Organization settings refreshed.' : 'Organization settings could not be refreshed.',
+          loaded ? 'success' : 'error',
+        );
+      }
+    }
+  }
+
+  async function loadSupportData({ announce = false } = {}) {
+    const api = state.api;
+    const organizationId = profileOrganizationId();
+    const generation = state.supportDataGeneration + 1;
+    state.supportDataGeneration = generation;
+    state.supportLoading = true;
+    state.supportCases = null;
+    state.supportCasesError = null;
+    state.supportCase = null;
+    state.supportCaseError = null;
+    if (!api || !organizationId) {
+      state.supportLoading = false;
+      state.supportCasesError = new ApiError('Customer organization context is unavailable.');
+      renderCurrentPage();
+      return;
+    }
+    renderCurrentPage();
+    let loaded = false;
+    try {
+      const body = await api.supportCases(organizationId);
+      if (
+        generation !== state.supportDataGeneration ||
+        state.api !== api ||
+        state.currentView !== 'support' ||
+        state.shell !== 'customer' ||
+        profileOrganizationId() !== organizationId
+      ) return;
+      state.supportCases = validateSupportCasePage(body, 'customer');
+      state.lastFetchedAt = new Date().toISOString();
+      loaded = true;
+    } catch (error) {
+      if (
+        generation !== state.supportDataGeneration ||
+        state.api !== api ||
+        state.currentView !== 'support' ||
+        state.shell !== 'customer'
+      ) return;
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      state.supportCasesError = error;
+    } finally {
+      if (
+        generation !== state.supportDataGeneration ||
+        state.api !== api ||
+        state.currentView !== 'support' ||
+        state.shell !== 'customer'
+      ) return;
+      state.supportLoading = false;
+      renderCurrentPage();
+      if (announce) {
+        showToast(
+          loaded ? 'Support cases refreshed.' : 'Support cases could not be refreshed.',
           loaded ? 'success' : 'error',
         );
       }
@@ -4460,6 +5334,12 @@
     state.platformMetricsLoading = true;
     state.platformMetrics = null;
     state.platformMetricsError = null;
+    if (state.currentView === 'platform') {
+      state.platformCommercial = null;
+      state.platformCommercialError = null;
+      state.platformSupportCases = null;
+      state.platformSupportCasesError = null;
+    }
     let loaded = false;
     renderCurrentPage();
     try {
@@ -4469,6 +5349,39 @@
       });
       if (!platformMetricsRequestIsCurrent(request)) return;
       state.platformMetrics = validatePlatformMetrics(body);
+      if (state.currentView === 'platform') {
+        const commercialAllowed = hasPlatformCapability('platform:commercial:read', profile);
+        const supportAllowed = hasPlatformCapability('platform:support:read', profile);
+        const [commercialResult, supportResult] = await Promise.allSettled([
+          commercialAllowed
+            ? api.platformCommercial(profileName, { signal: request.controller?.signal })
+            : Promise.resolve(null),
+          supportAllowed
+            ? api.platformSupportCases(profileName, {}, { signal: request.controller?.signal })
+            : Promise.resolve(null),
+        ]);
+        if (!platformMetricsRequestIsCurrent(request)) return;
+        if (commercialAllowed) {
+          if (commercialResult.status === 'fulfilled') {
+            state.platformCommercial = validatePlatformCommercial(commercialResult.value);
+          } else if (commercialResult.reason instanceof SessionExpiredError) {
+            await expireSession();
+            return;
+          } else if (!isAbortError(commercialResult.reason)) {
+            state.platformCommercialError = commercialResult.reason;
+          }
+        }
+        if (supportAllowed) {
+          if (supportResult.status === 'fulfilled') {
+            state.platformSupportCases = validateSupportCasePage(supportResult.value, 'platform');
+          } else if (supportResult.reason instanceof SessionExpiredError) {
+            await expireSession();
+            return;
+          } else if (!isAbortError(supportResult.reason)) {
+            state.platformSupportCasesError = supportResult.reason;
+          }
+        }
+      }
       state.lastFetchedAt = new Date().toISOString();
       loaded = true;
     } catch (error) {
@@ -4604,11 +5517,30 @@
     state.platformOrganizationError = null;
     state.platformAudit = null;
     state.platformAuditError = null;
+    state.platformUsers = null;
+    state.platformUsersError = null;
+    state.platformEntitlements = null;
+    state.platformEntitlementsError = null;
+    state.platformCommercial = null;
+    state.platformCommercialError = null;
+    state.platformSupportCases = null;
+    state.platformSupportCasesError = null;
+    state.platformSupportCase = null;
+    state.platformSupportCaseError = null;
     state.platformDataLoading = false;
     invalidatePlatformDataRequest();
     state.organizationMembers = null;
     state.organizationMembersError = null;
-    state.credentials = null;
+    state.organizationInvitations = null;
+    state.organizationInvitationsError = null;
+    state.issuedInvitation = null;
+    state.supportCases = null;
+      state.supportCasesError = null;
+      state.supportCase = null;
+      state.supportCaseError = null;
+      state.supportLoading = false;
+      state.supportDataGeneration += 1;
+      state.credentials = null;
     state.credentialsError = null;
     clearIssuedCredential();
     state.actionLoading = null;
@@ -4728,7 +5660,7 @@
     }
     renderGlobalBanner();
     renderLastFetched();
-    const pageLoading = state.loading || state.platformMetricsLoading || state.platformDataLoading || state.customerSettingsLoading;
+    const pageLoading = state.loading || state.platformMetricsLoading || state.platformDataLoading || state.customerSettingsLoading || state.supportLoading;
     nodes.refreshButton.disabled = pageLoading || !state.api || state.currentView === 'platform-settings';
     nodes.refreshButton.setAttribute('aria-busy', String(pageLoading));
     nodes.pageRegion.setAttribute('aria-busy', pageLoading ? 'true' : 'false');
@@ -4749,6 +5681,8 @@
       'platform-operations': renderPlatformPage,
       'platform-users': renderPlatformUsersPage,
       'platform-entitlements': renderPlatformEntitlementsPage,
+      'platform-commercial': renderPlatformCommercialPage,
+      'platform-support': renderPlatformSupportPage,
       'platform-settings': renderPlatformSettingsPage,
       applications: renderApplicationsPage,
       environments: renderEnvironmentsPage,
@@ -4757,6 +5691,7 @@
       artifacts: renderArtifactsPage,
       deployments: renderDeploymentsPage,
       audit: renderAuditPage,
+      support: renderCustomerSupportPage,
       settings: renderSettingsPage,
     }[state.currentView] ?? renderOverviewPage;
     replacePageRegion(page(), { transition });
@@ -4855,6 +5790,10 @@
 
   function handleCollectionChange(event) {
     const target = event.target;
+    if (target?.dataset?.memberRole) {
+      void handleMemberRoleChange(target);
+      return;
+    }
     if (target?.dataset?.promotionEnvironment === 'true') {
       const version = target.selectedOptions?.[0]?.dataset?.environmentVersion;
       const form = target.closest('form[data-dashboard-action="promotion"]');
@@ -4925,6 +5864,85 @@
     showToast(message, 'success');
   }
 
+  async function refreshAfterSupportMutation(message, detail = null) {
+    state.actionLoading = null;
+    state.actionError = null;
+    await loadSupportData();
+    state.supportCase = detail;
+    renderCurrentPage();
+    showToast(message, 'success');
+  }
+
+  async function handlePlatformSupportAction(form, action, data) {
+    if (!state.api || !hasPlatformCapability('platform:support:write')) {
+      state.actionError = { action, message: 'This profile cannot modify support cases.' };
+      renderCurrentPage();
+      return;
+    }
+    const profileName = stringValue(pick(selectedProfile(), 'name'));
+    const caseId = stringValue(form.dataset.caseId);
+    if (!caseId) {
+      state.actionError = { action, message: 'A support case must be selected.' };
+      renderCurrentPage();
+      return;
+    }
+    const value = (name) => stringValue(data.get(name))?.trim() ?? '';
+    state.actionLoading = action;
+    state.actionError = null;
+    renderCurrentPage();
+    try {
+      let response;
+      if (action === 'platform-support-update') {
+        const assigned = value('assigned_to');
+        response = await state.api.updatePlatformSupportCase(profileName, caseId, {
+          status: value('status'),
+          priority: value('priority'),
+          assigned_to: assigned || null,
+        });
+      } else if (action === 'platform-support-reply') {
+        const body = value('body');
+        if (!body) throw new Error('Support message is required.');
+        response = await state.api.replyPlatformSupportCase(profileName, caseId, {
+          body,
+          visibility: value('visibility') || 'customer',
+        });
+      } else {
+        throw new Error('Unsupported platform support action.');
+      }
+      await refreshAfterPlatformSupportMutation(
+        action === 'platform-support-update' ? 'Support case updated.' : 'Support response recorded.',
+        unwrapPayload(response),
+        profileName,
+      );
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      state.actionError = { action, message: customerActionErrorMessage(action, error) };
+    } finally {
+      if (state.actionLoading === action) {
+        state.actionLoading = null;
+        renderCurrentPage();
+      }
+    }
+  }
+
+  async function refreshAfterPlatformSupportMutation(message, detail, profileName) {
+    state.actionLoading = null;
+    state.actionError = null;
+    state.platformSupportCase = detail;
+    await loadPlatformSupportCases(profileName);
+    renderCurrentPage();
+    showToast(message, 'success');
+  }
+
+  async function loadPlatformSupportCases(profileName) {
+    if (!state.api) return;
+    const body = await state.api.platformSupportCases(profileName, {}, {});
+    state.platformSupportCases = validateSupportCasePage(body, 'platform');
+  }
+
   async function handleCustomerActionSubmit(event) {
     const form = event.target.closest?.('form[data-dashboard-action]');
     if (!form || !nodes.pageRegion.contains(form)) return;
@@ -4933,6 +5951,10 @@
     const action = form.dataset.dashboardAction;
     const data = new FormData(form);
     const value = (name) => stringValue(data.get(name))?.trim() ?? '';
+    if (action.startsWith('platform-support-')) {
+      await handlePlatformSupportAction(form, action, data);
+      return;
+    }
     const organizationId = profileOrganizationId();
     if (!state.api || !organizationId) {
       state.actionError = { action, message: 'Customer organization context is unavailable.' };
@@ -4958,6 +5980,14 @@
         await refreshAfterCustomerMutation('Application registered.');
         return;
       }
+      if (action === 'application-update') {
+        const applicationId = stringValue(form.dataset.resourceId);
+        const name = value('name');
+        if (!applicationId || !name) throw new Error('Application name is required.');
+        await state.api.updateApplication(organizationId, applicationId, { name });
+        await refreshAfterCustomerMutation('Application updated.');
+        return;
+      }
       if (action === 'environment-create') {
         const applicationId = value('application_id');
         const name = value('name');
@@ -4969,6 +5999,32 @@
           makeIdempotencyKey('environment-create'),
         );
         await refreshAfterCustomerMutation('Environment created.');
+        return;
+      }
+      if (action === 'environment-update') {
+        const environmentId = stringValue(form.dataset.resourceId);
+        const name = value('name');
+        if (!environmentId || !name) throw new Error('Environment name is required.');
+        await state.api.updateEnvironment(organizationId, environmentId, { name });
+        await refreshAfterCustomerMutation('Environment updated.');
+        return;
+      }
+      if (action === 'member-invite') {
+        const email = value('email');
+        const role = value('role');
+        if (!email || !role) throw new Error('Member email and role are required.');
+        const response = await state.api.inviteOrganizationMember(organizationId, { email, role });
+        const invitation = unwrapPayload(response);
+        const token = stringValue(pick(invitation, 'token'));
+        if (!token) throw new ApiError('The control plane did not return the one-time invitation token.');
+        const metadata = Object.fromEntries(
+          Object.entries(invitation).filter(([key]) => key !== 'token'),
+        );
+        await loadCustomerSettingsData();
+        state.issuedInvitation = { token, metadata };
+        state.actionLoading = null;
+        renderCurrentPage();
+        showToast('Invitation created. Copy the token now.', 'success');
         return;
       }
       if (action === 'credential-issue') {
@@ -5014,6 +6070,27 @@
         await refreshAfterCustomerMutation('Release promoted to the environment.');
         return;
       }
+      if (action === 'support-create') {
+        const subject = value('subject');
+        const description = value('description');
+        if (!subject || !description) throw new Error('Support subject and description are required.');
+        const response = await state.api.createSupportCase(organizationId, {
+          subject,
+          description,
+          category: value('category') || 'general',
+          priority: value('priority') || 'NORMAL',
+        });
+        await refreshAfterSupportMutation('Support case created.', unwrapPayload(response));
+        return;
+      }
+      if (action === 'support-reply') {
+        const caseId = stringValue(form.dataset.caseId);
+        const body = value('body');
+        if (!caseId || !body) throw new Error('Support case and message are required.');
+        const response = await state.api.replySupportCase(organizationId, caseId, { body });
+        await refreshAfterSupportMutation('Support reply sent.', unwrapPayload(response));
+        return;
+      }
       throw new Error('Unsupported customer action.');
     } catch (error) {
       if (error instanceof SessionExpiredError) {
@@ -5045,6 +6122,36 @@
   }
 
   async function handleCustomerSettingsClick(event) {
+    const applicationArchive = event.target.closest?.('[data-application-archive]');
+    if (applicationArchive && !applicationArchive.disabled) {
+      await handleLifecycleArchive('application', applicationArchive.dataset.applicationArchive, applicationArchive);
+      return;
+    }
+    const environmentArchive = event.target.closest?.('[data-environment-archive]');
+    if (environmentArchive && !environmentArchive.disabled) {
+      await handleLifecycleArchive('environment', environmentArchive.dataset.environmentArchive, environmentArchive);
+      return;
+    }
+    const memberRemove = event.target.closest?.('[data-member-remove]');
+    if (memberRemove && !memberRemove.disabled) {
+      await handleMemberRemove(memberRemove);
+      return;
+    }
+    const invitationRevoke = event.target.closest?.('[data-invitation-revoke]');
+    if (invitationRevoke && !invitationRevoke.disabled) {
+      await handleInvitationRevoke(invitationRevoke);
+      return;
+    }
+    const customerCase = event.target.closest?.('[data-customer-support-case]');
+    if (customerCase) {
+      await handleSupportCaseSelection(customerCase.dataset.customerSupportCase, false);
+      return;
+    }
+    const platformCase = event.target.closest?.('[data-platform-support-case]');
+    if (platformCase) {
+      await handleSupportCaseSelection(platformCase.dataset.platformSupportCase, true);
+      return;
+    }
     if (event.target.closest?.('[data-copy-credential]')) {
       await handleCredentialCopy(event);
       return;
@@ -5071,6 +6178,140 @@
       }
       showToast('The credential could not be revoked.', 'error');
       button.disabled = false;
+    }
+  }
+
+  async function handleLifecycleArchive(kind, resourceId, button) {
+    const organizationId = profileOrganizationId();
+    if (!resourceId || !organizationId || !state.api) return;
+    const label = kind === 'application' ? 'application' : 'environment';
+    if (!window.confirm(`Archive this ${label}? Historical records will remain available, but new delivery actions will stop.`)) return;
+    button.disabled = true;
+    state.actionLoading = `${kind}-archive`;
+    renderCurrentPage();
+    try {
+      if (kind === 'application') await state.api.archiveApplication(organizationId, resourceId);
+      else await state.api.archiveEnvironment(organizationId, resourceId);
+      await refreshAfterCustomerMutation(`${label[0].toUpperCase()}${label.slice(1)} archived.`);
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      state.actionLoading = null;
+      state.actionError = { action: `${kind}-archive`, message: customerActionErrorMessage(`${kind}-archive`, error) };
+      renderCurrentPage();
+    }
+  }
+
+  async function handleMemberRoleChange(select) {
+    const organizationId = profileOrganizationId();
+    const userId = stringValue(select.dataset.memberRole);
+    const role = stringValue(select.value);
+    const previousRole = stringValue(select.dataset.previousRole) ?? role;
+    if (!organizationId || !userId || !role || !state.api) return;
+    if (!hasCustomerCapability('organization:members:write')) {
+      select.value = previousRole;
+      showToast('This profile cannot change member roles.', 'warning');
+      return;
+    }
+    if (!window.confirm(`Change this member's role to ${supportLabel(role)}?`)) {
+      select.value = previousRole;
+      return;
+    }
+    select.disabled = true;
+    try {
+      await state.api.updateOrganizationMember(organizationId, userId, { role });
+      showToast('Member role updated.', 'success');
+      await loadCustomerSettingsData();
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      select.value = previousRole;
+      select.disabled = false;
+      showToast('The member role could not be updated.', 'error');
+    }
+  }
+
+  async function handleMemberRemove(button) {
+    const organizationId = profileOrganizationId();
+    const userId = stringValue(button.dataset.memberRemove);
+    if (!organizationId || !userId || !state.api) return;
+    if (!hasCustomerCapability('organization:members:write')) {
+      showToast('This profile cannot remove members.', 'warning');
+      return;
+    }
+    if (!window.confirm('Remove this member from the organization?')) return;
+    button.disabled = true;
+    try {
+      await state.api.removeOrganizationMember(organizationId, userId);
+      showToast('Member removed.', 'success');
+      await loadCustomerSettingsData();
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      showToast('The member could not be removed.', 'error');
+      button.disabled = false;
+    }
+  }
+
+  async function handleInvitationRevoke(button) {
+    const organizationId = profileOrganizationId();
+    const invitationId = stringValue(button.dataset.invitationRevoke);
+    if (!organizationId || !invitationId || !state.api) return;
+    if (!hasCustomerCapability('organization:members:write')) {
+      showToast('This profile cannot revoke invitations.', 'warning');
+      return;
+    }
+    if (!window.confirm('Revoke this invitation?')) return;
+    button.disabled = true;
+    try {
+      await state.api.revokeOrganizationInvitation(organizationId, invitationId);
+      showToast('Invitation revoked.', 'success');
+      await loadCustomerSettingsData();
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      showToast('The invitation could not be revoked.', 'error');
+      button.disabled = false;
+    }
+  }
+
+  async function handleSupportCaseSelection(caseId, platform) {
+    if (!caseId || !state.api) return;
+    try {
+      if (platform) {
+        state.platformSupportCase = null;
+        renderCurrentPage();
+        state.platformSupportCase = validateSupportCase(
+          await state.api.platformSupportCase(stringValue(pick(selectedProfile(), 'name')), caseId),
+          'platform',
+        );
+      } else {
+        const organizationId = profileOrganizationId();
+        if (!organizationId) return;
+        state.supportCase = null;
+        renderCurrentPage();
+        state.supportCase = validateSupportCase(
+          await state.api.supportCase(organizationId, caseId),
+          'customer',
+        );
+      }
+      renderCurrentPage();
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      if (platform) state.platformSupportCaseError = error;
+      else state.supportCaseError = error;
+      renderCurrentPage();
     }
   }
 
@@ -5186,7 +6427,11 @@
               ? state.platformUsersError
               : state.currentView === 'platform-entitlements'
                 ? state.platformEntitlementsError
-            : null;
+                : state.currentView === 'platform-commercial'
+                  ? state.platformCommercialError
+                  : state.currentView === 'platform-support'
+                    ? state.platformSupportCasesError
+              : null;
     if (isPlatformView(state.currentView) && platformError) {
       if (state.currentView === 'platform' || state.currentView === 'platform-operations') {
         text = platformMetricsUnavailableReason();
@@ -5194,10 +6439,13 @@
         text = platformDataUnavailableReason(state.currentView);
       }
       status = platformError.status === 401 || platformError.status === 403 ? 'warning' : 'error';
-    } else if (state.currentView === 'settings' && (state.organizationMembersError || state.credentialsError)) {
-      const error = state.organizationMembersError ?? state.credentialsError;
-      text = customerSettingsUnavailableReason(state.organizationMembersError ? 'members' : 'credentials');
+    } else if (state.currentView === 'settings' && (state.organizationMembersError || state.organizationInvitationsError || state.credentialsError)) {
+      const error = state.organizationMembersError ?? state.organizationInvitationsError ?? state.credentialsError;
+      text = customerSettingsUnavailableReason(state.organizationMembersError ? 'members' : state.organizationInvitationsError ? 'invitations' : 'credentials');
       status = error.status === 401 || error.status === 403 ? 'warning' : 'error';
+    } else if (state.currentView === 'support' && state.supportCasesError) {
+      text = customerSupportUnavailableReason();
+      status = state.supportCasesError.status === 401 || state.supportCasesError.status === 403 ? 'warning' : 'error';
     } else if (state.overviewError) {
       text = overviewUnavailableReason();
       status = state.overviewError.status === 401 || state.overviewError.status === 403 ? 'warning' : 'error';

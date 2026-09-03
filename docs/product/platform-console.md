@@ -22,10 +22,19 @@ membership switcher or silently impersonate a customer.
 
 ## Current navigation
 
-- **Overview** — aggregate platform metrics and their availability boundary.
+- **Overview** — aggregate platform metrics plus available commercial and
+  support-queue signals.
 - **Organizations** — a bounded cross-tenant directory and read-focused
   organization detail projection. It includes metadata, counts, activity,
-  applications, and environments, not customer secrets.
+  subscription summary, open support-case count, applications, and
+  environments, not customer secrets.
+- **Commercial** — read-only MRR/ARR and subscription metrics derived from
+  active control-plane plan/subscription records. When a billing source,
+  currency, or payment history is unavailable, the page says so instead of
+  fabricating revenue.
+- **Support** — tenant-aware case queue and detail view. Authorized staff can
+  assign cases to active platform users, change status/priority, and send
+  customer-visible replies or explicitly internal notes.
 - **Security & audit** — events explicitly recorded for the platform audience;
   customer audit rows are not relabeled as platform events.
 - **Operations** — the current metrics-backed operational view. It reports only
@@ -57,7 +66,21 @@ platform:audit:read
 platform:operations:read
 platform:accounts:read
 platform:entitlements:read
+platform:commercial:read
+platform:support:read
+platform:support:write
 ```
+
+Commercial metrics are sourced from `billing_plans` and
+`billing_subscriptions`. They represent active recurring plan amounts only;
+the current control plane does not record payment/revenue history, so cash
+revenue, churn, expansion, and contraction are not claimed. Multiple
+currencies are reported as a source boundary rather than summed together.
+
+Support staff mutations are explicit and audited. Assignment accepts active
+platform users only. Customer-visible replies and platform-internal notes use
+separate visibility values; internal notes never enter Customer Workspace
+responses.
 
 No platform projection returns passwords, sessions, customer credential
 plaintext, token hashes, signing keys, database credentials, or provider
@@ -71,10 +94,11 @@ self-hosted operator may inspect the Customer Workspace on the instance origin
 and use the deployment/operator documentation; an instance-admin surface is a
 separate future capability, not a disguised global console.
 
-Time-limited support access, staff role mutation, billing mutation, incident
-management, infrastructure/provider controls, and MFA/network hardening remain
-backlog until their explicit contracts are ready. Silent customer
-impersonation is not part of the product.
+Staff role mutation, billing mutation, incident management,
+infrastructure/provider controls, support impersonation, and MFA/network
+hardening remain backlog until their explicit contracts are ready. Support
+inspection is performed through platform APIs, not customer-session
+impersonation.
 
 See [dashboard separation architecture](../architecture/dashboard-separation.md)
 for routes and the [security architecture](../architecture/security.md) for

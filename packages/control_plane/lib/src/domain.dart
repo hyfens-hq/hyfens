@@ -5,15 +5,32 @@ import 'observation.dart';
 
 export 'content.dart';
 
+String _lifecycleStatus(String value, String field) {
+  if (value != 'active' && value != 'archived') {
+    throw FormatException('Invalid $field');
+  }
+  return value;
+}
+
+DateTime? _optionalTimestamp(Object? value) {
+  if (value == null) return null;
+  if (value is! String) throw const FormatException('Invalid timestamp');
+  return DateTime.parse(value).toUtc();
+}
+
 enum CredentialKind { control, delivery, observation, scheduler, autoHalt }
 
 const String contentAdminScope = 'content:admin';
 const String billingReadScope = 'billing:read';
 const String billingWriteScope = 'billing:write';
 const String organizationMembersReadScope = 'organization:members:read';
+const String organizationMembersWriteScope = 'organization:members:write';
 const String credentialReadScope = 'credential:read';
 const String applicationWriteScope = 'application:write';
 const String environmentWriteScope = 'environment:write';
+const String supportReadScope = 'support:read';
+const String supportCreateScope = 'support:create';
+const String supportReplyScope = 'support:reply';
 
 const Set<String> controlScopes = <String>{
   'application:read',
@@ -30,6 +47,7 @@ const Set<String> controlScopes = <String>{
   'bundle:write',
   'audit:read',
   organizationMembersReadScope,
+  organizationMembersWriteScope,
   credentialReadScope,
   'credential:issue',
   'credential:revoke',
@@ -44,6 +62,9 @@ const Set<String> controlScopes = <String>{
   'health:schedule',
   billingReadScope,
   billingWriteScope,
+  supportReadScope,
+  supportCreateScope,
+  supportReplyScope,
   contentAdminScope,
   observationDeleteScope,
 };
@@ -112,6 +133,8 @@ final class ApplicationRecord {
     String? name,
     String? platform,
     required this.createdAt,
+    this.status = 'active',
+    DateTime? updatedAt,
   }) : id = requireOpaqueId(id, 'application ID'),
        organizationId = requireOpaqueId(organizationId, 'organization ID'),
        runtimeApplicationId = requireRuntimeIdentity(
@@ -121,7 +144,10 @@ final class ApplicationRecord {
        name = name == null
            ? null
            : requireNonEmpty(name.trim(), 'application name', maxLength: 120),
-       platform = platform == null ? null : _applicationPlatform(platform);
+       platform = platform == null ? null : _applicationPlatform(platform),
+       updatedAt = (updatedAt ?? createdAt).toUtc() {
+    _lifecycleStatus(status, 'application status');
+  }
 
   final String id;
   final String organizationId;
@@ -129,6 +155,23 @@ final class ApplicationRecord {
   final String? name;
   final String? platform;
   final DateTime createdAt;
+  final String status;
+  final DateTime updatedAt;
+
+  ApplicationRecord copyWith({
+    String? name,
+    String? status,
+    DateTime? updatedAt,
+  }) => ApplicationRecord(
+    id: id,
+    organizationId: organizationId,
+    runtimeApplicationId: runtimeApplicationId,
+    name: name ?? this.name,
+    platform: platform,
+    createdAt: createdAt,
+    status: status ?? this.status,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
@@ -137,6 +180,8 @@ final class ApplicationRecord {
     'name': name,
     'platform': platform,
     'createdAt': createdAt.toUtc().toIso8601String(),
+    'status': status,
+    'updatedAt': updatedAt.toUtc().toIso8601String(),
   };
 
   static ApplicationRecord fromJson(Map<String, Object?> value) =>
@@ -147,6 +192,10 @@ final class ApplicationRecord {
         name: value['name'] as String?,
         platform: value['platform'] as String?,
         createdAt: DateTime.parse(value['createdAt']! as String),
+        status: value['status'] as String? ?? 'active',
+        updatedAt:
+            _optionalTimestamp(value['updatedAt']) ??
+            DateTime.parse(value['createdAt']! as String),
       );
 
   static String _applicationPlatform(String value) {
@@ -168,14 +217,18 @@ final class EnvironmentRecord {
     required this.version,
     required String? promotedReleaseId,
     required this.createdAt,
+    this.status = 'active',
+    DateTime? updatedAt,
   }) : id = requireOpaqueId(id, 'environment ID'),
        organizationId = requireOpaqueId(organizationId, 'organization ID'),
        applicationId = requireOpaqueId(applicationId, 'application ID'),
        name = requireNonEmpty(name, 'environment name'),
        promotedReleaseId = promotedReleaseId == null
            ? null
-           : requireOpaqueId(promotedReleaseId, 'release ID') {
+           : requireOpaqueId(promotedReleaseId, 'release ID'),
+       updatedAt = (updatedAt ?? createdAt).toUtc() {
     if (version < 0) throw const FormatException('Invalid environment version');
+    _lifecycleStatus(status, 'environment status');
   }
 
   final String id;
@@ -185,17 +238,26 @@ final class EnvironmentRecord {
   final int version;
   final String? promotedReleaseId;
   final DateTime createdAt;
+  final String status;
+  final DateTime updatedAt;
 
-  EnvironmentRecord copyWith({int? version, String? promotedReleaseId}) =>
-      EnvironmentRecord(
-        id: id,
-        organizationId: organizationId,
-        applicationId: applicationId,
-        name: name,
-        version: version ?? this.version,
-        promotedReleaseId: promotedReleaseId ?? this.promotedReleaseId,
-        createdAt: createdAt,
-      );
+  EnvironmentRecord copyWith({
+    int? version,
+    String? promotedReleaseId,
+    String? name,
+    String? status,
+    DateTime? updatedAt,
+  }) => EnvironmentRecord(
+    id: id,
+    organizationId: organizationId,
+    applicationId: applicationId,
+    name: name ?? this.name,
+    version: version ?? this.version,
+    promotedReleaseId: promotedReleaseId ?? this.promotedReleaseId,
+    createdAt: createdAt,
+    status: status ?? this.status,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
@@ -205,6 +267,8 @@ final class EnvironmentRecord {
     'version': version,
     'promotedReleaseId': promotedReleaseId,
     'createdAt': createdAt.toUtc().toIso8601String(),
+    'status': status,
+    'updatedAt': updatedAt.toUtc().toIso8601String(),
   };
 
   static EnvironmentRecord fromJson(Map<String, Object?> value) =>
@@ -216,6 +280,10 @@ final class EnvironmentRecord {
         version: value['version']! as int,
         promotedReleaseId: value['promotedReleaseId'] as String?,
         createdAt: DateTime.parse(value['createdAt']! as String),
+        status: value['status'] as String? ?? 'active',
+        updatedAt:
+            _optionalTimestamp(value['updatedAt']) ??
+            DateTime.parse(value['createdAt']! as String),
       );
 }
 

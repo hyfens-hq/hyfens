@@ -15,6 +15,9 @@ users work inside one explicit context:
 Organization → Application → Environment
 ```
 
+“Project” is a useful developer-facing synonym for an Application; it is not
+a second domain entity.
+
 The organization selector contains only customer memberships returned for the
 authenticated user. It is not a directory of every Hyfens customer. Platform
 staff, global infrastructure, other tenants, and platform credentials belong
@@ -22,26 +25,37 @@ to the Platform Console and are never substituted into this workspace.
 
 ## Current navigation
 
-- **Overview** — organization counts, selected context, recent records, and
-  the control-plane/runtime boundary.
+- **Overview** — real organization counts, selected context, recent records,
+  recent audit, and the control-plane/runtime boundary.
 - **Applications** — tenant-scoped application identities, with a safe form to
   register a new Android package or iOS bundle identity when the profile has
-  `application:write`.
+  `application:write`, update mutable names, and archive an application while
+  preserving its history. Android package IDs and iOS bundle identifiers are
+  protected once release binding makes them immutable.
 - **Environments** — tenant-scoped environments, with idempotent creation under
-  an existing application when the profile has `environment:write`.
+  an existing application when the profile has `environment:write`, plus
+  mutable-name update and archive actions. Archiving preserves history.
 - **Releases**, **Patches**, **Artifacts**, and **Deployments** — immutable
   delivery records and bounded promotion state.
 - **Audit** — redacted customer audit records for the selected organization.
-- **Settings** — shared session metadata, customer memberships, and service
-  credential metadata/issuance/revocation.
+- **Support** — customer-visible support cases and replies for the selected
+  organization.
+- **Settings** — shared session metadata, customer memberships and pending
+  invitation metadata, and service credential metadata/issuance/revocation.
 
 ## Customer actions
 
 The browser uses real capability-checked control-plane operations for
-application creation, environment creation, credential issuance, credential
-revocation, and promotion of an already admitted release. Create operations
-use idempotency keys and are audited. Credential plaintext is returned once,
-shown once in the browser, and never stored in metadata.
+application/environment lifecycle metadata, member invitations and bounded
+role/removal actions, credential issuance/revocation, support cases/replies,
+and promotion of an already admitted release. Mutations are tenant-scoped and
+audited. Create operations use idempotency keys where the underlying contract
+requires them.
+
+Member invitations currently create a short-lived, one-time invitation token
+and display it once to the authorized administrator. Delivery and redemption
+are not claimed until an email/invitation acceptance contract is available;
+the token is never stored in plaintext by the control plane.
 
 Release and patch creation remain CLI-driven because they require the local
 Flutter source tree and signing boundary:
@@ -65,11 +79,14 @@ workspace displays name, scope, resource binding, expiry, and status, but never
 returns token hashes or an existing plaintext token. Use short-lived, least-
 privilege credentials and revoke them when a demo or CI integration ends.
 
-The current member surface is a safe metadata foundation: it shows customer
-memberships and capabilities while excluding platform-audience memberships.
-Invitations, role changes, and member deactivation remain out of the UI until
-their server contracts can provide validation, authorization, and audit
-semantics.
+The member surface shows customer memberships and capabilities while
+excluding platform-audience memberships. Administrators can issue/revoke
+pending invitations and perform the bounded role/removal operations exposed by
+the server; owner transfer/removal remains protected.
+
+Support cases are organization-scoped. Customers can create a case, see its
+status and customer-visible timeline, and reply. Platform-internal notes and
+other organizations’ cases are excluded by the server projection.
 
 ## Managed and self-hosted behavior
 

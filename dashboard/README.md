@@ -6,11 +6,14 @@ authentication routes and keeps the access and session tokens only in live
 memory. It does not use `localStorage`, `sessionStorage`, cookies, or token
 URLs.
 
-The dashboard is intentionally read-only. It renders the safe overview
-projection when the configured control plane provides it. Releases, patches,
-deployment records, and audit records are never synthesized from counts or
-client-side guesses. Unsupported backend capabilities are shown as
-unavailable.
+The dashboard contains two explicit authenticated shells: Customer Workspace
+for one organization and Platform Console for authorized Hyfens operators.
+It renders authoritative projections and capability-driven unavailable states;
+it does not synthesize releases, patches, deployment records, revenue, or
+health from client-side guesses. Safe customer mutations include application
+and environment metadata, invitations/member administration, credentials,
+support cases, and promotion of an already admitted release. Source-dependent
+release/patch/rollback work remains CLI-driven.
 
 ## Run it locally
 
@@ -61,7 +64,18 @@ POST /v1/public/register
 POST /v1/public/waitlist
 POST /v1/public/newsletter
 GET  /v1/organizations/{organization_id}/overview
+GET  /v1/organizations/{organization_id}/support/cases
+POST /v1/organizations/{organization_id}/support/cases
+POST /v1/organizations/{organization_id}/support/cases/{case_id}/messages
+GET/PATCH /v1/platform/support/cases/{case_id}
+POST /v1/platform/support/cases/{case_id}/messages
+GET  /v1/platform/commercial
 ```
+
+The proxy also forwards the bounded application, environment, member,
+invitation, credential, and promotion routes used by the two shells. It does
+not become a generic browser proxy; every route, method, query parameter, and
+request body is validated before forwarding.
 
 Public registration accepts exactly `{"email":"...","password":"..."}`
 and returns the same immediate `HumanLoginResult` JSON as password login. It
@@ -92,8 +106,13 @@ The dashboard image receives its API base at container startup through
 ## Backend boundaries
 
 The dashboard can display organization, application, environment, release,
-patch, rollout, artifact, and redacted audit records only when they are
-returned by the authoritative read-only overview projection. It does not
-claim runtime health, fleet telemetry, rollout success, invitations, or API
-key management. The settings page marks API-key management unavailable until
-the control plane advertises a browser-safe credential inventory contract.
+patch, rollout, artifact, redacted audit, support, subscription, and bounded
+platform records only when they are returned by the corresponding
+authoritative projection. Commercial metrics are unavailable when billing
+source data is unavailable or mixes currencies; payment history is never
+invented. Customer support responses exclude platform-internal notes.
+
+Credential plaintext is shown once after issuance and is not stored by the
+dashboard. Customer and platform contexts use separate navigation and
+server-side authorization audiences. The platform organization directory is
+not implemented with customer membership switching.

@@ -322,6 +322,139 @@ void main() {
       client.close(force: true);
     }
   });
+
+  test('keeps commercial and support projections audience- and tenant-scoped', () async {
+    final client = HttpClient();
+    try {
+      final platformLogin = await _login(
+        client,
+        server.port,
+        demoOwnerEmail,
+        'demo-password',
+        audience: platformAuthorizationAudience,
+      );
+      final platformToken = platformLogin.body['access_token']! as String;
+      final platformProfile = demoOwnerProfileName;
+      final commercial = await _get(
+        client,
+        server.port,
+        '/v1/platform/commercial?profile=$platformProfile',
+        token: platformToken,
+      );
+      expect(commercial.statusCode, 200, reason: jsonEncode(commercial.body));
+      expect(commercial.body['scope'], 'platform');
+      expect(commercial.body['status'], 'SOURCE_NOT_AVAILABLE');
+      expect(jsonEncode(commercial.body), isNot(contains('passwordHash')));
+
+      final customerLogin = await _login(
+        client,
+        server.port,
+        demoOwnerEmail,
+        'demo-password',
+      );
+      final customerToken = customerLogin.body['access_token']! as String;
+      final customerCommercial = await _get(
+        client,
+        server.port,
+        '/v1/platform/commercial',
+        token: customerToken,
+      );
+      expect(customerCommercial.statusCode, 403);
+
+      final created = await _postJson(
+        client,
+        server.port,
+        '/v1/organizations/$demoOrganizationId/support/cases',
+        token: customerToken,
+        body: <String, Object?>{
+          'subject': 'Promotion needs review',
+          'description': 'The demo environment needs a support response.',
+          'priority': 'HIGH',
+        },
+      );
+      expect(created.statusCode, 201, reason: jsonEncode(created.body));
+      final caseId =
+          ((created.body['case']! as Map<Object?, Object?>)['id']! as String);
+
+      final platformCases = await _get(
+        client,
+        server.port,
+        '/v1/platform/support/cases?profile=$platformProfile',
+        token: platformToken,
+      );
+      expect(
+        platformCases.statusCode,
+        200,
+        reason: jsonEncode(platformCases.body),
+      );
+      expect(platformCases.body['scope'], 'platform');
+      expect(jsonEncode(platformCases.body), contains(caseId));
+
+      final staffUserId = platformLogin.body['user_id']! as String;
+      final updated = await _patchJson(
+        client,
+        server.port,
+        '/v1/platform/support/cases/$caseId?profile=$platformProfile',
+        token: platformToken,
+        body: <String, Object?>{
+          'status': 'IN_PROGRESS',
+          'priority': 'URGENT',
+          'assigned_to': staffUserId,
+        },
+      );
+      expect(updated.statusCode, 200, reason: jsonEncode(updated.body));
+      expect(
+        (updated.body['case']! as Map<Object?, Object?>)['status'],
+        'IN_PROGRESS',
+      );
+
+      final internal = await _postJson(
+        client,
+        server.port,
+        '/v1/platform/support/cases/$caseId/messages?profile=$platformProfile',
+        token: platformToken,
+        body: <String, Object?>{
+          'body': 'Staff-only investigation note.',
+          'visibility': platformInternalSupportVisibility,
+        },
+      );
+      expect(internal.statusCode, 200, reason: jsonEncode(internal.body));
+      expect(
+        jsonEncode(internal.body),
+        contains('Staff-only investigation note.'),
+      );
+
+      final customerCase = await _get(
+        client,
+        server.port,
+        '/v1/organizations/$demoOrganizationId/support/cases/$caseId',
+        token: customerToken,
+      );
+      expect(
+        customerCase.statusCode,
+        200,
+        reason: jsonEncode(customerCase.body),
+      );
+      expect(
+        jsonEncode(customerCase.body),
+        isNot(contains('Staff-only investigation note.')),
+      );
+      expect(
+        jsonEncode(customerCase.body),
+        isNot(contains(platformInternalSupportVisibility)),
+      );
+
+      final deniedPlatformSupport = await _get(
+        client,
+        server.port,
+        '/v1/platform/support/cases',
+        token: customerToken,
+      );
+      expect(deniedPlatformSupport.statusCode, 403);
+    } finally {
+      client.close(force: true);
+    }
+  });
 }
 
 Future<_Response> _login(
@@ -380,6 +513,27 @@ Future<_Response> _postJson(
   if (idempotencyKey != null) {
     request.headers.set('Idempotency-Key', idempotencyKey);
   }
+  request.add(encoded);
+  final response = await request.close();
+  return _decodeResponse(response);
+}
+
+Future<_Response> _patchJson(
+  HttpClient client,
+  int port,
+  String path, {
+  required Map<String, Object?> body,
+  String? token,
+}) async {
+  final request = await client.openUrl(
+    'PATCH',
+    Uri.parse('http://127.0.0.1:$port$path'),
+  );
+  final encoded = utf8.encode(jsonEncode(body));
+  request
+    ..headers.contentType = ContentType.json
+    ..contentLength = encoded.length;
+  if (token != null) request.headers.set('Authorization', 'Bearer $token');
   request.add(encoded);
   final response = await request.close();
   return _decodeResponse(response);

@@ -9,6 +9,7 @@ import 'human_auth.dart';
 import 'observation.dart';
 import 'operator_overview.dart';
 import 'p3e_evaluation.dart';
+import 'platform_commercial.dart';
 import 'platform_console.dart';
 import 'platform_metrics.dart';
 import 'public_onboarding.dart';
@@ -18,6 +19,7 @@ import 'reconciliation_periodic.dart';
 import 'release_bundle.dart';
 import 'rollout.dart';
 import 'service.dart';
+import 'support.dart';
 
 final class ControlPlaneHttpLimits {
   const ControlPlaneHttpLimits({
@@ -168,6 +170,7 @@ final class ControlPlaneHttpServer {
        _operatorOverview = OperatorOverviewProjection(service),
        _publicOnboarding = PublicOnboardingService(store: service.store),
        _platformConsole = PlatformConsoleProjection(service.store),
+       _platformCommercial = PlatformCommercialProjection(service.store),
        _platformMetrics = PlatformMetricsProjection(store: service.store),
        _readyCheck = readyCheck ?? service.checkReadiness;
 
@@ -181,6 +184,7 @@ final class ControlPlaneHttpServer {
   final OperatorOverviewProjection _operatorOverview;
   final PublicOnboardingService _publicOnboarding;
   final PlatformConsoleProjection _platformConsole;
+  final PlatformCommercialProjection _platformCommercial;
   final PlatformMetricsProjection _platformMetrics;
   final ControlPlaneMetrics metrics = ControlPlaneMetrics();
   final Future<bool> Function() _readyCheck;
@@ -291,6 +295,38 @@ final class ControlPlaneHttpServer {
       if (request.method == 'GET' &&
           _matches(path, const ['v1', 'platform', 'metrics'])) {
         await _readPlatformMetrics(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'commercial'])) {
+        await _readPlatformCommercial(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'support', 'cases'])) {
+        await _readPlatformSupportCases(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'support', 'cases', '*'])) {
+        await _readPlatformSupportCase(request, path, requestId);
+        return;
+      }
+      if (request.method == 'PATCH' &&
+          _matches(path, const ['v1', 'platform', 'support', 'cases', '*'])) {
+        await _updatePlatformSupportCase(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'support',
+            'cases',
+            '*',
+            'messages',
+          ])) {
+        await _replyPlatformSupportCase(request, path, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -504,6 +540,29 @@ final class ControlPlaneHttpServer {
         await _createApplication(request, path, requestId);
         return;
       }
+      if (request.method == 'PATCH' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'applications',
+            '*',
+          ])) {
+        await _updateApplication(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'applications',
+            '*',
+            'archive',
+          ])) {
+        await _archiveApplication(request, path, requestId);
+        return;
+      }
       if (request.method == 'POST' &&
           _matches(path, const [
             'v1',
@@ -582,6 +641,29 @@ final class ControlPlaneHttpServer {
         await _createEnvironment(request, path, requestId);
         return;
       }
+      if (request.method == 'PATCH' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'environments',
+            '*',
+          ])) {
+        await _updateEnvironment(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'environments',
+            '*',
+            'archive',
+          ])) {
+        await _archiveEnvironment(request, path, requestId);
+        return;
+      }
       if (request.method == 'GET' &&
           _matches(path, const ['v1', 'organizations', '*', 'credentials'])) {
         await _readCredentials(request, path, requestId);
@@ -590,6 +672,92 @@ final class ControlPlaneHttpServer {
       if (request.method == 'GET' &&
           _matches(path, const ['v1', 'organizations', '*', 'members'])) {
         await _readOrganizationMembers(request, path, requestId);
+        return;
+      }
+      if (request.method == 'PATCH' &&
+          _matches(path, const ['v1', 'organizations', '*', 'members', '*'])) {
+        await _updateOrganizationMember(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'members',
+            '*',
+            'remove',
+          ])) {
+        await _removeOrganizationMember(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'organizations', '*', 'invitations'])) {
+        await _readOrganizationInvitations(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'organizations', '*', 'invitations'])) {
+        await _inviteOrganizationMember(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'invitations',
+            '*',
+            'revoke',
+          ])) {
+        await _revokeOrganizationInvitation(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'support',
+            'cases',
+          ])) {
+        await _readSupportCases(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'support',
+            'cases',
+          ])) {
+        await _createSupportCase(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'support',
+            'cases',
+            '*',
+          ])) {
+        await _readSupportCase(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'support',
+            'cases',
+            '*',
+            'messages',
+          ])) {
+        await _replySupportCase(request, path, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -1375,6 +1543,49 @@ final class ControlPlaneHttpServer {
     });
   }
 
+  Future<void> _updateApplication(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'name'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Application updates support only name',
+        statusCode: 422,
+      );
+    }
+    final application = await service.updateApplication(
+      token: _bearer(request),
+      organizationId: path[2],
+      applicationId: path[4],
+      name: _string(body, 'name'),
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...application.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _archiveApplication(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final application = await service.archiveApplication(
+      token: _bearer(request),
+      organizationId: path[2],
+      applicationId: path[4],
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...application.toJson(),
+      'request_id': requestId,
+    });
+  }
+
   Future<void> _evaluateHealth(
     HttpRequest request,
     List<String> path,
@@ -1541,6 +1752,49 @@ final class ControlPlaneHttpServer {
       requestId: requestId,
     );
     await _json(request.response, 201, <String, Object?>{
+      ...environment.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _updateEnvironment(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'name'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Environment updates support only name',
+        statusCode: 422,
+      );
+    }
+    final environment = await service.updateEnvironment(
+      token: _bearer(request),
+      organizationId: path[2],
+      environmentId: path[4],
+      name: _string(body, 'name'),
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...environment.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _archiveEnvironment(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final environment = await service.archiveEnvironment(
+      token: _bearer(request),
+      organizationId: path[2],
+      environmentId: path[4],
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
       ...environment.toJson(),
       'request_id': requestId,
     });
@@ -1743,6 +1997,164 @@ final class ControlPlaneHttpServer {
     });
   }
 
+  Future<void> _readPlatformCommercial(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform commercial metrics supports only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformCommercialReadCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformCommercial.read();
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformSupportCases(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    const allowed = <String>{
+      'profile',
+      'status',
+      'q',
+      'organization_id',
+      'limit',
+      'offset',
+    };
+    if (query.keys.any((key) => !allowed.contains(key))) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform support accepts profile, status, q, organization_id, limit, and offset',
+        statusCode: 422,
+      );
+    }
+    final projection = await service.listPlatformSupportCases(
+      accessToken: _bearer(request),
+      profileName: query['profile'],
+      status: query['status'],
+      query: query['q'],
+      organizationId: query['organization_id'],
+      limit: _queryInt(query, 'limit', 50),
+      offset: _queryInt(query, 'offset', 0),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformSupportCase(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform support case reads support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    final projection = await service.readPlatformSupportCase(
+      accessToken: _bearer(request),
+      profileName: query['profile'],
+      caseId: path[4],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _updatePlatformSupportCase(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.queryParameters.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform support updates support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    final body = await _jsonBody(request);
+    const allowed = <String>{'status', 'priority', 'assigned_to'};
+    if (body.keys.any((key) => !allowed.contains(key)) || body.isEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Support case updates require status, priority, or assigned_to',
+        statusCode: 422,
+      );
+    }
+    final projection = await service.updatePlatformSupportCase(
+      accessToken: _bearer(request),
+      profileName: request.uri.queryParameters['profile'],
+      caseId: path[4],
+      status: _optionalString(body, 'status'),
+      priority: _optionalString(body, 'priority'),
+      assignedTo: _nullableString(body, 'assigned_to'),
+      clearAssignedTo:
+          body.containsKey('assigned_to') && body['assigned_to'] == null,
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _replyPlatformSupportCase(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.queryParameters.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform support replies support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    final body = await _jsonBody(request);
+    final allowed = <String>{'body', 'visibility'};
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.containsKey('body')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Support replies require body and optionally visibility',
+        statusCode: 422,
+      );
+    }
+    final projection = await service.replyPlatformSupportCase(
+      accessToken: _bearer(request),
+      profileName: request.uri.queryParameters['profile'],
+      caseId: path[4],
+      body: _string(body, 'body'),
+      visibility:
+          _optionalString(body, 'visibility') ?? customerSupportVisibility,
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
   Future<void> _readPlatformOrganizations(
     HttpRequest request,
     String requestId,
@@ -1914,6 +2326,240 @@ final class ControlPlaneHttpServer {
       'schemaVersion': 1,
       'readOnly': true,
       'members': members,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _updateOrganizationMember(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'role'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Member updates support only role',
+        statusCode: 422,
+      );
+    }
+    final member = await service.updateOrganizationMemberRole(
+      token: _bearer(request),
+      organizationId: path[2],
+      userId: path[4],
+      role: _string(body, 'role'),
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...member,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _removeOrganizationMember(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    await service.removeOrganizationMember(
+      token: _bearer(request),
+      organizationId: path[2],
+      userId: path[4],
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'status': 'removed',
+      'user_id': path[4],
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readOrganizationInvitations(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Organization invitation reads do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    final invitations = await service.listOrganizationInvitations(
+      token: _bearer(request),
+      organizationId: path[2],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': true,
+      'invitations': invitations,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _inviteOrganizationMember(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    const allowed = <String>{'email', 'role', 'expires_at'};
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(const <String>{'email', 'role'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Member invitations require email and role',
+        statusCode: 422,
+      );
+    }
+    final invitation = await service.inviteOrganizationMember(
+      token: _bearer(request),
+      organizationId: path[2],
+      email: _string(body, 'email'),
+      role: _string(body, 'role'),
+      expiresAt: _optionalDateTime(body, 'expires_at'),
+      requestId: requestId,
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...invitation.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _revokeOrganizationInvitation(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final invitation = await service.revokeOrganizationInvitation(
+      token: _bearer(request),
+      organizationId: path[2],
+      invitationId: path[4],
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...invitation.toMetadataJson(),
+      'active': false,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readSupportCases(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    const allowed = <String>{'status', 'q', 'limit', 'offset'};
+    if (query.keys.any((key) => !allowed.contains(key))) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Support case reads accept status, q, limit, and offset',
+        statusCode: 422,
+      );
+    }
+    final projection = await service.listSupportCases(
+      token: _bearer(request),
+      organizationId: path[2],
+      status: query['status'],
+      query: query['q'],
+      limit: _queryInt(query, 'limit', 50),
+      offset: _queryInt(query, 'offset', 0),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _createSupportCase(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    const allowed = <String>{
+      'subject',
+      'description',
+      'category',
+      'priority',
+      'application_id',
+      'environment_id',
+    };
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(const <String>{
+          'subject',
+          'description',
+        })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Support cases require subject and description',
+        statusCode: 422,
+      );
+    }
+    final projection = await service.createSupportCase(
+      token: _bearer(request),
+      organizationId: path[2],
+      subject: _string(body, 'subject'),
+      description: _string(body, 'description'),
+      category: _optionalString(body, 'category') ?? 'general',
+      priority: _optionalString(body, 'priority') ?? 'NORMAL',
+      applicationId: _optionalString(body, 'application_id'),
+      environmentId: _optionalString(body, 'environment_id'),
+      requestId: requestId,
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readSupportCase(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Support case reads do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    final projection = await service.readSupportCase(
+      token: _bearer(request),
+      organizationId: path[2],
+      caseId: path[5],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _replySupportCase(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'body'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Support replies require body',
+        statusCode: 422,
+      );
+    }
+    final projection = await service.replySupportCase(
+      token: _bearer(request),
+      organizationId: path[2],
+      caseId: path[5],
+      body: _string(body, 'body'),
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
       'request_id': requestId,
     });
   }
@@ -2694,6 +3340,14 @@ final class ControlPlaneHttpServer {
       throw FormatException('Missing or invalid $key');
     }
     return value;
+  }
+
+  int _queryInt(Map<String, String> query, String key, int fallback) {
+    final value = query[key];
+    if (value == null) return fallback;
+    final parsed = int.tryParse(value);
+    if (parsed == null) throw FormatException('Invalid $key');
+    return parsed;
   }
 
   String _apiPath(String suffix) =>

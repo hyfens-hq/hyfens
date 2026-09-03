@@ -19,12 +19,15 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         if self.path == "/.well-known/hyfens":
             self._json(200, {"product": "hyfens", "apiVersion": "v1"})
             return
-        if urllib.parse.urlparse(self.path).path == "/v1/platform/metrics":
+        parsed_path = urllib.parse.urlparse(self.path).path
+        if parsed_path in {"/v1/platform/metrics", "/v1/platform/commercial"}:
             self._json(200, {"readOnly": True, "scope": "platform"})
             return
-        if urllib.parse.urlparse(self.path).path.startswith(
+        if parsed_path.startswith(
             "/v1/platform/organizations"
-        ) or urllib.parse.urlparse(self.path).path == "/v1/platform/audit":
+        ) or parsed_path == "/v1/platform/audit" or parsed_path.startswith(
+            "/v1/platform/support/cases"
+        ):
             self._json(200, {"readOnly": True, "scope": "platform"})
             return
         if self.path.startswith("/v1/organizations/"):
@@ -47,11 +50,31 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         if self.path == "/auth/authorize":
             self._json(200, {"code": "hfc_demo", "state": "state_demo", "redirect_uri": "http://127.0.0.1:43127/callback"})
             return
+        parsed_path = urllib.parse.urlparse(self.path).path
         if self.path in {"/v1/public/register", "/v1/public/waitlist", "/v1/public/newsletter"}:
             self._json(200, {"status": "accepted", "request_id": "request_demo"})
             return
+        if parsed_path.startswith("/v1/organizations/") and (
+            "/support/cases" in parsed_path or parsed_path.endswith("/invitations")
+        ):
+            self._json(200, {"readOnly": False, "scope": "customer"})
+            return
+        if parsed_path.startswith("/v1/platform/support/cases/"):
+            self._json(200, {"readOnly": False, "scope": "platform"})
+            return
         if self.path in {"/auth/token", "/auth/device/code", "/auth/device/token", "/auth/device/approve"}:
             self._json(200, {"status": "accepted"})
+            return
+        self._json(404, {"error": {"code": "NOT_FOUND"}})
+
+    def do_PATCH(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        self.__class__.calls.append(
+            (self.command, self.path, self.headers.get("Authorization"), body)
+        )
+        if urllib.parse.urlparse(self.path).path.startswith("/v1/platform/support/cases/"):
+            self._json(200, {"readOnly": False, "scope": "platform"})
             return
         self._json(404, {"error": {"code": "NOT_FOUND"}})
 
@@ -314,6 +337,44 @@ class ProxyRouteTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn(b"HyfensAuthFlow", body)
 
+    def test_proxy_forwards_support_and_commercial_routes_with_bounded_queries(self):
+        headers = {"Authorization": "Bearer memory-access"}
+        requests = (
+            ("GET", "/v1/platform/commercial?profile=super-admin"),
+            ("GET", "/v1/platform/support/cases?profile=super-admin&status=OPEN"),
+            ("GET", "/v1/organizations/org_demo/support/cases"),
+            ("GET", "/v1/organizations/org_demo/invitations"),
+            ("POST", "/v1/organizations/org_demo/invitations"),
+            ("POST", "/v1/organizations/org_demo/support/cases"),
+            ("PATCH", "/v1/platform/support/cases/case_demo?profile=super-admin"),
+            ("POST", "/v1/platform/support/cases/case_demo/messages?profile=super-admin"),
+        )
+        for method, path in requests:
+            with self.subTest(method=method, path=path):
+                if method == "PATCH":
+                    body = {"status": "IN_PROGRESS"}
+                elif method == "POST" and "/organizations/" in path:
+                    body = {"subject": "Help", "description": "A question"}
+                elif method == "POST":
+                    body = {"body": "Reply"}
+                else:
+                    body = None
+                status, _ = self.request(method, path, body, headers=headers)
+                self.assertEqual(status, 200)
+        self.assertEqual(
+            [(call[0], call[1]) for call in _UpstreamHandler.calls],
+            list(requests),
+        )
+
+        status, _ = self.request(
+            "PATCH",
+            "/v1/platform/support/cases/case_demo?profile=super-admin&token=secret",
+            {"status": "OPEN"},
+            headers=headers,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(len(_UpstreamHandler.calls), len(requests))
+
     def test_auth_pages_load_runtime_config_before_auth_flow(self):
         pages = (
             (
@@ -347,7 +408,10 @@ class ProxyRouteTest(unittest.TestCase):
             "/platform/organizations/org_demo",
             "/platform/audit",
             "/platform/operations",
+            "/platform/commercial",
+            "/platform/support",
             "/platform/settings",
+            "/support",
             "/settings",
         ):
             with self.subTest(path=path):
@@ -357,7 +421,14 @@ class ProxyRouteTest(unittest.TestCase):
         self.assertEqual(_UpstreamHandler.calls, [])
 
     def test_platform_host_routes_serve_the_platform_shell_index(self):
-        for path in ("/", "/organizations", "/organizations/org_demo", "/audit"):
+        for path in (
+            "/",
+            "/organizations",
+            "/organizations/org_demo",
+            "/audit",
+            "/commercial",
+            "/support",
+        ):
             with self.subTest(path=path):
                 status, body = self.request(
                     "GET",

@@ -32,6 +32,9 @@ PLATFORM_ORGANIZATIONS_PATH = re.compile(
 ORGANIZATION_METADATA_PATH = re.compile(
     r"^/v1/organizations/[^/]+/(?:members|credentials)$"
 )
+ORGANIZATION_INVITATIONS_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/invitations$"
+)
 ORGANIZATION_CREDENTIAL_ISSUE_PATH = re.compile(
     r"^/v1/organizations/[^/]+/credentials$"
 )
@@ -47,6 +50,42 @@ ENVIRONMENT_CREATE_PATH = re.compile(
 ENVIRONMENT_PROMOTE_PATH = re.compile(
     r"^/v1/organizations/[^/]+/environments/[^/]+/release-promotions$"
 )
+APPLICATION_UPDATE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/applications/[^/]+$"
+)
+APPLICATION_ARCHIVE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/applications/[^/]+/archive$"
+)
+ENVIRONMENT_UPDATE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/environments/[^/]+$"
+)
+ENVIRONMENT_ARCHIVE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/environments/[^/]+/archive$"
+)
+ORGANIZATION_MEMBER_UPDATE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/members/[^/]+$"
+)
+ORGANIZATION_MEMBER_REMOVE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/members/[^/]+/remove$"
+)
+ORGANIZATION_INVITATION_REVOKE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/invitations/[^/]+/revoke$"
+)
+CUSTOMER_SUPPORT_CASES_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/support/cases$"
+)
+CUSTOMER_SUPPORT_CASE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/support/cases/[^/]+$"
+)
+CUSTOMER_SUPPORT_MESSAGE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/support/cases/[^/]+/messages$"
+)
+PLATFORM_SUPPORT_CASE_PATH = re.compile(
+    r"^/v1/platform/support/cases/[^/]+$"
+)
+PLATFORM_SUPPORT_MESSAGE_PATH = re.compile(
+    r"^/v1/platform/support/cases/[^/]+/messages$"
+)
 PLATFORM_VIEW_PATH = re.compile(r"^/platform/organizations/[^/]+$")
 PLATFORM_HOST_ORGANIZATION_PATH = re.compile(r"^/organizations/[^/]+$")
 PLATFORM_HOSTNAMES = {"admin.hyfens.com", "platform.hyfens.com"}
@@ -57,6 +96,8 @@ PLATFORM_HOST_VIEW_PATHS = {
     "/operations",
     "/users",
     "/entitlements",
+    "/commercial",
+    "/support",
     "/settings",
 }
 DASHBOARD_VIEW_PATHS = {
@@ -69,6 +110,7 @@ DASHBOARD_VIEW_PATHS = {
     "/artifacts",
     "/deployments",
     "/audit",
+    "/support",
     "/settings",
     "/platform",
     "/platform/organizations",
@@ -76,6 +118,8 @@ DASHBOARD_VIEW_PATHS = {
     "/platform/operations",
     "/platform/users",
     "/platform/entitlements",
+    "/platform/commercial",
+    "/platform/support",
     "/platform/settings",
 }
 
@@ -100,6 +144,8 @@ _PROXY_ROUTES = {
     ("GET", "/v1/platform/audit"): "platform-audit",
     ("GET", "/v1/platform/users"): "platform-users",
     ("GET", "/v1/platform/entitlements"): "platform-entitlements",
+    ("GET", "/v1/platform/commercial"): "platform-commercial",
+    ("GET", "/v1/platform/support/cases"): "platform-support-cases",
 }
 
 _AUTHORIZATION_QUERY_KEYS = {
@@ -192,7 +238,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_error(405, "Only the bounded dashboard POST routes are supported")
 
     def do_PUT(self) -> None:
-        self.send_error(405, "Only GET is supported")
+        self.send_error(405, "Only the bounded dashboard routes are supported")
+
+    def do_PATCH(self) -> None:
+        if self._proxy_route() is not None:
+            self._proxy_request()
+            return
+        self.send_error(405, "Only the bounded dashboard PATCH routes are supported")
 
     def do_DELETE(self) -> None:
         self.send_error(405, "Only GET is supported")
@@ -214,6 +266,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return "platform-audit"
         if self.command == "GET" and ORGANIZATION_METADATA_PATH.fullmatch(parsed.path):
             return "organization-metadata"
+        if self.command == "GET" and ORGANIZATION_INVITATIONS_PATH.fullmatch(
+            parsed.path
+        ):
+            return "organization-invitations"
+        if self.command == "POST" and ORGANIZATION_INVITATIONS_PATH.fullmatch(
+            parsed.path
+        ):
+            return "invitation-create"
         if self.command == "POST" and ORGANIZATION_CREDENTIAL_ISSUE_PATH.fullmatch(
             parsed.path
         ):
@@ -228,6 +288,34 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return "environment-create"
         if self.command == "POST" and ENVIRONMENT_PROMOTE_PATH.fullmatch(parsed.path):
             return "environment-promote"
+        if self.command == "PATCH" and APPLICATION_UPDATE_PATH.fullmatch(parsed.path):
+            return "application-update"
+        if self.command == "POST" and APPLICATION_ARCHIVE_PATH.fullmatch(parsed.path):
+            return "application-archive"
+        if self.command == "PATCH" and ENVIRONMENT_UPDATE_PATH.fullmatch(parsed.path):
+            return "environment-update"
+        if self.command == "POST" and ENVIRONMENT_ARCHIVE_PATH.fullmatch(parsed.path):
+            return "environment-archive"
+        if self.command == "PATCH" and ORGANIZATION_MEMBER_UPDATE_PATH.fullmatch(parsed.path):
+            return "member-update"
+        if self.command == "POST" and ORGANIZATION_MEMBER_REMOVE_PATH.fullmatch(parsed.path):
+            return "member-remove"
+        if self.command == "POST" and ORGANIZATION_INVITATION_REVOKE_PATH.fullmatch(parsed.path):
+            return "invitation-revoke"
+        if self.command == "GET" and CUSTOMER_SUPPORT_CASES_PATH.fullmatch(parsed.path):
+            return "support-cases"
+        if self.command == "POST" and CUSTOMER_SUPPORT_CASES_PATH.fullmatch(parsed.path):
+            return "support-case-create"
+        if self.command == "GET" and CUSTOMER_SUPPORT_CASE_PATH.fullmatch(parsed.path):
+            return "support-case"
+        if self.command == "POST" and CUSTOMER_SUPPORT_MESSAGE_PATH.fullmatch(parsed.path):
+            return "support-message"
+        if self.command == "GET" and PLATFORM_SUPPORT_CASE_PATH.fullmatch(parsed.path):
+            return "platform-support-case"
+        if self.command == "PATCH" and PLATFORM_SUPPORT_CASE_PATH.fullmatch(parsed.path):
+            return "platform-support-update"
+        if self.command == "POST" and PLATFORM_SUPPORT_MESSAGE_PATH.fullmatch(parsed.path):
+            return "platform-support-message"
         return None
 
     def _proxy_request(self) -> None:
@@ -244,13 +332,19 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             )
             or route in {
                 "platform-metrics",
+                "platform-commercial",
                 "platform-organizations",
                 "platform-organization",
                 "platform-audit",
                 "platform-users",
                 "platform-entitlements",
+                "platform-support-cases",
+                "platform-support-case",
+                "platform-support-update",
+                "platform-support-message",
+                "support-cases",
             }
-            and self._platform_query_is_safe(route, parsed.query)
+            and self._query_is_safe(route, parsed.query)
         ):
             self._json_error(400, "Query parameters are not supported on this route")
             return
@@ -259,15 +353,33 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "auth-me",
             "overview",
             "platform-metrics",
+            "platform-commercial",
             "platform-organizations",
             "platform-organization",
             "platform-audit",
+            "platform-support-cases",
+            "platform-support-case",
+            "platform-support-update",
+            "platform-support-message",
+            "support-cases",
+            "support-case-create",
+            "support-case",
+            "support-message",
             "organization-metadata",
+            "organization-invitations",
+            "invitation-create",
             "application-create",
+            "application-update",
+            "application-archive",
             "credential-issue",
             "credential-revoke",
             "environment-create",
+            "environment-update",
+            "environment-archive",
             "environment-promote",
+            "member-update",
+            "member-remove",
+            "invitation-revoke",
             "auth-authorize-post",
             "auth-device-approve",
         }:
@@ -276,7 +388,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return
 
         body = None
-        if self.command == "POST":
+        if self.command in {"POST", "PATCH"}:
             body = self._request_body()
             if body is None:
                 return
@@ -285,11 +397,20 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.query and route in {
             "auth-authorize-get",
             "platform-metrics",
+            "platform-commercial",
             "platform-organizations",
             "platform-organization",
             "platform-audit",
             "platform-users",
             "platform-entitlements",
+            "platform-support-cases",
+            "platform-support-case",
+            "platform-support-update",
+            "platform-support-message",
+            "support-cases",
+            "support-case",
+            "support-message",
+            "organization-invitations",
         }:
             target += f"?{parsed.query}"
         headers = {"Accept": "application/json"}
@@ -297,17 +418,35 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "auth-me",
             "overview",
             "platform-metrics",
+            "platform-commercial",
             "platform-organizations",
             "platform-organization",
             "platform-audit",
             "organization-metadata",
             "application-create",
+            "application-update",
+            "application-archive",
             "platform-users",
             "platform-entitlements",
+            "platform-support-cases",
+            "platform-support-case",
+            "platform-support-update",
+            "platform-support-message",
+            "support-cases",
+            "support-case-create",
+            "support-case",
+            "support-message",
             "credential-issue",
             "credential-revoke",
+            "organization-invitations",
+            "invitation-create",
             "environment-create",
+            "environment-update",
+            "environment-archive",
             "environment-promote",
+            "member-update",
+            "member-remove",
+            "invitation-revoke",
             "auth-authorize-post",
             "auth-device-approve",
         }:
@@ -374,18 +513,31 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         return all(len(items) == 1 and items[0] for items in values.values())
 
     @staticmethod
-    def _platform_query_is_safe(route: str, query: str) -> bool:
+    def _query_is_safe(route: str, query: str) -> bool:
         try:
             values = urllib.parse.parse_qs(query, keep_blank_values=True)
         except ValueError:
             return False
         allowed = {
             "platform-metrics": {"profile"},
+            "platform-commercial": {"profile"},
             "platform-organizations": {"profile", "q"},
             "platform-organization": {"profile"},
             "platform-audit": {"profile", "organization_id"},
             "platform-users": {"profile"},
             "platform-entitlements": {"profile"},
+            "platform-support-cases": {
+                "profile",
+                "status",
+                "q",
+                "organization_id",
+                "limit",
+                "offset",
+            },
+            "platform-support-case": {"profile"},
+            "platform-support-update": {"profile"},
+            "platform-support-message": {"profile"},
+            "support-cases": {"status", "q", "limit", "offset"},
         }.get(route, set())
         if not set(values).issubset(allowed):
             return False

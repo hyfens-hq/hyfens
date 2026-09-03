@@ -38,6 +38,9 @@ const String platformAuditReadCapability = 'platform:audit:read';
 const String platformOperationsReadCapability = 'platform:operations:read';
 const String platformAccountsReadCapability = 'platform:accounts:read';
 const String platformEntitlementsReadCapability = 'platform:entitlements:read';
+const String platformCommercialReadCapability = 'platform:commercial:read';
+const String platformSupportReadCapability = 'platform:support:read';
+const String platformSupportWriteCapability = 'platform:support:write';
 
 const Set<String> platformCapabilities = <String>{
   platformOverviewCapability,
@@ -47,9 +50,93 @@ const Set<String> platformCapabilities = <String>{
   platformOperationsReadCapability,
   platformAccountsReadCapability,
   platformEntitlementsReadCapability,
+  platformCommercialReadCapability,
+  platformSupportReadCapability,
+  platformSupportWriteCapability,
 };
 
 const Set<String> supportedPlatformCapabilities = platformCapabilities;
+
+/// Small, capability-based customer role bundles used by invitations and
+/// member administration. Frontends should consume the resulting capability
+/// set instead of branching on these names.
+const Map<String, Set<String>> customerRoleCapabilities = <String, Set<String>>{
+  'owner': controlScopes,
+  'admin': <String>{
+    'application:read',
+    applicationWriteScope,
+    'release:read',
+    'release:write',
+    'patch:read',
+    'patch:write',
+    'artifact:read',
+    'artifact:write',
+    environmentWriteScope,
+    'release:promote',
+    'bundle:read',
+    'bundle:write',
+    'audit:read',
+    organizationMembersReadScope,
+    organizationMembersWriteScope,
+    credentialReadScope,
+    'credential:issue',
+    'credential:revoke',
+    billingReadScope,
+    supportReadScope,
+    supportCreateScope,
+    supportReplyScope,
+  },
+  'developer': <String>{
+    'application:read',
+    'release:read',
+    'release:write',
+    'patch:read',
+    'patch:write',
+    'artifact:read',
+    'artifact:write',
+    'rollout:read',
+    'audit:read',
+    supportReadScope,
+    supportCreateScope,
+    supportReplyScope,
+  },
+  'release-manager': <String>{
+    'application:read',
+    'release:read',
+    'release:write',
+    'patch:read',
+    'patch:write',
+    'artifact:read',
+    'artifact:write',
+    'release:promote',
+    'rollout:read',
+    'audit:read',
+    supportReadScope,
+    supportCreateScope,
+    supportReplyScope,
+  },
+  'auditor': <String>{
+    'application:read',
+    'release:read',
+    'patch:read',
+    'artifact:read',
+    'rollout:read',
+    'audit:read',
+    supportReadScope,
+  },
+};
+
+Set<String> customerCapabilitiesForRole(String role) {
+  final capabilities = customerRoleCapabilities[role];
+  if (capabilities == null) {
+    throw const ControlPlaneException(
+      'INVALID_MEMBER_ROLE',
+      'The requested customer member role is not supported',
+      statusCode: 422,
+    );
+  }
+  return Set.unmodifiable(capabilities);
+}
 
 bool _isSupportedAuthorizationAudience(String value) =>
     value == customerAuthorizationAudience ||
@@ -650,15 +737,17 @@ final class HumanUserRecord {
   final List<HumanMembership> memberships;
   final DateTime createdAt;
 
-  HumanUserRecord copyWith({Iterable<HumanMembership>? memberships}) =>
-      HumanUserRecord(
-        id: id,
-        email: email,
-        passwordHash: passwordHash,
-        active: active,
-        memberships: memberships ?? this.memberships,
-        createdAt: createdAt,
-      );
+  HumanUserRecord copyWith({
+    Iterable<HumanMembership>? memberships,
+    bool? active,
+  }) => HumanUserRecord(
+    id: id,
+    email: email,
+    passwordHash: passwordHash,
+    active: active ?? this.active,
+    memberships: memberships ?? this.memberships,
+    createdAt: createdAt,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
@@ -2084,7 +2173,7 @@ final class HumanAuthService {
   /// membership, and the requested capability. An ordinary tenant owner
   /// cannot enumerate cross-organization data merely by possessing control
   /// capabilities.
-  Future<void> authorizePlatformCapability({
+  Future<HumanUserRecord> authorizePlatformCapability({
     required String accessToken,
     required String capability,
     String? profileName,
@@ -2128,6 +2217,7 @@ final class HumanAuthService {
         statusCode: 403,
       );
     }
+    return context.user;
   }
 
   /// Authorizes the bounded platform metrics projection through the same

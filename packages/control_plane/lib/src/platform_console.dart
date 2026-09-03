@@ -103,7 +103,9 @@ final class PlatformConsoleProjection {
               'name': application.name,
               'platform': application.platform,
               'runtimeApplicationId': application.runtimeApplicationId,
+              'status': application.status,
               'createdAt': application.createdAt.toUtc().toIso8601String(),
+              'updatedAt': application.updatedAt.toUtc().toIso8601String(),
             },
           )
           .toList(growable: false),
@@ -115,7 +117,9 @@ final class PlatformConsoleProjection {
               'name': environment.name,
               'version': environment.version,
               'promotedReleaseId': environment.promotedReleaseId,
+              'status': environment.status,
               'createdAt': environment.createdAt.toUtc().toIso8601String(),
+              'updatedAt': environment.updatedAt.toUtc().toIso8601String(),
             },
           )
           .toList(growable: false),
@@ -277,6 +281,27 @@ final class PlatformConsoleProjection {
     final patches = await _tenantValues('patches', organization.id);
     final rollouts = await _tenantValues('rollouts', organization.id);
     final audit = await _tenantValues('audit', organization.id);
+    final supportCases = await _tenantValues('support_cases', organization.id);
+    final subscriptions = await _tenantValues(
+      'billing_subscriptions',
+      organization.id,
+    );
+    final plans = <String, Map<String, Object?>>{
+      for (final value in await store.listJson('billing_plans'))
+        if (value['id'] is String) value['id']! as String: value,
+    };
+    final activeSubscriptions = subscriptions
+        .where(
+          (value) =>
+              value['status'] == 'active' || value['status'] == 'authenticated',
+        )
+        .toList(growable: false);
+    final activeSubscription = activeSubscriptions.isEmpty
+        ? null
+        : activeSubscriptions.first;
+    final activePlan = activeSubscription?['planId'] is String
+        ? plans[activeSubscription!['planId']! as String]
+        : null;
     final memberCount = await _memberCount(organization.id);
     final activity = <DateTime>[organization.createdAt];
     for (final values in <List<Map<String, Object?>>>[
@@ -286,6 +311,7 @@ final class PlatformConsoleProjection {
       patches,
       rollouts,
       audit,
+      supportCases,
     ]) {
       for (final value in values) {
         final createdAt = _createdAt(value);
@@ -304,6 +330,22 @@ final class PlatformConsoleProjection {
       'releaseCount': releases.length,
       'patchCount': patches.length,
       'memberCount': memberCount,
+      'openSupportCaseCount': supportCases
+          .where(
+            (value) =>
+                value['status'] != 'CLOSED' && value['status'] != 'RESOLVED',
+          )
+          .length,
+      if (activeSubscription != null)
+        'subscription': <String, Object?>{
+          'status': activeSubscription['status'],
+          'planId': activeSubscription['planId'],
+          'planName': activePlan?['name'],
+          'currency': activePlan?['currency'],
+          'amountMinor': activePlan?['amountMinor'],
+          'currentEndAt': activeSubscription['currentEndAt'],
+          'cancelAtCycleEnd': activeSubscription['cancelAtCycleEnd'],
+        },
     };
   }
 

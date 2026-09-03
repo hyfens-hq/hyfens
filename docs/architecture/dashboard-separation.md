@@ -13,8 +13,8 @@ contract remains in
 | Surface | Audience | Owns | Must not own |
 | --- | --- | --- | --- |
 | Public website | Prospective users and public visitors | Marketing, product explanation, pricing, docs, login/signup entry | Authenticated operations |
-| Customer Workspace | Customer organization owner/admin/developer/release/audit users | One organization’s applications, environments, releases, patches, deployments, audit, team, credentials, and settings | Other tenants, global service health, platform staff operations |
-| Platform Console | Authorized Hyfens owners, administrators, support, operations, and security staff | Platform metrics, bounded organization directory/detail, platform-audience audit, and operator context | Customer membership switching or customer-session impersonation |
+| Customer Workspace | Customer organization owner/admin/developer/release/audit users | One organization’s applications, environments, releases, patches, deployments, audit, team, credentials, support, and settings | Other tenants, global service health, platform staff operations |
+| Platform Console | Authorized Hyfens owners, administrators, support, operations, commercial, and security staff | Platform metrics, commercial projection, bounded organization directory/detail, support queue, platform-audience audit, and operator context | Customer membership switching or customer-session impersonation |
 | Shared auth/API/UI | All supported clients | Identity, sessions, CLI authorization, transport, errors, tokens, primitives, formatting | Product-specific navigation or authorization decisions |
 
 Managed Cloud and Self-Hosted use the same Customer Workspace concepts. The
@@ -70,6 +70,7 @@ own origin. The current customer routes are:
 /artifacts                artifacts
 /deployments              deployment records
 /audit                    customer audit
+/support                  customer support
 /settings                 customer/account settings
 ```
 
@@ -87,12 +88,14 @@ root, while a platform host supports the equivalent root routes:
 /platform/operations        metrics-backed operations
 /platform/users             platform staff metadata
 /platform/entitlements      plans and entitlement metadata
+/platform/commercial        subscription-derived commercial metrics
+/platform/support           tenant-aware support queue and case detail
 /platform/settings          platform operator settings
 ```
 
 On `admin.hyfens.com` or `platform.hyfens.com`, the same platform pages are
 addressed as `/`, `/organizations`, `/organizations/:id`, `/audit`,
-`/operations`, and `/settings`. The host/path split is implemented in the
+`/operations`, `/commercial`, `/support`, and `/settings`. The host/path split is implemented in the
 static route resolver and local server fallback; it is not a DNS claim.
 
 ## API boundary
@@ -104,18 +107,36 @@ implemented bounded projections are:
 | --- | --- | --- |
 | `GET /v1/organizations/{id}/overview` | Customer | Existing tenant-scoped read model for applications, environments, releases, patches, artifacts, rollouts, and redacted customer audit |
 | `GET /v1/organizations/{id}/members` | Customer | Safe member metadata for the selected organization; platform-audience memberships are excluded |
+| `PATCH /v1/organizations/{id}/members/{user}` | Customer | Capability-checked customer role update |
+| `POST /v1/organizations/{id}/members/{user}/remove` | Customer | Audited customer member removal/deactivation |
+| `GET /v1/organizations/{id}/invitations` | Customer | Pending invitation metadata without invitation secrets |
+| `POST /v1/organizations/{id}/invitations` | Customer | One-time invitation issuance; plaintext token is returned once |
+| `POST /v1/organizations/{id}/invitations/{invitation}/revoke` | Customer | Audited invitation revocation |
 | `GET /v1/organizations/{id}/credentials` | Customer | Credential metadata without token hashes or plaintext |
 | `POST /v1/organizations/{id}/credentials/{credential}/revoke` | Customer | Existing bounded credential revocation action |
 | `POST /v1/organizations/{id}/applications` | Customer | Idempotent application identity registration |
+| `PATCH /v1/organizations/{id}/applications/{app}` | Customer | Update mutable application metadata |
+| `POST /v1/organizations/{id}/applications/{app}/archive` | Customer | Archive an application without deleting history |
 | `POST /v1/organizations/{id}/applications/{app}/environments` | Customer | Idempotent environment creation under a tenant application |
+| `PATCH /v1/organizations/{id}/environments/{env}` | Customer | Update mutable environment metadata |
+| `POST /v1/organizations/{id}/environments/{env}/archive` | Customer | Archive an environment without deleting history |
 | `POST /v1/organizations/{id}/credentials` | Customer | One-time plaintext credential issuance; metadata is safe thereafter |
 | `POST /v1/organizations/{id}/environments/{env}/release-promotions` | Customer | Preconditioned promotion of an already admitted release |
+| `GET /v1/organizations/{id}/support/cases` | Customer | Tenant-scoped support case list |
+| `POST /v1/organizations/{id}/support/cases` | Customer | Create an audited support case |
+| `GET /v1/organizations/{id}/support/cases/{case}` | Customer | Customer-visible case timeline |
+| `POST /v1/organizations/{id}/support/cases/{case}/messages` | Customer | Customer-visible case reply |
 | `GET /v1/platform/metrics` | Platform | Existing aggregate platform metrics projection |
 | `GET /v1/platform/organizations` | Platform | Bounded organization directory with counts and activity summary |
 | `GET /v1/platform/organizations/{id}` | Platform | Read-focused organization, application, environment, and count projection |
 | `GET /v1/platform/audit` | Platform | Explicit platform-audience events only |
 | `GET /v1/platform/users` | Platform | Safe platform staff identity, role, capability, and access metadata |
 | `GET /v1/platform/entitlements` | Platform | Read-only plan and subscription metadata without provider secrets |
+| `GET /v1/platform/commercial` | Platform | Subscription-derived MRR/ARR projection or an explicit unavailable source state |
+| `GET /v1/platform/support/cases` | Platform | Bounded cross-tenant support queue |
+| `GET /v1/platform/support/cases/{case}` | Platform | Case detail including platform-internal notes |
+| `PATCH /v1/platform/support/cases/{case}` | Platform | Audited case status, priority, and active-staff assignment |
+| `POST /v1/platform/support/cases/{case}/messages` | Platform | Audited customer-visible reply or internal note |
 
 The local proxy forwards only these reviewed platform/customer metadata routes
 and their bounded query parameters. It does not become a generic browser
@@ -143,6 +164,9 @@ platform:audit:read
 platform:operations:read
 platform:accounts:read
 platform:entitlements:read
+platform:commercial:read
+platform:support:read
+platform:support:write
 ```
 
 The metrics-backed Operations page currently uses the existing
@@ -186,12 +210,11 @@ This milestone establishes the separation and the highest-value safe MVP
 foundations; it does not pretend that every future workflow exists. The
 following remain backlog until their backend contracts are ready:
 
-- application/environment update and archive workflows;
 - browser-side release and patch creation, because they require the local
   Flutter source tree;
 - browser-side rollback and any deployment action beyond promotion of an
   already admitted release;
-- member invitations, role mutation, and deactivation UX;
+- invitation email delivery/redemption and owner-transfer workflows;
 - full platform account/role administration, entitlement mutation, incidents,
   infrastructure/provider state, and time-limited support sessions;
 - MFA and additional managed Platform Console access hardening.
