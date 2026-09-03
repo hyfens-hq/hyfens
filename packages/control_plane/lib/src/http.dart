@@ -9,6 +9,8 @@ import 'human_auth.dart';
 import 'observation.dart';
 import 'operator_overview.dart';
 import 'p3e_evaluation.dart';
+import 'platform_console.dart';
+import 'platform_metrics.dart';
 import 'public_onboarding.dart';
 import 'reconciliation_domain.dart';
 import 'reconciliation_observability.dart';
@@ -116,6 +118,8 @@ final class ControlPlaneMetrics {
       final bounded = switch (segments[1]) {
         'organizations' =>
           segments.length >= 3 ? 'v1/organizations/*' : 'v1/organizations',
+        'platform' =>
+          segments.length >= 3 ? 'v1/platform/${segments[2]}' : 'v1/platform',
         'rollouts' => segments.length >= 3 ? 'v1/rollouts/*' : 'v1/rollouts',
         'runtime' =>
           segments.length >= 3 &&
@@ -163,6 +167,8 @@ final class ControlPlaneHttpServer {
            ControlPlaneDiscoveryConfig.fromEnvironment(Platform.environment),
        _operatorOverview = OperatorOverviewProjection(service),
        _publicOnboarding = PublicOnboardingService(store: service.store),
+       _platformConsole = PlatformConsoleProjection(service.store),
+       _platformMetrics = PlatformMetricsProjection(store: service.store),
        _readyCheck = readyCheck ?? service.checkReadiness;
 
   final ControlPlaneService service;
@@ -174,6 +180,8 @@ final class ControlPlaneHttpServer {
   final ReconciliationPeriodicRunner? periodicRunner;
   final OperatorOverviewProjection _operatorOverview;
   final PublicOnboardingService _publicOnboarding;
+  final PlatformConsoleProjection _platformConsole;
+  final PlatformMetricsProjection _platformMetrics;
   final ControlPlaneMetrics metrics = ControlPlaneMetrics();
   final Future<bool> Function() _readyCheck;
   final Map<String, List<DateTime>> _requestWindows =
@@ -278,6 +286,36 @@ final class ControlPlaneHttpServer {
       }
       if (request.method == 'GET' && apiPath == '/auth/me') {
         await _authMe(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'metrics'])) {
+        await _readPlatformMetrics(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'organizations'])) {
+        await _readPlatformOrganizations(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'organizations', '*'])) {
+        await _readPlatformOrganization(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'audit'])) {
+        await _readPlatformAudit(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'users'])) {
+        await _readPlatformUsers(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'entitlements'])) {
+        await _readPlatformEntitlements(request, requestId);
         return;
       }
       if (request.method == 'GET' && apiPath == '/auth/authorize') {
@@ -462,6 +500,11 @@ final class ControlPlaneHttpServer {
         return;
       }
       if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'organizations', '*', 'applications'])) {
+        await _createApplication(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
           _matches(path, const [
             'v1',
             'organizations',
@@ -525,6 +568,28 @@ final class ControlPlaneHttpServer {
       if (request.method == 'POST' &&
           _matches(path, const ['v1', 'organizations', '*', 'credentials'])) {
         await _issueCredential(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'applications',
+            '*',
+            'environments',
+          ])) {
+        await _createEnvironment(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'organizations', '*', 'credentials'])) {
+        await _readCredentials(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'organizations', '*', 'members'])) {
+        await _readOrganizationMembers(request, path, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -1289,6 +1354,27 @@ final class ControlPlaneHttpServer {
     });
   }
 
+  Future<void> _createApplication(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    final application = await service.createApplication(
+      token: _bearer(request),
+      organizationId: path[2],
+      runtimeApplicationId: _string(body, 'runtime_application_id'),
+      name: _optionalString(body, 'name'),
+      platform: _optionalString(body, 'platform'),
+      idempotencyKey: _idempotency(request),
+      requestId: requestId,
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...application.toJson(),
+      'request_id': requestId,
+    });
+  }
+
   Future<void> _evaluateHealth(
     HttpRequest request,
     List<String> path,
@@ -1425,6 +1511,7 @@ final class ControlPlaneHttpServer {
     final issued = await service.issueCredential(
       token: _bearer(request),
       organizationId: path[2],
+      name: _optionalString(body, 'name'),
       kind: kind,
       scopes: _stringSet(body, 'scopes'),
       applicationId: _optionalString(body, 'application_id'),
@@ -1433,8 +1520,28 @@ final class ControlPlaneHttpServer {
       requestId: requestId,
     );
     await _json(request.response, 201, <String, Object?>{
-      ...issued.record.toJson(),
+      ...issued.record.toMetadataJson(),
       'token': issued.token,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _createEnvironment(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    final environment = await service.createEnvironment(
+      token: _bearer(request),
+      organizationId: path[2],
+      applicationId: path[4],
+      name: _string(body, 'name'),
+      idempotencyKey: _idempotency(request),
+      requestId: requestId,
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...environment.toJson(),
       'request_id': requestId,
     });
   }
@@ -1607,6 +1714,206 @@ final class ControlPlaneHttpServer {
     );
     await _json(request.response, 200, <String, Object?>{
       ...overview.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformMetrics(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final queryKeys = request.uri.queryParameters.keys.toSet();
+    if (queryKeys.length > 1 ||
+        (queryKeys.isNotEmpty && !queryKeys.contains('profile'))) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform metrics supports only the optional profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformMetrics(
+      accessToken: _bearer(request),
+      profileName: request.uri.queryParameters['profile'],
+    );
+    final snapshot = await _platformMetrics.read();
+    await _json(request.response, 200, <String, Object?>{
+      ...snapshot,
+      'serviceMetrics': metrics.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformOrganizations(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile' && key != 'q')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform organizations supports only profile and q query parameters',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformOrganizationsReadCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformConsole.listOrganizations(
+      query: query['q'],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformOrganization(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform organization reads support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformOrganizationsInspectCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformConsole.readOrganization(path[3]);
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformAudit(HttpRequest request, String requestId) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile' && key != 'organization_id')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform audit supports only profile and organization_id query parameters',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformAuditReadCapability,
+      profileName: query['profile'],
+    );
+    final organizationId = query['organization_id'];
+    if (organizationId != null && organizationId.isEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'organization_id must not be empty',
+        statusCode: 422,
+      );
+    }
+    final projection = await _platformConsole.readAudit(
+      organizationId: organizationId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformUsers(HttpRequest request, String requestId) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform users supports only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformAccountsReadCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformConsole.listUsers();
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformEntitlements(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform entitlements supports only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformEntitlementsReadCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformConsole.readEntitlements();
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readCredentials(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Credential metadata does not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    final credentials = await service.listCredentials(
+      token: _bearer(request),
+      organizationId: path[2],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': true,
+      'credentials': credentials,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readOrganizationMembers(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Organization member reads do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    final members = await service.listOrganizationMembers(
+      token: _bearer(request),
+      organizationId: path[2],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': true,
+      'members': members,
       'request_id': requestId,
     });
   }
@@ -2489,7 +2796,10 @@ final class ControlPlaneHttpServer {
   Future<void> _authLogin(HttpRequest request, String requestId) async {
     _enforceCredentialTransport(request);
     final body = await _jsonBody(request);
-    if (!setEquals(body.keys.toSet(), const <String>{'email', 'password'})) {
+    if (!body.keys.toSet().every(
+          const <String>{'email', 'password', 'audience'}.contains,
+        ) ||
+        !body.keys.toSet().containsAll(const <String>{'email', 'password'})) {
       throw const ControlPlaneException(
         'INVALID_REQUEST',
         'Authentication request fields are unsupported',
@@ -2498,6 +2808,8 @@ final class ControlPlaneHttpServer {
     final result = await _humanAuth().login(
       email: _string(body, 'email'),
       password: _string(body, 'password'),
+      audience:
+          _optionalString(body, 'audience') ?? customerAuthorizationAudience,
     );
     await _json(request.response, 200, <String, Object?>{
       ...result.toJson(),

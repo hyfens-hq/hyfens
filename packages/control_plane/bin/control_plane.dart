@@ -49,6 +49,44 @@ Future<void> main(List<String> arguments) async {
       : HumanAuthService(store: store, config: config.auth!);
   final configuredService = ControlPlaneService(store: store, humanAuth: auth);
   await configuredService.initialize();
+  if (options.containsKey('seed-demo')) {
+    if (options.containsKey('bootstrap') ||
+        options.containsKey('bootstrap-admin') ||
+        options.containsKey('bootstrap-owner')) {
+      throw ArgumentError(
+        '--seed-demo cannot be combined with another bootstrap mode',
+      );
+    }
+    if (!options.containsKey('password-stdin')) {
+      throw ArgumentError('--seed-demo requires --password-stdin');
+    }
+    final configuredAuth = configuredService.humanAuth;
+    if (configuredAuth == null) {
+      throw ArgumentError(
+        '--seed-demo requires human authentication to be configured',
+      );
+    }
+    final password = stdin.readLineSync();
+    if (password == null) {
+      throw ArgumentError(
+        '--password-stdin requires one password line on stdin',
+      );
+    }
+    final result = await DemoAccountSeeder(
+      store: store,
+      auth: configuredAuth,
+    ).seed(password: password);
+    stdout.writeln('seed=local-demo');
+    stdout.writeln('organization_id=${result.organization.id}');
+    stdout.writeln('application_id=${result.application.id}');
+    stdout.writeln('environment_id=${result.environment.id}');
+    stdout.writeln('human_owner_id=${result.owner.id}');
+    stdout.writeln('human_owner_email=${result.owner.email}');
+    stdout.writeln('human_owner_profile=$demoOwnerProfileName');
+    await store.close();
+    taskRoleCredentials?.close();
+    return;
+  }
   if (options.containsKey('bootstrap-admin')) {
     if (options.containsKey('bootstrap') ||
         options.containsKey('bootstrap-owner')) {
@@ -169,7 +207,8 @@ Map<String, String> _options(List<String> arguments) {
       if (argument == '--bootstrap-only') result['bootstrap-only'] = 'true';
       continue;
     }
-    if (argument == '--bootstrap-admin' ||
+    if (argument == '--seed-demo' ||
+        argument == '--bootstrap-admin' ||
         argument == '--bootstrap-owner' ||
         argument == '--password-stdin') {
       result[argument.substring(2)] = 'true';

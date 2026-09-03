@@ -15,6 +15,7 @@ final class CredentialService {
   IssuedCredential issue({
     required String id,
     required String organizationId,
+    String name = 'Credential',
     required CredentialKind kind,
     required Set<String> scopes,
     String? applicationId,
@@ -64,6 +65,7 @@ final class CredentialService {
     final record = CredentialRecord(
       id: id,
       organizationId: organizationId,
+      name: name,
       kind: kind,
       tokenHash: tokenHash(token),
       scopes: scopes,

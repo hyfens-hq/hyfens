@@ -544,12 +544,14 @@ final class ControlPlaneService {
     final control = credentialService.issue(
       id: _id('cred'),
       organizationId: organization.id,
+      name: 'CLI control',
       kind: CredentialKind.control,
       scopes: controlScopes,
     );
     final delivery = credentialService.issue(
       id: _id('cred'),
       organizationId: organization.id,
+      name: 'Runtime delivery',
       kind: CredentialKind.delivery,
       scopes: deliveryScopes,
       applicationId: application.id,
@@ -589,6 +591,220 @@ final class ControlPlaneService {
     );
   });
 
+  /// Registers one customer application identity. An application represents a
+  /// single runtime package/bundle identity; Android and iOS identities are
+  /// therefore registered as separate applications when they differ.
+  /// Registration is idempotent so a dashboard retry cannot create a second
+  /// application for the same request.
+  Future<ApplicationRecord> createApplication({
+    required String token,
+    required String organizationId,
+    required String runtimeApplicationId,
+    String? name,
+    String? platform,
+    required String idempotencyKey,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      applicationWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final normalizedRuntimeApplicationId = requireRuntimeIdentity(
+      runtimeApplicationId.trim(),
+      'runtime application ID',
+    );
+    final normalizedName = name?.trim();
+    final normalizedPlatform = platform?.trim();
+    if (normalizedPlatform != null &&
+        normalizedPlatform != 'android' &&
+        normalizedPlatform != 'ios') {
+      throw const ControlPlaneException(
+        'INVALID_APPLICATION_PLATFORM',
+        'Application platform must be android or ios',
+        statusCode: 422,
+      );
+    }
+    final body = <String, Object?>{
+      'organizationId': actor.organizationId,
+      'runtimeApplicationId': normalizedRuntimeApplicationId,
+      'name': normalizedName,
+      'platform': normalizedPlatform,
+    };
+    final existing = await _existingIdempotency(
+      'application-create',
+      idempotencyKey,
+      body,
+    );
+    if (existing != null) {
+      final existingId = existing['applicationId'];
+      if (existingId is! String) {
+        throw const ControlPlaneException(
+          'STORAGE_CORRUPT',
+          'Application idempotency record is malformed',
+          statusCode: 500,
+        );
+      }
+      final application = await _application(existingId);
+      _requireTenant(application.organizationId, actor.organizationId);
+      return application;
+    }
+    final duplicate = (await store.listJson('applications')).any(
+      (value) =>
+          value['organizationId'] == actor.organizationId &&
+          value['runtimeApplicationId'] == normalizedRuntimeApplicationId,
+    );
+    if (duplicate) {
+      throw const ControlPlaneException(
+        'APPLICATION_CONFLICT',
+        'The runtime application identity is already registered',
+        statusCode: 409,
+      );
+    }
+    final application = ApplicationRecord(
+      id: _id('app'),
+      organizationId: actor.organizationId,
+      runtimeApplicationId: normalizedRuntimeApplicationId,
+      name: normalizedName,
+      platform: normalizedPlatform,
+      createdAt: _now(),
+    );
+    try {
+      await store.createJson(
+        'applications',
+        application.id,
+        application.toJson(),
+      );
+    } on StorageConflict {
+      throw const ControlPlaneException(
+        'APPLICATION_CONFLICT',
+        'The runtime application identity is already registered',
+        statusCode: 409,
+      );
+    }
+    await _saveIdempotency(
+      'application-create',
+      idempotencyKey,
+      body,
+      <String, Object?>{'applicationId': application.id},
+    );
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'application.create',
+      resourceType: 'application',
+      resourceId: application.id,
+      metadata: <String, Object?>{
+        'runtimeApplicationId': application.runtimeApplicationId,
+        if (application.platform != null) 'platform': application.platform,
+      },
+    );
+    return application;
+  });
+
+  /// Creates a customer environment under an existing application. The
+  /// environment starts at version zero and has no promoted release. The
+  /// operation is idempotent so dashboard retries cannot create duplicates.
+  Future<EnvironmentRecord> createEnvironment({
+    required String token,
+    required String organizationId,
+    required String applicationId,
+    required String name,
+    required String idempotencyKey,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      environmentWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final application = await _application(applicationId);
+    _requireTenant(application.organizationId, actor.organizationId);
+    final normalizedName = requireNonEmpty(
+      name.trim(),
+      'environment name',
+      maxLength: 64,
+    );
+    final body = <String, Object?>{
+      'organizationId': actor.organizationId,
+      'applicationId': application.id,
+      'name': normalizedName,
+    };
+    final existing = await _existingIdempotency(
+      'environment-create',
+      idempotencyKey,
+      body,
+    );
+    if (existing != null) {
+      final existingId = existing['environmentId'];
+      if (existingId is! String) {
+        throw const ControlPlaneException(
+          'STORAGE_CORRUPT',
+          'Environment idempotency record is malformed',
+          statusCode: 500,
+        );
+      }
+      return _environment(existingId);
+    }
+    final existingNames = (await store.listJson('environments')).where(
+      (value) =>
+          value['organizationId'] == actor.organizationId &&
+          value['applicationId'] == application.id &&
+          value['name'] is String &&
+          (value['name']! as String).trim().toLowerCase() ==
+              normalizedName.toLowerCase(),
+    );
+    if (existingNames.isNotEmpty) {
+      throw const ControlPlaneException(
+        'ENVIRONMENT_CONFLICT',
+        'An environment with this name already exists for the application',
+        statusCode: 409,
+      );
+    }
+    final environment = EnvironmentRecord(
+      id: _id('env'),
+      organizationId: actor.organizationId,
+      applicationId: application.id,
+      name: normalizedName,
+      version: 0,
+      promotedReleaseId: null,
+      createdAt: _now(),
+    );
+    try {
+      await store.createJson(
+        'environments',
+        environment.id,
+        environment.toJson(),
+      );
+    } on StorageConflict {
+      throw const ControlPlaneException(
+        'ENVIRONMENT_CONFLICT',
+        'An environment with this name already exists for the application',
+        statusCode: 409,
+      );
+    }
+    await _saveIdempotency(
+      'environment-create',
+      idempotencyKey,
+      body,
+      <String, Object?>{'environmentId': environment.id},
+    );
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'environment.create',
+      resourceType: 'environment',
+      resourceId: environment.id,
+      metadata: <String, Object?>{
+        'applicationId': application.id,
+        'name': environment.name,
+      },
+    );
+    return environment;
+  });
+
   /// Issues one short-lived or non-expiring credential and returns its secret
   /// exactly once to the caller. The service persists only the token hash.
   /// Customer operators rotate by issuing a replacement and then revoking the
@@ -598,6 +814,7 @@ final class ControlPlaneService {
     required String organizationId,
     required CredentialKind kind,
     required Set<String> scopes,
+    String? name,
     String? applicationId,
     String? environmentId,
     DateTime? expiresAt,
@@ -663,6 +880,7 @@ final class ControlPlaneService {
     final issued = CredentialService(random: _random).issue(
       id: _id('cred'),
       organizationId: actor.organizationId,
+      name: name ?? 'Credential',
       kind: kind,
       scopes: scopes,
       applicationId: applicationId,
@@ -694,6 +912,33 @@ final class ControlPlaneService {
     );
     return issued;
   });
+
+  /// Lists customer credential metadata without returning token hashes. The
+  /// persisted hash remains an internal lookup key and is never part of the
+  /// dashboard/API contract.
+  Future<List<Map<String, Object?>>> listCredentials({
+    required String token,
+    required String organizationId,
+  }) async {
+    final actor = await _authorize(
+      token,
+      credentialReadScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final result = <CredentialRecord>[];
+    for (final value in await store.listJson('credentials')) {
+      if (value['organizationId'] != actor.organizationId) continue;
+      result.add(CredentialRecord.fromJson(value));
+    }
+    result.sort((left, right) {
+      final byTime = right.createdAt.compareTo(left.createdAt);
+      return byTime != 0 ? byTime : left.id.compareTo(right.id);
+    });
+    return List.unmodifiable(
+      result.map((credential) => credential.toMetadataJson()),
+    );
+  }
 
   Future<IssuedCredential> issueObservationToken({
     required String token,
@@ -3973,6 +4218,27 @@ final class ControlPlaneService {
       if (record.organizationId == actor.organizationId) result.add(record);
     }
     return List.unmodifiable(result);
+  }
+
+  /// Returns safe organization member metadata through the human-auth
+  /// projection. Member APIs are intentionally unavailable without the human
+  /// session service because the response is a dashboard identity surface.
+  Future<List<Map<String, Object?>>> listOrganizationMembers({
+    required String token,
+    required String organizationId,
+  }) async {
+    final auth = humanAuth;
+    if (auth == null) {
+      throw const ControlPlaneException(
+        'AUTH_UNAVAILABLE',
+        'Human authentication is not configured',
+        statusCode: 503,
+      );
+    }
+    return auth.listOrganizationMembers(
+      accessToken: token,
+      organizationId: organizationId,
+    );
   }
 
   Future<AuditExport> exportAudit({

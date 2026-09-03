@@ -23,6 +23,7 @@ void main() {
         issuer: 'test-control-plane',
         audience: 'hyfens-control',
         signingKeySeed: List<int>.filled(32, 7),
+        platformAdminEmails: <String>['owner@example.com'],
       ),
       random: Random(11),
       clock: () => now,
@@ -203,6 +204,34 @@ void main() {
       );
     },
   );
+
+  test('customer member projection excludes platform memberships', () async {
+    await auth.bootstrapOwner(
+      organizationId: bootstrap.organization.id,
+      applicationId: bootstrap.application.id,
+      environmentId: bootstrap.environment.id,
+      email: 'owner@example.com',
+      password: 'correct horse battery staple',
+      profileName: 'super-admin',
+    );
+    final result = await auth.login(
+      email: 'owner@example.com',
+      password: 'correct horse battery staple',
+    );
+
+    final members = await auth.listOrganizationMembers(
+      accessToken: result.accessToken,
+      organizationId: bootstrap.organization.id,
+    );
+
+    expect(members, hasLength(1));
+    final memberships = members.single['memberships']! as List<Object?>;
+    expect(memberships, hasLength(1));
+    expect(
+      (memberships.single! as Map<String, Object?>)['audience'],
+      customerAuthorizationAudience,
+    );
+  });
 
   test('access token expires independently of the session', () async {
     final shortAuth = HumanAuthService(

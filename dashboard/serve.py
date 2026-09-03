@@ -2,9 +2,10 @@
 """Serve the local dashboard and proxy its bounded control-plane routes.
 
 The proxy keeps the static page same-origin with a local control plane. It
-forwards only the shared discovery, human-session, public onboarding, and
-read-only overview routes. It never logs request headers, follows upstream
-redirects, or exposes the control-plane origin to arbitrary browser requests.
+    forwards only the shared discovery, human-session, public onboarding, and
+    bounded customer/platform routes. It never logs request headers, follows
+upstream redirects, or exposes the control-plane origin to arbitrary browser
+requests.
 """
 
 from __future__ import annotations
@@ -25,6 +26,39 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
 DISCOVERY_PATH = "/.well-known/hyfens"
 OVERVIEW_PATH = re.compile(r"^/v1/organizations/[a-z][a-z0-9_]{1,63}/overview$")
+PLATFORM_ORGANIZATIONS_PATH = re.compile(
+    r"^/v1/platform/organizations(?:/[^/]+)?$"
+)
+ORGANIZATION_METADATA_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/(?:members|credentials)$"
+)
+ORGANIZATION_CREDENTIAL_ISSUE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/credentials$"
+)
+ORGANIZATION_CREDENTIAL_REVOKE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/credentials/[^/]+/revoke$"
+)
+APPLICATION_CREATE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/applications$"
+)
+ENVIRONMENT_CREATE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/applications/[^/]+/environments$"
+)
+ENVIRONMENT_PROMOTE_PATH = re.compile(
+    r"^/v1/organizations/[^/]+/environments/[^/]+/release-promotions$"
+)
+PLATFORM_VIEW_PATH = re.compile(r"^/platform/organizations/[^/]+$")
+PLATFORM_HOST_ORGANIZATION_PATH = re.compile(r"^/organizations/[^/]+$")
+PLATFORM_HOSTNAMES = {"admin.hyfens.com", "platform.hyfens.com"}
+PLATFORM_HOST_VIEW_PATHS = {
+    "/",
+    "/organizations",
+    "/audit",
+    "/operations",
+    "/users",
+    "/entitlements",
+    "/settings",
+}
 DASHBOARD_VIEW_PATHS = {
     "/",
     "/overview",
@@ -36,6 +70,13 @@ DASHBOARD_VIEW_PATHS = {
     "/deployments",
     "/audit",
     "/settings",
+    "/platform",
+    "/platform/organizations",
+    "/platform/audit",
+    "/platform/operations",
+    "/platform/users",
+    "/platform/entitlements",
+    "/platform/settings",
 }
 
 
@@ -54,6 +95,11 @@ _PROXY_ROUTES = {
     ("POST", "/v1/public/waitlist"): "public-waitlist",
     ("POST", "/v1/public/newsletter"): "public-newsletter",
     ("GET", "/auth/me"): "auth-me",
+    ("GET", "/v1/platform/metrics"): "platform-metrics",
+    ("GET", "/v1/platform/organizations"): "platform-organizations",
+    ("GET", "/v1/platform/audit"): "platform-audit",
+    ("GET", "/v1/platform/users"): "platform-users",
+    ("GET", "/v1/platform/entitlements"): "platform-entitlements",
 }
 
 _AUTHORIZATION_QUERY_KEYS = {
@@ -117,9 +163,27 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if self._proxy_route() is not None:
             self._proxy_request()
             return
-        if urllib.parse.urlparse(self.path).path in DASHBOARD_VIEW_PATHS:
+        path = urllib.parse.urlparse(self.path).path
+        if (
+            path in DASHBOARD_VIEW_PATHS
+            or PLATFORM_VIEW_PATH.fullmatch(path)
+            or self._is_platform_host_view(path)
+        ):
             self.path = "/"
         super().do_GET()
+
+    def _is_platform_host_view(self, path: str) -> bool:
+        try:
+            hostname = urllib.parse.urlsplit(
+                f"//{self.headers.get('Host', '')}"
+            ).hostname
+        except ValueError:
+            return False
+        if hostname is None or hostname.lower() not in PLATFORM_HOSTNAMES:
+            return False
+        return path in PLATFORM_HOST_VIEW_PATHS or bool(
+            PLATFORM_HOST_ORGANIZATION_PATH.fullmatch(path)
+        )
 
     def do_POST(self) -> None:
         if self._proxy_route() is not None:
@@ -140,6 +204,30 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return direct
         if self.command == "GET" and OVERVIEW_PATH.fullmatch(parsed.path):
             return "overview"
+        if self.command == "GET" and PLATFORM_ORGANIZATIONS_PATH.fullmatch(parsed.path):
+            return (
+                "platform-organizations"
+                if parsed.path.endswith("/organizations")
+                else "platform-organization"
+            )
+        if self.command == "GET" and parsed.path == "/v1/platform/audit":
+            return "platform-audit"
+        if self.command == "GET" and ORGANIZATION_METADATA_PATH.fullmatch(parsed.path):
+            return "organization-metadata"
+        if self.command == "POST" and ORGANIZATION_CREDENTIAL_ISSUE_PATH.fullmatch(
+            parsed.path
+        ):
+            return "credential-issue"
+        if self.command == "POST" and APPLICATION_CREATE_PATH.fullmatch(parsed.path):
+            return "application-create"
+        if self.command == "POST" and ORGANIZATION_CREDENTIAL_REVOKE_PATH.fullmatch(
+            parsed.path
+        ):
+            return "credential-revoke"
+        if self.command == "POST" and ENVIRONMENT_CREATE_PATH.fullmatch(parsed.path):
+            return "environment-create"
+        if self.command == "POST" and ENVIRONMENT_PROMOTE_PATH.fullmatch(parsed.path):
+            return "environment-promote"
         return None
 
     def _proxy_request(self) -> None:
@@ -150,13 +238,39 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         parsed = urllib.parse.urlparse(self.path)
         if parsed.query and not (
-            route == "auth-authorize-get"
-            and self._authorization_query_is_safe(parsed.query)
+            (
+                route == "auth-authorize-get"
+                and self._authorization_query_is_safe(parsed.query)
+            )
+            or route in {
+                "platform-metrics",
+                "platform-organizations",
+                "platform-organization",
+                "platform-audit",
+                "platform-users",
+                "platform-entitlements",
+            }
+            and self._platform_query_is_safe(route, parsed.query)
         ):
             self._json_error(400, "Query parameters are not supported on this route")
             return
         authorization = self.headers.get("Authorization")
-        if route in {"auth-me", "overview", "auth-authorize-post", "auth-device-approve"}:
+        if route in {
+            "auth-me",
+            "overview",
+            "platform-metrics",
+            "platform-organizations",
+            "platform-organization",
+            "platform-audit",
+            "organization-metadata",
+            "application-create",
+            "credential-issue",
+            "credential-revoke",
+            "environment-create",
+            "environment-promote",
+            "auth-authorize-post",
+            "auth-device-approve",
+        }:
             if not authorization or not authorization.startswith("Bearer "):
                 self._json_error(401, "Bearer credential is required")
                 return
@@ -168,12 +282,32 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return
 
         target = f"{self.server.api_origin}{parsed.path}"
-        if route == "auth-authorize-get":
+        if parsed.query and route in {
+            "auth-authorize-get",
+            "platform-metrics",
+            "platform-organizations",
+            "platform-organization",
+            "platform-audit",
+            "platform-users",
+            "platform-entitlements",
+        }:
             target += f"?{parsed.query}"
         headers = {"Accept": "application/json"}
         if authorization and route in {
             "auth-me",
             "overview",
+            "platform-metrics",
+            "platform-organizations",
+            "platform-organization",
+            "platform-audit",
+            "organization-metadata",
+            "application-create",
+            "platform-users",
+            "platform-entitlements",
+            "credential-issue",
+            "credential-revoke",
+            "environment-create",
+            "environment-promote",
             "auth-authorize-post",
             "auth-device-approve",
         }:
@@ -182,6 +316,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             headers["Content-Type"] = self.headers.get(
                 "Content-Type", "application/json"
             )
+        for header in ("Idempotency-Key", "If-Match"):
+            value = self.headers.get(header)
+            if value:
+                headers[header] = value
         request = urllib.request.Request(
             target,
             headers=headers,
@@ -234,6 +372,26 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if set(values) != _AUTHORIZATION_QUERY_KEYS:
             return False
         return all(len(items) == 1 and items[0] for items in values.values())
+
+    @staticmethod
+    def _platform_query_is_safe(route: str, query: str) -> bool:
+        try:
+            values = urllib.parse.parse_qs(query, keep_blank_values=True)
+        except ValueError:
+            return False
+        allowed = {
+            "platform-metrics": {"profile"},
+            "platform-organizations": {"profile", "q"},
+            "platform-organization": {"profile"},
+            "platform-audit": {"profile", "organization_id"},
+            "platform-users": {"profile"},
+            "platform-entitlements": {"profile"},
+        }.get(route, set())
+        if not set(values).issubset(allowed):
+            return False
+        return all(len(items) == 1 for items in values.values()) and all(
+            bool(items[0]) for items in values.values()
+        )
 
     def _request_body(self) -> bytes | None:
         raw_length = self.headers.get("Content-Length")

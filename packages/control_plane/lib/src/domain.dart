@@ -10,20 +10,27 @@ enum CredentialKind { control, delivery, observation, scheduler, autoHalt }
 const String contentAdminScope = 'content:admin';
 const String billingReadScope = 'billing:read';
 const String billingWriteScope = 'billing:write';
+const String organizationMembersReadScope = 'organization:members:read';
+const String credentialReadScope = 'credential:read';
+const String applicationWriteScope = 'application:write';
+const String environmentWriteScope = 'environment:write';
 
 const Set<String> controlScopes = <String>{
   'application:read',
-  'application:write',
+  applicationWriteScope,
   'release:read',
   'release:write',
   'patch:read',
   'patch:write',
   'artifact:read',
   'artifact:write',
+  environmentWriteScope,
   'release:promote',
   'bundle:read',
   'bundle:write',
   'audit:read',
+  organizationMembersReadScope,
+  credentialReadScope,
   'credential:issue',
   'credential:revoke',
   'artifact:reconcile',
@@ -102,23 +109,33 @@ final class ApplicationRecord {
     required String id,
     required String organizationId,
     required String runtimeApplicationId,
+    String? name,
+    String? platform,
     required this.createdAt,
   }) : id = requireOpaqueId(id, 'application ID'),
        organizationId = requireOpaqueId(organizationId, 'organization ID'),
        runtimeApplicationId = requireRuntimeIdentity(
          runtimeApplicationId,
          'runtime application ID',
-       );
+       ),
+       name = name == null
+           ? null
+           : requireNonEmpty(name.trim(), 'application name', maxLength: 120),
+       platform = platform == null ? null : _applicationPlatform(platform);
 
   final String id;
   final String organizationId;
   final String runtimeApplicationId;
+  final String? name;
+  final String? platform;
   final DateTime createdAt;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
     'organizationId': organizationId,
     'runtimeApplicationId': runtimeApplicationId,
+    'name': name,
+    'platform': platform,
     'createdAt': createdAt.toUtc().toIso8601String(),
   };
 
@@ -127,8 +144,19 @@ final class ApplicationRecord {
         id: value['id']! as String,
         organizationId: value['organizationId']! as String,
         runtimeApplicationId: value['runtimeApplicationId']! as String,
+        name: value['name'] as String?,
+        platform: value['platform'] as String?,
         createdAt: DateTime.parse(value['createdAt']! as String),
       );
+
+  static String _applicationPlatform(String value) {
+    if (value != 'android' && value != 'ios') {
+      throw const FormatException(
+        'Application platform must be android or ios',
+      );
+    }
+    return value;
+  }
 }
 
 final class EnvironmentRecord {
@@ -435,6 +463,7 @@ final class CredentialRecord {
   CredentialRecord({
     required String id,
     required String organizationId,
+    String name = 'Credential',
     required this.kind,
     required String tokenHash,
     required Set<String> scopes,
@@ -445,6 +474,7 @@ final class CredentialRecord {
     required this.revoked,
   }) : id = requireOpaqueId(id, 'credential ID'),
        organizationId = requireOpaqueId(organizationId, 'organization ID'),
+       name = requireNonEmpty(name.trim(), 'credential name', maxLength: 120),
        tokenHash = requireNonEmpty(tokenHash, 'token hash'),
        scopes = Set.unmodifiable(scopes),
        applicationId = applicationId == null
@@ -489,6 +519,7 @@ final class CredentialRecord {
 
   final String id;
   final String organizationId;
+  final String name;
   final CredentialKind kind;
   final String tokenHash;
   final Set<String> scopes;
@@ -501,6 +532,7 @@ final class CredentialRecord {
   CredentialRecord copyWith({bool? revoked}) => CredentialRecord(
     id: id,
     organizationId: organizationId,
+    name: name,
     kind: kind,
     tokenHash: tokenHash,
     scopes: scopes,
@@ -514,8 +546,26 @@ final class CredentialRecord {
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
     'organizationId': organizationId,
+    'name': name,
     'kind': kind.name,
     'tokenHash': tokenHash,
+    'scopes': scopes.toList()..sort(),
+    'applicationId': applicationId,
+    'environmentId': environmentId,
+    'createdAt': createdAt.toUtc().toIso8601String(),
+    'expiresAt': expiresAt?.toUtc().toIso8601String(),
+    'revoked': revoked,
+  };
+
+  /// Returns the credential metadata safe for dashboard/API responses.
+  ///
+  /// The persisted token hash is an authorization implementation detail and
+  /// must never be sent to a customer-facing client.
+  Map<String, Object?> toMetadataJson() => <String, Object?>{
+    'id': id,
+    'organizationId': organizationId,
+    'name': name,
+    'kind': kind.name,
     'scopes': scopes.toList()..sort(),
     'applicationId': applicationId,
     'environmentId': environmentId,
@@ -533,6 +583,7 @@ final class CredentialRecord {
     return CredentialRecord(
       id: value['id']! as String,
       organizationId: value['organizationId']! as String,
+      name: value['name'] as String? ?? 'Credential',
       kind: CredentialKind.values.byName(value['kind']! as String),
       tokenHash: value['tokenHash']! as String,
       scopes: rawScopes.cast<String>().toSet(),

@@ -69,7 +69,7 @@
 
         function renderRequest(value) {
           summary.replaceChildren();
-          for (const [label, text] of [['Client', value.client_id], ['Control plane', HyfensAuthFlow.apiBase()], ['Callback', value.redirect_uri]]) {
+          for (const [label, text] of [['Client', value.client_id], ['Control plane', HyfensAuthFlow.displayApiBase()], ['Callback', value.redirect_uri]]) {
             const term = document.createElement('dt');
             term.textContent = label;
             const definition = document.createElement('dd');

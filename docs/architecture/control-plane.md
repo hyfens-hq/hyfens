@@ -9,7 +9,7 @@ The control plane is the product module that turns immutable, locally verified
 Flutter release and patch artifacts into tenant-scoped delivery decisions. It
 does not execute patch code, replace the runtime trust boundary, or imply a
 hosted service exists today. The first implementation is the standard-library
-single-node package in [`packages/control_plane`](../../packages/control_plane/)
+single-node package in [`packages/control_plane`](../../packages/control_plane)
 and intentionally covers only the bounded Task 41 local slice.
 
 ## 1. Topology and responsibility

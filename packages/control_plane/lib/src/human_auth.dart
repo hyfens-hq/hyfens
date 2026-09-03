@@ -23,6 +23,38 @@ const Set<String> publicClientReadScopes = <String>{
   'audit:read',
 };
 
+/// Authorization audiences separate the Hyfens operator console from a
+/// customer's tenant workspace. They share identity and session material, but
+/// the audience is still checked at the control-plane boundary.
+const String customerAuthorizationAudience = 'customer';
+const String platformAuthorizationAudience = 'platform';
+
+const String platformOverviewCapability = 'platform:overview';
+const String platformOrganizationsReadCapability =
+    'platform:organizations:read';
+const String platformOrganizationsInspectCapability =
+    'platform:organizations:inspect';
+const String platformAuditReadCapability = 'platform:audit:read';
+const String platformOperationsReadCapability = 'platform:operations:read';
+const String platformAccountsReadCapability = 'platform:accounts:read';
+const String platformEntitlementsReadCapability = 'platform:entitlements:read';
+
+const Set<String> platformCapabilities = <String>{
+  platformOverviewCapability,
+  platformOrganizationsReadCapability,
+  platformOrganizationsInspectCapability,
+  platformAuditReadCapability,
+  platformOperationsReadCapability,
+  platformAccountsReadCapability,
+  platformEntitlementsReadCapability,
+};
+
+const Set<String> supportedPlatformCapabilities = platformCapabilities;
+
+bool _isSupportedAuthorizationAudience(String value) =>
+    value == customerAuthorizationAudience ||
+    value == platformAuthorizationAudience;
+
 /// Configuration for the control-plane human authentication boundary.
 ///
 /// The signing seed is an auth-only Ed25519 seed. It must never be reused for
@@ -50,6 +82,7 @@ final class HumanAuthConfig {
     this.deviceAttemptsPerMinute = 10,
     Iterable<String> allowedAuthorizationRedirectUris = const <String>[],
     String deviceVerificationUri = '/auth/device/verify',
+    Iterable<String> platformAdminEmails = const <String>[],
   }) : issuer = _boundedText(issuer, 'issuer', 256),
        audience = _boundedText(audience, 'audience', 256),
        signingKeySeed = _fixedBytes(signingKeySeed, 32, 'signing key seed'),
@@ -58,7 +91,8 @@ final class HumanAuthConfig {
        allowedAuthorizationRedirectUris = _redirectUris(
          allowedAuthorizationRedirectUris,
        ),
-       deviceVerificationUri = _verificationUri(deviceVerificationUri) {
+       deviceVerificationUri = _verificationUri(deviceVerificationUri),
+       platformAdminEmails = _platformAdminEmails(platformAdminEmails) {
     if (accessTtl <= Duration.zero) {
       throw ArgumentError.value(accessTtl, 'accessTtl', 'must be positive');
     }
@@ -120,6 +154,7 @@ final class HumanAuthConfig {
   final int deviceAttemptsPerMinute;
   final Set<String> allowedAuthorizationRedirectUris;
   final String deviceVerificationUri;
+  final Set<String> platformAdminEmails;
 
   /// Reads the auth configuration without inventing a signing secret.
   ///
@@ -142,6 +177,7 @@ final class HumanAuthConfig {
       'HYFENS_AUTH_DEVICE_ATTEMPTS_PER_MINUTE',
       'HYFENS_AUTH_ALLOWED_REDIRECT_URIS',
       'HYFENS_AUTH_DEVICE_VERIFICATION_URI',
+      'HYFENS_PLATFORM_ADMIN_EMAILS',
     };
     final configured = names.any((name) => _isMeaningfulSetting(values[name]));
     final encodedSeed = values['HYFENS_AUTH_SIGNING_KEY'];
@@ -208,6 +244,9 @@ final class HumanAuthConfig {
       deviceVerificationUri: _valueOrDefault(
         values['HYFENS_AUTH_DEVICE_VERIFICATION_URI'],
         '/auth/device/verify',
+      ),
+      platformAdminEmails: _parsePlatformAdminEmails(
+        values['HYFENS_PLATFORM_ADMIN_EMAILS'],
       ),
     );
   }
@@ -291,6 +330,25 @@ final class HumanAuthConfig {
       );
     }
     return decoded.cast<String>();
+  }
+
+  static Set<String> _platformAdminEmails(Iterable<String> values) {
+    final result = <String>{};
+    for (final raw in values) {
+      final value = raw.trim().toLowerCase();
+      if (value.isEmpty ||
+          value.length > 320 ||
+          !RegExp(r'^[^@\s]{1,254}@[^@\s]{1,254}$').hasMatch(value)) {
+        throw ArgumentError('platformAdminEmails contains an invalid email');
+      }
+      result.add(value);
+    }
+    return Set.unmodifiable(result);
+  }
+
+  static List<String> _parsePlatformAdminEmails(String? value) {
+    if (value == null || value.isEmpty) return const <String>[];
+    return value.split(',');
   }
 
   static String _verificationUri(String value) {
@@ -453,6 +511,8 @@ final class HumanMembership {
     required this.role,
     required Set<String> capabilities,
     required String profileName,
+    this.audience = customerAuthorizationAudience,
+    Set<String> platformCapabilities = const <String>{},
     String? applicationId,
     String? environmentId,
     String? profileApplicationId,
@@ -484,7 +544,8 @@ final class HumanMembership {
          'membership profile name',
          maxLength: 64,
        ),
-       capabilities = Set.unmodifiable(capabilities) {
+       capabilities = Set.unmodifiable(capabilities),
+       platformCapabilities = Set.unmodifiable(platformCapabilities) {
     if (role.isEmpty ||
         role.length > 64 ||
         role.contains(RegExp(r'[\u0000\r\n]'))) {
@@ -496,6 +557,17 @@ final class HumanMembership {
         'Membership contains an unsupported capability',
       );
     }
+    if (audience != customerAuthorizationAudience &&
+        audience != platformAuthorizationAudience) {
+      throw const FormatException('Invalid membership authorization audience');
+    }
+    if (this.platformCapabilities
+            .difference(supportedPlatformCapabilities)
+            .isNotEmpty ||
+        (audience != platformAuthorizationAudience &&
+            this.platformCapabilities.isNotEmpty)) {
+      throw const FormatException('Invalid platform membership capability');
+    }
   }
 
   final String organizationId;
@@ -506,6 +578,8 @@ final class HumanMembership {
   final String role;
   final Set<String> capabilities;
   final String profileName;
+  final String audience;
+  final Set<String> platformCapabilities;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'organizationId': organizationId,
@@ -516,6 +590,8 @@ final class HumanMembership {
     'role': role,
     'capabilities': capabilities.toList()..sort(),
     'profileName': profileName,
+    'audience': audience,
+    'platformCapabilities': platformCapabilities.toList()..sort(),
   };
 
   static HumanMembership fromJson(Map<String, Object?> value) {
@@ -524,6 +600,15 @@ final class HumanMembership {
         rawCapabilities.any((item) => item is! String)) {
       throw const FormatException('Invalid membership capabilities');
     }
+    final rawPlatformCapabilities = value['platformCapabilities'];
+    final parsedPlatformCapabilities = rawPlatformCapabilities == null
+        ? const <String>{}
+        : rawPlatformCapabilities is List<Object?> &&
+              rawPlatformCapabilities.every((item) => item is String)
+        ? rawPlatformCapabilities.cast<String>().toSet()
+        : throw const FormatException(
+            'Invalid platform membership capabilities',
+          );
     return HumanMembership(
       organizationId: value['organizationId']! as String,
       applicationId: value['applicationId'] as String?,
@@ -533,6 +618,8 @@ final class HumanMembership {
       role: value['role']! as String,
       capabilities: rawCapabilities.cast<String>().toSet(),
       profileName: value['profileName']! as String,
+      audience: value['audience'] as String? ?? customerAuthorizationAudience,
+      platformCapabilities: parsedPlatformCapabilities,
     );
   }
 }
@@ -613,9 +700,14 @@ final class HumanSessionRecord {
     required this.expiresAt,
     required this.lastUsedAt,
     required this.revokedAt,
+    this.audience = customerAuthorizationAudience,
   }) : id = requireOpaqueId(id, 'human session ID'),
        userId = requireOpaqueId(userId, 'human session user ID'),
-       secretHash = requireNonEmpty(secretHash, 'human session secret hash');
+       secretHash = requireNonEmpty(secretHash, 'human session secret hash') {
+    if (!_isSupportedAuthorizationAudience(audience)) {
+      throw const FormatException('Invalid session authorization audience');
+    }
+  }
 
   final String id;
   final String userId;
@@ -624,6 +716,7 @@ final class HumanSessionRecord {
   final DateTime expiresAt;
   final DateTime lastUsedAt;
   final DateTime? revokedAt;
+  final String audience;
 
   HumanSessionRecord copyWith({DateTime? lastUsedAt, DateTime? revokedAt}) =>
       HumanSessionRecord(
@@ -634,6 +727,7 @@ final class HumanSessionRecord {
         expiresAt: expiresAt,
         lastUsedAt: lastUsedAt ?? this.lastUsedAt,
         revokedAt: revokedAt ?? this.revokedAt,
+        audience: audience,
       );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -644,6 +738,7 @@ final class HumanSessionRecord {
     'expiresAt': expiresAt.toUtc().toIso8601String(),
     'lastUsedAt': lastUsedAt.toUtc().toIso8601String(),
     'revokedAt': revokedAt?.toUtc().toIso8601String(),
+    'audience': audience,
   };
 
   static HumanSessionRecord fromJson(Map<String, Object?> value) =>
@@ -657,6 +752,7 @@ final class HumanSessionRecord {
         revokedAt: value['revokedAt'] == null
             ? null
             : DateTime.parse(value['revokedAt']! as String),
+        audience: value['audience'] as String? ?? customerAuthorizationAudience,
       );
 }
 
@@ -668,6 +764,9 @@ final class HumanAuthProfile {
     required this.environmentId,
     required this.role,
     required this.capabilities,
+    this.platform = false,
+    this.audience = customerAuthorizationAudience,
+    this.platformCapabilities = const <String>{},
   });
 
   final String name;
@@ -676,6 +775,9 @@ final class HumanAuthProfile {
   final String? environmentId;
   final String role;
   final Set<String> capabilities;
+  final bool platform;
+  final String audience;
+  final Set<String> platformCapabilities;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'name': name,
@@ -684,6 +786,9 @@ final class HumanAuthProfile {
     'environment_id': environmentId,
     'role': role,
     'capabilities': capabilities.toList()..sort(),
+    'audience': audience,
+    'platform_capabilities': platformCapabilities.toList()..sort(),
+    if (platform) 'platform': true,
   };
 }
 
@@ -706,6 +811,7 @@ final class HumanLoginResult {
     required this.sessionToken,
     required this.accessExpiresAt,
     required this.sessionExpiresAt,
+    required this.authorizationAudience,
     required this.identity,
   });
 
@@ -713,6 +819,7 @@ final class HumanLoginResult {
   final String sessionToken;
   final DateTime accessExpiresAt;
   final DateTime sessionExpiresAt;
+  final String authorizationAudience;
   final HumanIdentity identity;
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -721,6 +828,7 @@ final class HumanLoginResult {
     'expires_at': accessExpiresAt.toUtc().toIso8601String(),
     'session_token': sessionToken,
     'session_expires_at': sessionExpiresAt.toUtc().toIso8601String(),
+    'authorization_audience': authorizationAudience,
     ...identity.toJson(),
   };
 }
@@ -729,17 +837,20 @@ final class HumanRefreshResult {
   const HumanRefreshResult({
     required this.accessToken,
     required this.accessExpiresAt,
+    required this.authorizationAudience,
     required this.identity,
   });
 
   final String accessToken;
   final DateTime accessExpiresAt;
+  final String authorizationAudience;
   final HumanIdentity identity;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'access_token': accessToken,
     'token_type': 'Bearer',
     'expires_at': accessExpiresAt.toUtc().toIso8601String(),
+    'authorization_audience': authorizationAudience,
     ...identity.toJson(),
   };
 }
@@ -968,6 +1079,12 @@ final class HumanAuthService {
       role: 'owner',
       capabilities: controlScopes,
       profileName: profileName,
+      audience: profileName == 'super-admin'
+          ? platformAuthorizationAudience
+          : customerAuthorizationAudience,
+      platformCapabilities: profileName == 'super-admin'
+          ? platformCapabilities
+          : const <String>{},
     );
     final bootstrapId = '$organizationId:$applicationId:$environmentId';
     final plannedUserId =
@@ -1014,7 +1131,13 @@ final class HumanAuthService {
         final current = user.memberships[sameScope];
         if (current.capabilities.length ==
                 ownerMembership.capabilities.length &&
-            current.capabilities.containsAll(ownerMembership.capabilities)) {
+            current.capabilities.containsAll(ownerMembership.capabilities) &&
+            current.audience == ownerMembership.audience &&
+            current.platformCapabilities.length ==
+                ownerMembership.platformCapabilities.length &&
+            current.platformCapabilities.containsAll(
+              ownerMembership.platformCapabilities,
+            )) {
           return user;
         }
         final memberships = user.memberships.toList();
@@ -1030,6 +1153,8 @@ final class HumanAuthService {
             ...ownerMembership.capabilities,
           },
           profileName: current.profileName,
+          audience: ownerMembership.audience,
+          platformCapabilities: ownerMembership.platformCapabilities,
         );
         final updated = user.copyWith(memberships: memberships);
         await store.replaceJson('users', user.id, updated.toJson());
@@ -1095,6 +1220,7 @@ final class HumanAuthService {
       role: 'admin',
       capabilities: const <String>{contentAdminScope},
       profileName: profileName,
+      audience: customerAuthorizationAudience,
     );
     final bootstrapId = 'admin:$organizationId:$applicationId:$environmentId';
     final plannedUserId =
@@ -1222,6 +1348,7 @@ final class HumanAuthService {
       role: 'client',
       capabilities: publicClientReadScopes,
       profileName: 'client',
+      audience: customerAuthorizationAudience,
     );
     final user = HumanUserRecord(
       id: 'usr_${sha256Hex(utf8.encode(normalizedEmail)).substring(0, 32)}',
@@ -1249,6 +1376,8 @@ final class HumanAuthService {
   Future<HumanLoginResult> login({
     required String email,
     required String password,
+    String audience = customerAuthorizationAudience,
+    String? profileName,
   }) => _serialized(() async {
     await _ensureInitialized();
     _validatePassword(password);
@@ -1279,7 +1408,11 @@ final class HumanAuthService {
     if (user == null || !user.active || passwordHash != user.passwordHash) {
       _invalidCredentials();
     }
-    return _issueSessionForUser(user);
+    return _issueSessionForUser(
+      user,
+      audience: audience,
+      profileName: profileName,
+    );
   });
 
   /// Starts a public-client authorization request.
@@ -1584,7 +1717,42 @@ final class HumanAuthService {
     return HumanDevicePollResult.approved(await _issueSessionForUser(user));
   });
 
-  Future<HumanLoginResult> _issueSessionForUser(HumanUserRecord user) async {
+  Future<HumanLoginResult> _issueSessionForUser(
+    HumanUserRecord user, {
+    String audience = customerAuthorizationAudience,
+    String? profileName,
+  }) async {
+    if (!_isSupportedAuthorizationAudience(audience)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Authorization audience is not supported',
+        statusCode: 422,
+      );
+    }
+    final requestedProfile = profileName?.trim();
+    if (requestedProfile != null && requestedProfile.isEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Authorization profile must not be empty',
+        statusCode: 422,
+      );
+    }
+    final hasMatchingMembership = user.memberships.any((membership) {
+      if (membership.audience != audience) return false;
+      if (requestedProfile != null &&
+          membership.profileName != requestedProfile) {
+        return false;
+      }
+      return audience != platformAuthorizationAudience ||
+          _isPlatformMembership(user, membership);
+    });
+    if (!hasMatchingMembership) {
+      throw const ControlPlaneException(
+        'FORBIDDEN',
+        'Authorization audience is not available to this account',
+        statusCode: 403,
+      );
+    }
     final now = _now();
     final sessionId = _randomId('ses_');
     final secret = _randomBytes(32);
@@ -1597,6 +1765,7 @@ final class HumanAuthService {
       expiresAt: now.add(config.sessionTtl),
       lastUsedAt: now,
       revokedAt: null,
+      audience: audience,
     );
     await store.createJson('sessions', session.id, session.toJson());
     final issued = await _issueAccessToken(user, session);
@@ -1605,7 +1774,8 @@ final class HumanAuthService {
       sessionToken: sessionToken,
       accessExpiresAt: issued.expiresAt,
       sessionExpiresAt: session.expiresAt,
-      identity: _identity(user),
+      authorizationAudience: audience,
+      identity: _identity(user, audience: audience),
     );
   }
 
@@ -1887,7 +2057,8 @@ final class HumanAuthService {
         return HumanRefreshResult(
           accessToken: issued.token,
           accessExpiresAt: issued.expiresAt,
-          identity: _identity(user),
+          authorizationAudience: updated.audience,
+          identity: _identity(user, audience: updated.audience),
         );
       });
 
@@ -1903,7 +2074,120 @@ final class HumanAuthService {
 
   Future<HumanIdentity> me({required String accessToken}) async {
     final context = await _authenticateAccessToken(accessToken);
-    return _identity(context.user);
+    return _identity(context.user, audience: context.audience);
+  }
+
+  /// Authorizes one explicit Platform Console capability.
+  ///
+  /// Platform access is intentionally separate from tenant control scopes. It
+  /// requires a configured platform operator identity, a platform-audience
+  /// membership, and the requested capability. An ordinary tenant owner
+  /// cannot enumerate cross-organization data merely by possessing control
+  /// capabilities.
+  Future<void> authorizePlatformCapability({
+    required String accessToken,
+    required String capability,
+    String? profileName,
+  }) async {
+    if (!platformCapabilities.contains(capability)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform capability is not supported',
+        statusCode: 422,
+      );
+    }
+    final requestedProfile = profileName?.trim();
+    if (requestedProfile != null && requestedProfile.isEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform profile must not be empty',
+        statusCode: 422,
+      );
+    }
+    final context = await _authenticateAccessToken(accessToken);
+    if (context.audience != platformAuthorizationAudience) {
+      throw const ControlPlaneException(
+        'FORBIDDEN',
+        'Platform capability is not available to this session',
+        statusCode: 403,
+      );
+    }
+    final permitted =
+        config.platformAdminEmails.contains(context.user.email) &&
+        context.user.memberships.any(
+          (membership) =>
+              _isPlatformMembership(context.user, membership) &&
+              membership.platformCapabilities.contains(capability) &&
+              (requestedProfile == null ||
+                  membership.profileName == requestedProfile),
+        );
+    if (!permitted) {
+      throw const ControlPlaneException(
+        'FORBIDDEN',
+        'Platform capability is not available to this profile',
+        statusCode: 403,
+      );
+    }
+  }
+
+  /// Authorizes the bounded platform metrics projection through the same
+  /// explicit capability contract used by the Platform Console.
+  Future<void> authorizePlatformMetrics({
+    required String accessToken,
+    String? profileName,
+  }) => authorizePlatformCapability(
+    accessToken: accessToken,
+    capability: platformOverviewCapability,
+    profileName: profileName,
+  );
+
+  /// Returns organization member metadata without password hashes, sessions,
+  /// or membership secrets. The organization predicate is applied before any
+  /// user data is projected.
+  Future<List<Map<String, Object?>>> listOrganizationMembers({
+    required String accessToken,
+    required String organizationId,
+  }) async {
+    final actor = await authorizeAccessToken(
+      token: accessToken,
+      requiredScope: organizationMembersReadScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final result = <Map<String, Object?>>[];
+    for (final user in await _users()) {
+      final memberships = user.memberships
+          .where(
+            (membership) =>
+                membership.organizationId == actor.organizationId &&
+                membership.audience == customerAuthorizationAudience,
+          )
+          .toList(growable: false);
+      if (memberships.isEmpty) continue;
+      result.add(<String, Object?>{
+        'id': user.id,
+        'email': user.email,
+        'active': user.active,
+        'createdAt': user.createdAt.toUtc().toIso8601String(),
+        'memberships': memberships
+            .map(
+              (membership) => <String, Object?>{
+                'role': membership.role,
+                'profileName': membership.profileName,
+                'audience': membership.audience,
+                'applicationId': membership.applicationId,
+                'environmentId': membership.environmentId,
+                'capabilities': membership.capabilities.toList()..sort(),
+              },
+            )
+            .toList(growable: false),
+      });
+    }
+    result.sort(
+      (left, right) =>
+          (left['email']! as String).compareTo(right['email']! as String),
+    );
+    return List.unmodifiable(result);
   }
 
   /// Converts a valid human control JWT into the existing service actor shape.
@@ -1916,6 +2200,7 @@ final class HumanAuthService {
     String? organizationId,
     String? applicationId,
     String? environmentId,
+    String requiredAudience = customerAuthorizationAudience,
   }) async {
     if (kind != CredentialKind.control) {
       throw const ControlPlaneException(
@@ -1924,12 +2209,27 @@ final class HumanAuthService {
         statusCode: 403,
       );
     }
+    if (!_isSupportedAuthorizationAudience(requiredAudience)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Authorization audience is not supported',
+        statusCode: 422,
+      );
+    }
     final context = await _authenticateAccessToken(token);
+    if (context.audience != requiredAudience) {
+      throw const ControlPlaneException(
+        'FORBIDDEN',
+        'Authorization audience is not permitted for this route',
+        statusCode: 403,
+      );
+    }
     final membership = _membershipFor(
       context.user,
       organizationId: organizationId,
       applicationId: applicationId,
       environmentId: environmentId,
+      requiredAudience: requiredAudience,
     );
     // Owner membership is the authoritative full-control role. Unioning the
     // current control scope set keeps an owner created before a newly added
@@ -1948,6 +2248,7 @@ final class HumanAuthService {
     return CredentialRecord(
       id: context.user.id,
       organizationId: membership.organizationId,
+      name: 'Human session',
       kind: CredentialKind.control,
       tokenHash: CredentialService.tokenHash(token),
       scopes: effectiveCapabilities,
@@ -1986,6 +2287,7 @@ final class HumanAuthService {
       user: user,
       session: session,
       expiresAt: claims.expiration,
+      audience: session.audience,
     );
   }
 
@@ -2161,9 +2463,11 @@ final class HumanAuthService {
     required String? organizationId,
     required String? applicationId,
     required String? environmentId,
+    required String requiredAudience,
   }) {
     final matches = user.memberships
         .where((membership) {
+          if (membership.audience != requiredAudience) return false;
           if (organizationId != null &&
               membership.organizationId != organizationId) {
             return false;
@@ -2196,9 +2500,13 @@ final class HumanAuthService {
     return matches.first;
   }
 
-  HumanIdentity _identity(HumanUserRecord user) => HumanIdentity(
+  HumanIdentity _identity(
+    HumanUserRecord user, {
+    String audience = customerAuthorizationAudience,
+  }) => HumanIdentity(
     user: user,
     profiles: user.memberships
+        .where((membership) => membership.audience == audience)
         .map(
           (membership) => HumanAuthProfile(
             name: membership.profileName,
@@ -2209,10 +2517,23 @@ final class HumanAuthService {
                 membership.profileEnvironmentId ?? membership.environmentId,
             role: membership.role,
             capabilities: membership.capabilities,
+            platform: _isPlatformMembership(user, membership),
+            audience: membership.audience,
+            platformCapabilities: membership.platformCapabilities,
           ),
         )
         .toList(growable: false),
   );
+
+  bool _isPlatformMembership(
+    HumanUserRecord user,
+    HumanMembership membership,
+  ) =>
+      config.platformAdminEmails.contains(user.email) &&
+      membership.audience == platformAuthorizationAudience &&
+      membership.role == 'owner' &&
+      membership.profileName == 'super-admin' &&
+      membership.platformCapabilities.isNotEmpty;
 
   Future<String> _hashPassword(
     String password, {
@@ -2429,9 +2750,11 @@ final class _AccessContext {
     required this.user,
     required this.session,
     required this.expiresAt,
+    required this.audience,
   });
 
   final HumanUserRecord user;
   final HumanSessionRecord session;
   final DateTime expiresAt;
+  final String audience;
 }

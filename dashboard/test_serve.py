@@ -19,6 +19,14 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         if self.path == "/.well-known/hyfens":
             self._json(200, {"product": "hyfens", "apiVersion": "v1"})
             return
+        if urllib.parse.urlparse(self.path).path == "/v1/platform/metrics":
+            self._json(200, {"readOnly": True, "scope": "platform"})
+            return
+        if urllib.parse.urlparse(self.path).path.startswith(
+            "/v1/platform/organizations"
+        ) or urllib.parse.urlparse(self.path).path == "/v1/platform/audit":
+            self._json(200, {"readOnly": True, "scope": "platform"})
+            return
         if self.path.startswith("/v1/organizations/"):
             self._json(200, {"readOnly": True, "source": "upstream"})
             return
@@ -179,6 +187,63 @@ class ProxyRouteTest(unittest.TestCase):
         self.assertEqual(_UpstreamHandler.calls[2][2], "Bearer memory-access")
         self.assertNotIn(b"not-in-url", body)
 
+    def test_platform_metrics_proxy_requires_auth_and_allows_only_profile_query(self):
+        status, _ = self.request("GET", "/v1/platform/metrics")
+        self.assertEqual(status, 401)
+        self.assertEqual(_UpstreamHandler.calls, [])
+
+        status, body = self.request(
+            "GET",
+            "/v1/platform/metrics",
+            headers={"Authorization": "Bearer memory-access"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["scope"], "platform")
+
+        status, _ = self.request(
+            "GET",
+            "/v1/platform/metrics?profile=super-admin",
+            headers={"Authorization": "Bearer memory-access"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            _UpstreamHandler.calls[-1][0:3],
+            ("GET", "/v1/platform/metrics?profile=super-admin", "Bearer memory-access"),
+        )
+
+        status, _ = self.request(
+            "GET",
+            "/v1/platform/metrics?organization_id=secret",
+            headers={"Authorization": "Bearer memory-access"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(len(_UpstreamHandler.calls), 2)
+
+    def test_platform_projection_proxy_forwards_bounded_queries(self):
+        headers = {"Authorization": "Bearer memory-access"}
+        requests = (
+            "/v1/platform/organizations?profile=super-admin&q=acme",
+            "/v1/platform/organizations/org_demo?profile=super-admin",
+            "/v1/platform/audit?profile=super-admin&organization_id=org_demo",
+        )
+        for path in requests:
+            with self.subTest(path=path):
+                status, body = self.request("GET", path, headers=headers)
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)["scope"], "platform")
+
+        self.assertEqual(
+            [call[1] for call in _UpstreamHandler.calls],
+            list(requests),
+        )
+        status, _ = self.request(
+            "GET",
+            "/v1/platform/organizations?profile=super-admin&token=secret",
+            headers=headers,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(len(_UpstreamHandler.calls), len(requests))
+
     def test_proxy_forwards_browser_and_device_auth_routes_without_query_secrets(self):
         query = urllib.parse.urlencode(
             {
@@ -273,11 +338,34 @@ class ProxyRouteTest(unittest.TestCase):
                 self.assertLess(runtime_index, auth_index)
 
     def test_clean_dashboard_view_paths_serve_the_index(self):
-        for path in ("/", "/overview", "/applications", "/settings"):
+        for path in (
+            "/",
+            "/overview",
+            "/applications",
+            "/platform",
+            "/platform/organizations",
+            "/platform/organizations/org_demo",
+            "/platform/audit",
+            "/platform/operations",
+            "/platform/settings",
+            "/settings",
+        ):
             with self.subTest(path=path):
                 status, body = self.request("GET", path)
                 self.assertEqual(status, 200)
                 self.assertIn(b"Hyfens | Developer control plane", body)
+        self.assertEqual(_UpstreamHandler.calls, [])
+
+    def test_platform_host_routes_serve_the_platform_shell_index(self):
+        for path in ("/", "/organizations", "/organizations/org_demo", "/audit"):
+            with self.subTest(path=path):
+                status, body = self.request(
+                    "GET",
+                    path,
+                    headers={"Host": "admin.hyfens.com"},
+                )
+                self.assertEqual(status, 200)
+                self.assertIn(b"Platform Console", body)
         self.assertEqual(_UpstreamHandler.calls, [])
 
     def test_protected_routes_require_bearer_and_query_data_is_rejected(self):
@@ -333,23 +421,30 @@ class DashboardContractTest(unittest.TestCase):
         self.assertIn("setAttribute('aria-hidden'", app_source)
         self.assertIn("form.inert", app_source)
 
-    def test_auth_shell_is_two_pane_bounded_and_keeps_onboarding_out(self):
+    def test_auth_shell_uses_one_document_scroll_context_and_keeps_onboarding_out(self):
         root = Path(__file__).resolve().parent
         markup = (root / "index.html").read_text(encoding="utf-8")
         styles = (root / "styles.css").read_text(encoding="utf-8")
         app_source = (root / "app.js").read_text(encoding="utf-8")
         auth_layout_rule = styles.split(".auth-layout {", 1)[1].split("}", 1)[0]
         auth_panel_rule = styles.split(".auth-panel {", 1)[1].split("}", 1)[0]
+        auth_rail_rule = styles.split(".auth-rail {", 1)[1].split("}", 1)[0]
         auth_focus_marker = ".auth-form input:focus,\n.auth-form input:focus-visible {"
 
-        self.assertIn('href="styles.css?v=234"', markup)
-        self.assertIn('src="app.js?v=229"', markup)
-        self.assertIn("height: 100dvh;", auth_layout_rule)
-        self.assertIn("overflow: hidden;", auth_layout_rule)
+        self.assertIn('href="styles.css?v=236"', markup)
+        self.assertIn('src="app.js?v=231"', markup)
+        self.assertIn("min-height: 100dvh;", auth_layout_rule)
+        self.assertIn("overflow: visible;", auth_layout_rule)
+        self.assertNotIn("\n  height: 100dvh;", auth_layout_rule)
         self.assertIn("width: 100%;", auth_panel_rule)
-        self.assertIn("min-height: 0;", auth_panel_rule)
-        self.assertIn("height: 100%;", auth_panel_rule)
-        self.assertIn("overflow-y: auto;", auth_panel_rule)
+        self.assertIn("height: auto;", auth_panel_rule)
+        self.assertIn("min-height: 100dvh;", auth_panel_rule)
+        self.assertIn("overflow: clip;", auth_panel_rule)
+        self.assertNotIn("overflow-y: auto;", auth_panel_rule)
+        self.assertIn("height: auto;", auth_rail_rule)
+        self.assertIn("min-height: 100dvh;", auth_rail_rule)
+        self.assertIn("overflow: clip;", auth_rail_rule)
+        self.assertNotIn("overflow-y: auto;", auth_rail_rule)
         self.assertIn(auth_focus_marker, styles)
         auth_focus_rule = styles.split(auth_focus_marker, 1)[1].split("}", 1)[0]
         self.assertNotIn("onboarding-intake", markup)
@@ -379,8 +474,8 @@ class DashboardContractTest(unittest.TestCase):
             tokens,
         )
         self.assertIn('href="tokens.css?v=222"', markup)
-        self.assertIn('href="styles.css?v=234"', markup)
-        self.assertIn('src="app.js?v=229"', markup)
+        self.assertIn('href="styles.css?v=236"', markup)
+        self.assertIn('src="app.js?v=231"', markup)
         self.assertGreaterEqual(
             styles.count("font-family: var(--hyfens-font-display);"),
             2,
@@ -505,6 +600,28 @@ class DashboardContractTest(unittest.TestCase):
         self.assertIn("renderCurrentPage({ transition: true });", app_source)
         self.assertIn("data-page-transition", app_source)
         self.assertIn("requestAnimationFrame", app_source)
+
+    def test_dashboard_has_explicit_customer_and_platform_shell_contracts(self):
+        root = Path(__file__).resolve().parent
+        markup = (root / "index.html").read_text(encoding="utf-8")
+        app_source = (root / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="app-view" class="app-view" data-shell="customer"', markup)
+        self.assertIn('id="platform-sidebar"', markup)
+        self.assertIn('id="customer-context-bar"', markup)
+        self.assertIn('id="platform-context-bar"', markup)
+        self.assertIn('href="/applications"', markup)
+        self.assertIn('href="/platform/organizations"', markup)
+        self.assertIn('displayApiBase', (root / "auth-flow.js").read_text(encoding="utf-8"))
+        self.assertIn("const PLATFORM_HOSTNAMES = new Set", app_source)
+        self.assertIn("const PLATFORM_AUTHORIZATION_AUDIENCE = 'platform'", app_source)
+        self.assertIn("function requestedLoginAudience", app_source)
+        self.assertIn("authorizationAudience", app_source)
+        self.assertIn("function applyShellMode()", app_source)
+        self.assertIn("function customerProfileList()", app_source)
+        self.assertIn("function platformCapabilityForView", app_source)
+        self.assertIn("function renderPlatformOrganizationsPage", app_source)
+        self.assertIn("function renderSettingsPage", app_source)
 
     def test_dashboard_navigation_motion_is_fast_transform_only_and_reduced_safe(self):
         root = Path(__file__).resolve().parent

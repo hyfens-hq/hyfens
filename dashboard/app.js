@@ -11,11 +11,56 @@
     'audit',
   ];
   const SESSION_STORAGE_KEY = 'hyfens-dashboard-session';
+  const CUSTOMER_AUTHORIZATION_AUDIENCE = 'customer';
+  const PLATFORM_AUTHORIZATION_AUDIENCE = 'platform';
+  const PLATFORM_VIEWS = new Set([
+    'platform',
+    'platform-organizations',
+    'platform-organization',
+    'platform-audit',
+    'platform-operations',
+    'platform-users',
+    'platform-entitlements',
+    'platform-settings',
+  ]);
+  const PLATFORM_HOSTNAMES = new Set(['admin.hyfens.com', 'platform.hyfens.com']);
 
   const PAGE_COPY = {
     overview: {
       title: 'Overview',
       description: 'Authoritative record counts and the selected organization context.',
+    },
+    platform: {
+      title: 'Platform overview',
+      description: 'Operational measurements for the Hyfens platform instance.',
+    },
+    'platform-organizations': {
+      title: 'Organizations',
+      description: 'Customer organizations visible to the authorized platform operator.',
+    },
+    'platform-organization': {
+      title: 'Organization detail',
+      description: 'Bounded operational metadata for one customer organization.',
+    },
+    'platform-audit': {
+      title: 'Security & audit',
+      description: 'Platform-audience administrative and security events only.',
+    },
+    'platform-operations': {
+      title: 'Operations',
+      description: 'Control-plane service health and instance-level signals.',
+    },
+    'platform-users': {
+      title: 'Platform users',
+      description: 'Hyfens staff identities and explicit platform capabilities.',
+    },
+    'platform-entitlements': {
+      title: 'Plans & entitlements',
+      description: 'Read-only commercial and quota metadata for platform operations.',
+    },
+    'platform-settings': {
+      title: 'Platform settings',
+      description: 'Platform operator settings and access boundary.',
     },
     applications: {
       title: 'Applications',
@@ -228,13 +273,21 @@
     discoveryStatus: document.querySelector('#discovery-status'),
     discoveryDetail: document.querySelector('#discovery-detail'),
     sidebar: document.querySelector('#sidebar'),
+    platformSidebar: document.querySelector('#platform-sidebar'),
     sidebarBrand: document.querySelector('#sidebar-brand'),
+    platformSidebarBrand: document.querySelector('#platform-sidebar-brand'),
     sidebarScrim: document.querySelector('#sidebar-scrim'),
     sidebarOpen: document.querySelector('#sidebar-open'),
     sidebarClose: document.querySelector('#sidebar-close'),
+    platformSidebarClose: document.querySelector('#platform-sidebar-close'),
+    platformLogoutButton: document.querySelector('#platform-logout-button'),
     workspaceName: document.querySelector('#workspace-name'),
     workspaceKind: document.querySelector('#workspace-kind'),
     organizationContext: document.querySelector('#organization-context'),
+    customerContextBar: document.querySelector('#customer-context-bar'),
+    platformContextBar: document.querySelector('#platform-context-bar'),
+    breadcrumbProduct: document.querySelector('#breadcrumb-product'),
+    pageEyebrow: document.querySelector('#page-eyebrow'),
     topbarPage: document.querySelector('#topbar-page'),
     dashboardSearchForm: document.querySelector('#dashboard-search-form'),
     globalSearch: document.querySelector('#global-search'),
@@ -272,6 +325,64 @@
     viewLinks: [...document.querySelectorAll('[data-view-link]')],
   };
 
+  function isPlatformHost() {
+    return PLATFORM_HOSTNAMES.has((window.location.hostname || '').toLowerCase());
+  }
+
+  function isLocalHost() {
+    return new Set(['127.0.0.1', 'localhost', '[::1]', '::1']).has(
+      (window.location.hostname || '').toLowerCase(),
+    );
+  }
+
+  function isPlatformView(view) {
+    return PLATFORM_VIEWS.has(view);
+  }
+
+  function readRoute() {
+    const pathSegments = window.location.pathname
+      .replace(/^\/+|\/+$/g, '')
+      .split('/')
+      .filter(Boolean);
+    const hashValue = window.location.hash.replace(/^#/, '').replace(/^\/+/, '');
+    const hashSegments = hashValue.split('/').filter(Boolean);
+    const segments = pathSegments.length > 0 ? pathSegments : hashSegments;
+    const platformPath = segments[0] === 'platform';
+    const platformShell = isPlatformHost() || (isLocalHost() && platformPath);
+    const routeSegments = platformPath ? segments.slice(1) : segments;
+    if (platformShell) {
+      if (routeSegments[0] === 'organizations' && routeSegments[1]) {
+        return {
+          shell: 'platform',
+          view: 'platform-organization',
+          organizationId: decodeURIComponent(routeSegments[1]),
+        };
+      }
+      const platformRoutes = {
+        organizations: 'platform-organizations',
+        audit: 'platform-audit',
+        operations: 'platform-operations',
+        users: 'platform-users',
+        entitlements: 'platform-entitlements',
+        settings: 'platform-settings',
+      };
+      return {
+        shell: 'platform',
+        view: platformRoutes[routeSegments[0]] ?? 'platform',
+        organizationId: null,
+      };
+    }
+    const value = segments[0] || 'overview';
+    return {
+      shell: 'customer',
+      view: Object.prototype.hasOwnProperty.call(PAGE_COPY, value) && !isPlatformView(value)
+        ? value
+        : 'overview',
+      organizationId: null,
+    };
+  }
+
+  const initialRoute = readRoute();
   const state = {
     api: null,
     endpoint: '',
@@ -279,6 +390,34 @@
     identity: null,
     overview: null,
     overviewError: null,
+    platformMetrics: null,
+    platformMetricsError: null,
+    platformMetricsLoading: false,
+    platformOrganizations: null,
+    platformOrganizationsError: null,
+    platformOrganization: null,
+    platformOrganizationError: null,
+    platformAudit: null,
+    platformAuditError: null,
+    platformUsers: null,
+    platformUsersError: null,
+    platformEntitlements: null,
+    platformEntitlementsError: null,
+    platformDataLoading: false,
+    platformDataGeneration: 0,
+    organizationMembers: null,
+    organizationMembersError: null,
+    credentials: null,
+    credentialsError: null,
+    issuedCredential: null,
+    credentialIssueError: null,
+    credentialIssueLoading: false,
+    actionLoading: null,
+    actionError: null,
+    customerSettingsLoading: false,
+    customerSettingsGeneration: 0,
+    shell: initialRoute.shell,
+    platformOrganizationId: initialRoute.organizationId,
     loading: false,
     lastFetchedAt: null,
     globalSearchQuery: '',
@@ -286,7 +425,7 @@
     profileIndex: 0,
     selectedApplication: '',
     selectedEnvironment: '',
-    currentView: canonicalizeViewLocation(),
+    currentView: initialRoute.view,
   };
 
   let sidebarReturnFocus = null;
@@ -295,6 +434,8 @@
   let toastTimer = null;
   let overviewRequestGeneration = 0;
   let activeOverviewController = null;
+  let platformMetricsRequestGeneration = 0;
+  let activePlatformMetricsController = null;
   let pageTransitionFrame = null;
   const sidebarTabIndexMemory = new WeakMap();
 
@@ -322,6 +463,7 @@
       this.sessionToken = null;
       this.accessExpiresAt = null;
       this.sessionExpiresAt = null;
+      this.authorizationAudience = CUSTOMER_AUTHORIZATION_AUDIENCE;
     }
 
     setSession(payload) {
@@ -334,6 +476,17 @@
       this.sessionExpiresAt = stringValue(
         root.session_expires_at ?? root.sessionExpiresAt,
       );
+      const audience = stringValue(
+        root.authorization_audience ?? root.authorizationAudience,
+      );
+      if (
+        audience &&
+        audience !== CUSTOMER_AUTHORIZATION_AUDIENCE &&
+        audience !== PLATFORM_AUTHORIZATION_AUDIENCE
+      ) {
+        throw new ApiError('The auth response contained an unsupported audience.');
+      }
+      this.authorizationAudience = audience ?? CUSTOMER_AUTHORIZATION_AUDIENCE;
     }
 
     clear() {
@@ -341,17 +494,18 @@
       this.sessionToken = null;
       this.accessExpiresAt = null;
       this.sessionExpiresAt = null;
+      this.authorizationAudience = CUSTOMER_AUTHORIZATION_AUDIENCE;
     }
 
     async discover() {
       return unwrapPayload(await this.request('.well-known/hyfens'));
     }
 
-    async login(email, password) {
+    async login(email, password, audience = CUSTOMER_AUTHORIZATION_AUDIENCE) {
       return unwrapPayload(
         await this.request('auth/login', {
           method: 'POST',
-          body: { email, password },
+          body: { email, password, audience },
           retry: false,
         }),
       );
@@ -397,6 +551,17 @@
       const accessToken = requiredString(payload, 'access_token', 'accessToken');
       this.accessToken = accessToken;
       this.accessExpiresAt = stringValue(payload.expires_at ?? payload.expiresAt);
+      const audience = stringValue(
+        payload.authorization_audience ?? payload.authorizationAudience,
+      );
+      if (
+        audience &&
+        audience !== CUSTOMER_AUTHORIZATION_AUDIENCE &&
+        audience !== PLATFORM_AUTHORIZATION_AUDIENCE
+      ) {
+        throw new ApiError('The refresh response contained an unsupported audience.');
+      }
+      if (audience) this.authorizationAudience = audience;
       persistSession(this);
       return payload;
     }
@@ -419,10 +584,170 @@
       );
     }
 
-    async request(path, { method = 'GET', body, requiresAuth = false, retry = true, signal } = {}) {
+    async platformMetrics(profileName, { signal } = {}) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/metrics${query}`, {
+          requiresAuth: true,
+          signal,
+        }),
+      );
+    }
+
+    async platformOrganizations(profileName, query = '', { signal } = {}) {
+      const parameters = new URLSearchParams();
+      if (profileName) parameters.set('profile', profileName);
+      if (query) parameters.set('q', query);
+      const suffix = parameters.toString() ? `?${parameters.toString()}` : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/organizations${suffix}`, {
+          requiresAuth: true,
+          signal,
+        }),
+      );
+    }
+
+    async platformOrganization(profileName, organizationId, { signal } = {}) {
+      const query = profileName ? `?profile=${encodeURIComponent(profileName)}` : '';
+      return unwrapPayload(
+        await this.request(
+          `v1/platform/organizations/${encodeURIComponent(organizationId)}${query}`,
+          { requiresAuth: true, signal },
+        ),
+      );
+    }
+
+    async platformAudit(profileName, organizationId = '', { signal } = {}) {
+      const parameters = new URLSearchParams();
+      if (profileName) parameters.set('profile', profileName);
+      if (organizationId) parameters.set('organization_id', organizationId);
+      const suffix = parameters.toString() ? `?${parameters.toString()}` : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/audit${suffix}`, {
+          requiresAuth: true,
+          signal,
+        }),
+      );
+    }
+
+    async platformUsers(profileName, { signal } = {}) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/users${query}`, {
+          requiresAuth: true,
+          signal,
+        }),
+      );
+    }
+
+    async platformEntitlements(profileName, { signal } = {}) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(`v1/platform/entitlements${query}`, {
+          requiresAuth: true,
+          signal,
+        }),
+      );
+    }
+
+    async createApplication(organizationId, body, idempotencyKey) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/applications`,
+          {
+            method: 'POST',
+            body,
+            requiresAuth: true,
+            headers: { 'Idempotency-Key': idempotencyKey },
+          },
+        ),
+      );
+    }
+
+    async issueCredential(organizationId, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/credentials`,
+          { method: 'POST', body, requiresAuth: true },
+        ),
+      );
+    }
+
+    async createEnvironment(organizationId, applicationId, body, idempotencyKey) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/applications/${encodeURIComponent(applicationId)}/environments`,
+          {
+            method: 'POST',
+            body,
+            requiresAuth: true,
+            headers: { 'Idempotency-Key': idempotencyKey },
+          },
+        ),
+      );
+    }
+
+    async promote(organizationId, environmentId, body, idempotencyKey, expectedVersion) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/environments/${encodeURIComponent(environmentId)}/release-promotions`,
+          {
+            method: 'POST',
+            body,
+            requiresAuth: true,
+            headers: {
+              'Idempotency-Key': idempotencyKey,
+              'If-Match': `"environment-v${expectedVersion}"`,
+            },
+          },
+        ),
+      );
+    }
+
+    async organizationMembers(organizationId, { signal } = {}) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/members`,
+          { requiresAuth: true, signal },
+        ),
+      );
+    }
+
+    async credentials(organizationId, { signal } = {}) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/credentials`,
+          { requiresAuth: true, signal },
+        ),
+      );
+    }
+
+    async revokeCredential(organizationId, credentialId) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organizations/${encodeURIComponent(organizationId)}/credentials/${encodeURIComponent(credentialId)}/revoke`,
+          { method: 'POST', requiresAuth: true, body: {} },
+        ),
+      );
+    }
+
+    async request(path, {
+      method = 'GET',
+      body,
+      requiresAuth = false,
+      retry = true,
+      signal,
+      headers: additionalHeaders = {},
+    } = {}) {
       if (requiresAuth && !this.accessToken) throw new SessionExpiredError();
       const url = new URL(path.replace(/^\/+/, ''), this.baseUrl);
-      const headers = { Accept: 'application/json' };
+      const headers = { Accept: 'application/json', ...additionalHeaders };
       if (body !== undefined) headers['Content-Type'] = 'application/json';
       if (requiresAuth) headers.Authorization = `Bearer ${this.accessToken}`;
 
@@ -458,6 +783,7 @@
           requiresAuth,
           retry: false,
           signal,
+          headers: additionalHeaders,
         });
       }
       if (!response.ok) {
@@ -552,6 +878,7 @@
         session_token: api.sessionToken,
         expires_at: api.accessExpiresAt,
         session_expires_at: api.sessionExpiresAt,
+        authorization_audience: api.authorizationAudience,
       }));
     } catch (error) {
       // Keep the authenticated page usable when storage is unavailable.
@@ -593,8 +920,24 @@
     const configured = document.querySelector('meta[name="hyfens-api-base"]')?.content?.trim();
     const runtimeConfigured = window.__HYFENS_RUNTIME_CONFIG__?.apiBase?.trim();
     if (configured || runtimeConfigured) return configured || runtimeConfigured;
-    if (window.location.hostname === 'app.hyfens.com') return 'https://api.hyfens.com/';
+    const hostname = window.location.hostname.toLowerCase();
+    if (hostname === 'app.hyfens.com' || PLATFORM_HOSTNAMES.has(hostname)) {
+      return 'https://api.hyfens.com/';
+    }
     return `${window.location.origin}/`;
+  }
+
+  function isManagedControlPlaneEndpoint(endpoint = state.endpoint) {
+    try {
+      return new URL(endpoint).hostname.toLowerCase() === 'api.hyfens.com';
+    } catch {
+      return false;
+    }
+  }
+
+  function displayEndpoint(endpoint = state.endpoint) {
+    if (isManagedControlPlaneEndpoint(endpoint)) return 'Hyfens Cloud (managed)';
+    return stringValue(endpoint) ?? 'Not configured';
   }
 
   function configuredEndpoint() {
@@ -618,19 +961,35 @@
   }
 
   function viewFromLocation() {
-    const pathValue = window.location.pathname.replace(/^\/+|\/+$/g, '');
-    const hashValue = window.location.hash.replace(/^#/, '');
-    const value = pathValue || hashValue || 'overview';
-    return Object.prototype.hasOwnProperty.call(PAGE_COPY, value) ? value : 'overview';
+    return readRoute().view;
   }
 
-  function viewPath(view) {
+  function requestedLoginAudience() {
+    return readRoute().shell === 'platform'
+      ? PLATFORM_AUTHORIZATION_AUDIENCE
+      : CUSTOMER_AUTHORIZATION_AUDIENCE;
+  }
+
+  function viewPath(view, organizationId = state.platformOrganizationId) {
+    if (isPlatformView(view)) {
+      const prefix = isPlatformHost() ? '' : '/platform';
+      if (view === 'platform') return prefix || '/';
+      if (view === 'platform-organizations') return `${prefix}/organizations`;
+      if (view === 'platform-organization') {
+        return `${prefix}/organizations/${encodeURIComponent(organizationId || '')}`;
+      }
+      if (view === 'platform-audit') return `${prefix}/audit`;
+      if (view === 'platform-operations') return `${prefix}/operations`;
+      if (view === 'platform-users') return `${prefix}/users`;
+      if (view === 'platform-entitlements') return `${prefix}/entitlements`;
+      if (view === 'platform-settings') return `${prefix}/settings`;
+    }
     return view === 'overview' ? '/' : `/${view}`;
   }
 
   function canonicalizeViewLocation() {
-    const view = viewFromLocation();
-    const path = viewPath(view);
+    const route = readRoute();
+    const path = viewPath(route.view, route.organizationId);
     if (
       window.location.pathname !== path ||
       window.location.search ||
@@ -638,20 +997,79 @@
     ) {
       window.history.replaceState({}, '', path);
     }
-    return view;
+    return route.view;
   }
 
-  function navigateToView(view) {
-    const nextView = Object.prototype.hasOwnProperty.call(PAGE_COPY, view) ? view : 'overview';
-    const path = viewPath(nextView);
+  function canEnterView(view) {
+    if (!state.api) return true;
+    if (isPlatformView(view)) {
+      if (state.api.authorizationAudience !== PLATFORM_AUTHORIZATION_AUDIENCE) return false;
+      return selectPlatformProfile() && hasPlatformCapability(platformCapabilityForView(view));
+    }
+    if (state.api.authorizationAudience !== CUSTOMER_AUTHORIZATION_AUDIENCE) return false;
+    return selectCustomerProfile();
+  }
+
+  function fallbackViewForProfile(view) {
+    const platformSession = state.api?.authorizationAudience === PLATFORM_AUTHORIZATION_AUDIENCE;
+    if (isPlatformView(view)) {
+      if (platformSession && selectPlatformProfile()) return 'platform';
+      selectCustomerProfile();
+      return 'overview';
+    }
+    if (!platformSession && selectCustomerProfile()) return 'overview';
+    selectPlatformProfile();
+    return 'platform';
+  }
+
+  function announceViewAccessDenied(view) {
+    showToast(
+      isPlatformView(view)
+        ? 'This Platform Console area is not available to the selected profile.'
+        : 'This Customer Workspace is not available to the selected profile.',
+      'warning',
+    );
+  }
+
+  function navigateToView(view, { organizationId = null } = {}) {
+    if (state.currentView === 'settings' && view !== 'settings') clearIssuedCredential();
+    state.actionLoading = null;
+    state.actionError = null;
+    let nextView = Object.prototype.hasOwnProperty.call(PAGE_COPY, view)
+      ? view
+      : state.shell === 'platform'
+        ? 'platform'
+        : 'overview';
+    if (!canEnterView(nextView)) {
+      announceViewAccessDenied(nextView);
+      nextView = fallbackViewForProfile(nextView);
+    }
+    if (isPlatformView(nextView) && organizationId) {
+      state.platformOrganizationId = organizationId;
+    }
+    const path = viewPath(nextView, state.platformOrganizationId);
     const isCanonical = (
       window.location.pathname === path &&
       !window.location.search &&
       !window.location.hash
     );
     if (!isCanonical) window.history.pushState({}, '', path);
+    state.shell = isPlatformView(nextView) ? 'platform' : 'customer';
+    if (isPlatformView(nextView)) {
+      selectPlatformProfile();
+      invalidateOverviewRequest();
+      state.loading = false;
+    } else {
+      selectCustomerProfile();
+      invalidatePlatformMetricsRequest();
+      state.platformMetricsLoading = false;
+      invalidatePlatformDataRequest();
+      state.platformDataLoading = false;
+    }
     state.currentView = nextView;
+    applyShellMode();
     renderCurrentPage({ transition: true });
+    if (state.api) void loadCurrentViewData();
   }
 
   function createCollectionControls() {
@@ -677,6 +1095,53 @@
     if (className) node.className = className;
     if (text !== undefined && text !== null) node.textContent = String(text);
     return node;
+  }
+
+  function clearIssuedCredential() {
+    state.issuedCredential = null;
+    state.credentialIssueError = null;
+    state.credentialIssueLoading = false;
+  }
+
+  function makeIdempotencyKey(prefix) {
+    const randomUuid = typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
+    return `${prefix}-${randomUuid}`;
+  }
+
+  function formField(labelText, control, hint = '') {
+    const label = element('label', 'action-form-field');
+    label.append(element('span', 'form-label', labelText), control);
+    if (hint) label.append(element('span', 'form-hint', hint));
+    return label;
+  }
+
+  function actionErrorMessage(action) {
+    const error = state.actionError;
+    if (!error || error.action !== action) return null;
+    return element('p', 'action-form-error', error.message);
+  }
+
+  function actionSubmitButton(action, label) {
+    const button = element('button', 'button button-primary', state.actionLoading === action ? 'Working…' : label);
+    button.type = 'submit';
+    button.disabled = state.actionLoading !== null;
+    button.setAttribute('aria-busy', String(state.actionLoading === action));
+    return button;
+  }
+
+  function cliHandoff(title, description, commands) {
+    const wrapper = element('div', 'cli-handoff');
+    wrapper.append(element('strong', '', title), element('p', 'form-hint', description));
+    const list = element('ul', 'cli-command-list');
+    for (const command of commands) {
+      const item = element('li');
+      item.append(element('code', 'cli-command', command));
+      list.append(item);
+    }
+    wrapper.append(list);
+    return wrapper;
   }
 
   function selectControl(select) {
@@ -977,7 +1442,8 @@
 
   function primaryCell(value, subvalue) {
     const wrapper = element('div');
-    wrapper.append(element('strong', '', stringValue(value) ?? 'Not set'));
+    if (value instanceof Node) wrapper.append(value);
+    else wrapper.append(element('strong', '', stringValue(value) ?? 'Not set'));
     if (subvalue !== undefined) {
       if (subvalue instanceof Node) {
         wrapper.append(subvalue);
@@ -1271,9 +1737,93 @@
     return arrayValue(state.identity?.profiles);
   }
 
+  function customerProfileList() {
+    return profileList().filter((profile) => !isPlatformProfile(profile));
+  }
+
   function selectedProfile() {
     const profiles = profileList();
     return profiles[state.profileIndex] ?? profiles[0] ?? null;
+  }
+
+  function isPlatformProfile(profile = selectedProfile()) {
+    return pick(profile, 'platform') === true ||
+      pick(profile, 'audience') === 'platform';
+  }
+
+  function platformCapabilityForView(view = state.currentView) {
+    return {
+      platform: 'platform:overview',
+      'platform-organizations': 'platform:organizations:read',
+      'platform-organization': 'platform:organizations:inspect',
+      'platform-audit': 'platform:audit:read',
+      // Operations is currently backed by the same bounded metrics projection
+      // as the Platform overview. Keep the route contract aligned with the
+      // server capability until a distinct operations projection exists.
+      'platform-operations': 'platform:overview',
+      'platform-users': 'platform:accounts:read',
+      'platform-entitlements': 'platform:entitlements:read',
+      'platform-settings': 'platform:overview',
+    }[view] ?? null;
+  }
+
+  function hasPlatformCapability(capability, profile = selectedProfile()) {
+    if (!isPlatformProfile(profile)) return false;
+    if (!capability) return true;
+    return arrayValue(pick(profile, 'platformCapabilities', 'platform_capabilities'))
+      .includes(capability);
+  }
+
+  function hasCustomerCapability(capability, profile = selectedProfile()) {
+    if (isPlatformProfile(profile)) return false;
+    if (!capability) return true;
+    return arrayValue(pick(profile, 'capabilities')).includes(capability);
+  }
+
+  function syncPlatformNavigation() {
+    applyShellMode();
+  }
+
+  function applyShellMode() {
+    const platform = state.shell === 'platform';
+    nodes.appView.dataset.shell = platform ? 'platform' : 'customer';
+    nodes.sidebar.hidden = platform;
+    nodes.platformSidebar.hidden = !platform;
+    nodes.customerContextBar.hidden = platform;
+    nodes.platformContextBar.hidden = !platform;
+    nodes.dashboardSearchForm.hidden = platform;
+    nodes.sidebarOpen.setAttribute(
+      'aria-controls',
+      platform ? 'platform-sidebar' : 'sidebar',
+    );
+    nodes.breadcrumbProduct.textContent = platform
+      ? 'Platform Console'
+      : 'Customer Workspace';
+    nodes.pageEyebrow.textContent = platform
+      ? 'Platform Console'
+      : 'Customer Workspace';
+    if (platform) closeAccountMenu();
+    syncSidebarAccessibility();
+  }
+
+  function selectPlatformProfile() {
+    const platformIndex = profileList().findIndex((profile) => isPlatformProfile(profile));
+    if (platformIndex < 0 || platformIndex === state.profileIndex) return platformIndex >= 0;
+    state.profileIndex = platformIndex;
+    state.selectedApplication = '';
+    state.selectedEnvironment = '';
+    renderContextControls();
+    return true;
+  }
+
+  function selectCustomerProfile() {
+    const customerIndex = profileList().findIndex((profile) => !isPlatformProfile(profile));
+    if (customerIndex < 0 || customerIndex === state.profileIndex) return customerIndex >= 0;
+    state.profileIndex = customerIndex;
+    state.selectedApplication = '';
+    state.selectedEnvironment = '';
+    renderContextControls();
+    return true;
   }
 
   function profileOrganizationName(profile) {
@@ -1286,6 +1836,7 @@
     const memberships = [];
     const byId = new Map();
     profileList().forEach((profile, profileIndex) => {
+      if (isPlatformProfile(profile)) return;
       const organizationId = profileOrganizationId(profile);
       if (!organizationId) return;
       let membership = byId.get(organizationId);
@@ -1392,6 +1943,29 @@
       });
     }
     return items;
+  }
+
+  function customerApplications() {
+    const appId = profileApplicationId();
+    return arrayValue(state.overview?.applications).filter(
+      (item) => !appId || recordId(item) === appId,
+    );
+  }
+
+  function customerEnvironments() {
+    const appId = profileApplicationId();
+    const environmentId = profileEnvironmentId();
+    return arrayValue(state.overview?.environments).filter((item) => (
+      (!appId || recordApplicationId(item) === appId) &&
+      (!environmentId || recordId(item) === environmentId)
+    ));
+  }
+
+  function customerReleases() {
+    const appId = profileApplicationId();
+    return arrayValue(state.overview?.releases).filter(
+      (item) => !appId || recordApplicationId(item) === appId,
+    );
   }
 
   function newest(items, limit = 4, key = '') {
@@ -1615,6 +2189,414 @@
     return stack;
   }
 
+  function renderPlatformMetricGrid(snapshot) {
+    const counts = objectValue(snapshot.counts) ?? {};
+    const metrics = [
+      ['organizations', 'Organizations'],
+      ['activeUsers', 'Active users'],
+      ['activeSessions', 'Active sessions'],
+      ['applications', 'Applications'],
+      ['environments', 'Environments'],
+      ['releases', 'Releases'],
+      ['patches', 'Patches'],
+      ['rollouts', 'Rollout records'],
+      ['auditEvents', 'Audit events'],
+    ];
+    const grid = element('div', 'metric-grid platform-metric-grid');
+    for (const [key, label] of metrics) {
+      const card = element('div', 'metric-card');
+      card.append(
+        element('span', 'metric-label', label),
+        element('strong', 'metric-value', countValue(counts[key])),
+        element('span', 'metric-source', 'Aggregate platform snapshot'),
+      );
+      grid.append(card);
+    }
+    return grid;
+  }
+
+  function renderPlatformActivityPanel(snapshot) {
+    const activity = objectValue(snapshot.activity) ?? {};
+    const last24h = objectValue(activity.last24h) ?? {};
+    const last30d = objectValue(activity.last30d) ?? {};
+    const panel = makePanel(
+      'Recent platform activity',
+      'New control-plane records created in the selected rolling windows. No tenant records are returned here.',
+      'Aggregate only',
+    );
+    const fields = element('div', 'field-grid');
+    for (const [key, label] of [
+      ['organizations', 'Organizations'],
+      ['users', 'Users'],
+      ['applications', 'Applications'],
+      ['environments', 'Environments'],
+      ['releases', 'Releases'],
+      ['patches', 'Patches'],
+      ['rollouts', 'Rollouts'],
+      ['auditEvents', 'Audit events'],
+    ]) {
+      const value = element('div');
+      value.append(
+        element('span', 'metadata-label', label),
+        element('span', 'metadata-value', `24h ${countValue(last24h[key])} / 30d ${countValue(last30d[key])}`),
+      );
+      fields.append(value);
+    }
+    panel.body.append(fields);
+    return panel.section;
+  }
+
+  function renderPlatformServicePanel(snapshot) {
+    const serviceMetrics = objectValue(snapshot.serviceMetrics);
+    const requests = objectValue(serviceMetrics?.requests);
+    const requestCount = requests?.count;
+    const errorCount = requests?.errors;
+    const errorRate = typeof requestCount === 'number' && requestCount > 0 && typeof errorCount === 'number'
+      ? `${((errorCount / requestCount) * 100).toFixed(2)}%`
+      : 'Not available';
+    const panel = makePanel(
+      'Service health signals',
+      'Process-local measurements from this control-plane instance. They are not a fleet availability or SLA claim.',
+      'Instance scope',
+    );
+    const fields = element('div', 'field-grid');
+    fields.append(
+      metadataItem('Requests', countValue(requestCount)),
+      metadataItem('Errors', countValue(errorCount)),
+      metadataItem('Error rate', errorRate),
+      metadataItem('Max latency', typeof requests?.maxDurationMicros === 'number' ? `${requests.maxDurationMicros} µs` : 'Not available'),
+      metadataItem('Total processing time', typeof requests?.totalDurationMicros === 'number' ? `${requests.totalDurationMicros} µs` : 'Not available'),
+      metadataItem('Snapshot generated', dateValue(snapshot.generatedAt)),
+    );
+    panel.body.append(fields);
+    return panel.section;
+  }
+
+  function renderPlatformPage() {
+    const viewTitle = state.currentView === 'platform-operations'
+      ? 'Operations'
+      : 'Platform overview';
+    if (!hasPlatformCapability(platformCapabilityForView())) {
+      return unavailablePage(
+        viewTitle,
+        'This profile is not configured for this Platform Console area.',
+      );
+    }
+    if (!state.platformMetrics) {
+      return unavailablePage(viewTitle, platformMetricsUnavailableReason());
+    }
+    const snapshot = state.platformMetrics;
+    const stack = element('div', 'page-stack');
+    const intro = makePanel(
+      'Platform snapshot',
+      'Read-only aggregate measurements across the configured Hyfens control-plane instance. Raw users, credentials, and tenant records are never exposed in this view.',
+      'Read only',
+    );
+    intro.body.append(
+      element('p', 'settings-note', 'Use these measurements for operational orientation. Durable analytics, billing, cohort reporting, and SLA reporting require a separate production telemetry system.'),
+    );
+    stack.append(intro.section, renderPlatformMetricGrid(snapshot));
+    const details = element('div', 'overview-grid');
+    details.append(
+      renderPlatformActivityPanel(snapshot),
+      renderPlatformServicePanel(snapshot),
+    );
+    stack.append(details);
+    return stack;
+  }
+
+  function platformAccessUnavailable(title) {
+    return unavailablePage(
+      title,
+      'This profile is not authorized for the requested Platform Console projection. The control plane remains the source of truth for this boundary.',
+    );
+  }
+
+  function renderPlatformOrganizationsPage() {
+    if (!hasPlatformCapability('platform:organizations:read')) {
+      return platformAccessUnavailable('Organizations');
+    }
+    const projection = state.platformOrganizations;
+    if (!projection) {
+      return unavailablePage('Organizations', platformDataUnavailableReason('platform-organizations'));
+    }
+    const organizations = arrayValue(projection.organizations);
+    const panel = makePanel(
+      'Customer organizations',
+      'Bounded organization metadata for platform operations. Customer secrets and tenant records are not returned by this directory.',
+      `${organizations.length} returned`,
+    );
+    if (organizations.length === 0) {
+      panel.body.append(stateBlock(
+        'empty',
+        'No organizations returned',
+        'The platform projection did not return an organization matching the current directory scope.',
+      ));
+    } else {
+      panel.body.append(recordTable(
+        ['Organization', 'Status', 'Applications', 'Environments', 'Members', 'Last activity'],
+        organizations,
+        (organization) => {
+          const id = organizationRecordId(organization);
+          const name = stringValue(pick(organization, 'name')) ?? id ?? 'Organization';
+          const link = element('a', 'global-search-result', name);
+          link.href = viewPath('platform-organization', id);
+          link.dataset.platformOrganizationId = id ?? '';
+          link.setAttribute('aria-label', `Inspect ${name}`);
+          return tableRow([
+            primaryCell(link, id),
+            statusTag(pick(organization, 'status')),
+            countValue(pick(organization, 'applicationCount')),
+            countValue(pick(organization, 'environmentCount')),
+            countValue(pick(organization, 'memberCount')),
+            dateValue(pick(organization, 'lastActivityAt')),
+          ]);
+        },
+      ));
+    }
+    if (pick(projection, 'limits')?.maxOrganizations) {
+      panel.body.append(element('p', 'collection-note', 'Directory results are bounded by the platform projection limit.'));
+    }
+    return panel.section;
+  }
+
+  function renderPlatformOrganizationPage() {
+    if (!hasPlatformCapability('platform:organizations:inspect')) {
+      return platformAccessUnavailable('Organization detail');
+    }
+    const projection = state.platformOrganization;
+    if (!projection) {
+      return unavailablePage('Organization detail', platformDataUnavailableReason('platform-organization'));
+    }
+    const organization = objectValue(projection.organization) ?? {};
+    const name = stringValue(pick(organization, 'name')) ?? 'Organization';
+    const stack = element('div', 'page-stack');
+    const summary = makePanel(
+      name,
+      'Read-only platform inspection metadata. This view does not impersonate a customer member.',
+      stringValue(pick(organization, 'status')) ?? 'Metadata only',
+    );
+    const fields = element('div', 'field-grid');
+    fields.append(
+      metadataItem('Organization ID', pick(organization, 'id'), { code: true }),
+      metadataItem('Created', formatDateText(pick(organization, 'createdAt'))),
+      metadataItem('Last activity', formatDateText(pick(organization, 'lastActivityAt'))),
+      metadataItem('Members', countValue(pick(organization, 'memberCount'))),
+      metadataItem('Applications', countValue(pick(organization, 'applicationCount'))),
+      metadataItem('Environments', countValue(pick(organization, 'environmentCount'))),
+    );
+    summary.body.append(fields);
+    stack.append(summary.section);
+
+    const counts = objectValue(projection.counts) ?? {};
+    const metricGrid = element('div', 'metric-grid');
+    for (const [key, label] of [
+      ['releases', 'Releases'],
+      ['patches', 'Patches'],
+      ['rollouts', 'Deployments'],
+      ['auditEvents', 'Audit events'],
+    ]) {
+      const card = element('div', 'metric-card');
+      card.append(
+        element('span', 'metric-label', label),
+        element('strong', 'metric-value', countValue(counts[key])),
+        element('span', 'metric-source', 'Organization projection'),
+      );
+      metricGrid.append(card);
+    }
+    stack.append(metricGrid);
+
+    const applications = arrayValue(projection.applications);
+    const environments = arrayValue(projection.environments);
+    const resources = element('div', 'overview-grid');
+    const applicationsPanel = makePanel('Applications', 'Runtime identities registered to this organization.', `${applications.length} returned`);
+    applicationsPanel.body.append(applications.length === 0
+      ? stateBlock('empty', 'No applications returned', 'The organization projection contains no application metadata.')
+      : recordTable(
+        ['Application', 'Runtime identity', 'Created'],
+        applications,
+        (item) => tableRow([
+          primaryCell(recordId(item)),
+          codeValue(pick(item, 'runtimeApplicationId')),
+          dateValue(pick(item, 'createdAt')),
+        ]),
+      ));
+    const environmentsPanel = makePanel('Environments', 'Environment metadata returned for operational inspection.', `${environments.length} returned`);
+    environmentsPanel.body.append(environments.length === 0
+      ? stateBlock('empty', 'No environments returned', 'The organization projection contains no environment metadata.')
+      : recordTable(
+        ['Environment', 'Application', 'Version', 'Promoted release'],
+        environments,
+        (item) => tableRow([
+          primaryCell(pick(item, 'name'), recordId(item)),
+          codeValue(pick(item, 'applicationId')),
+          stringValue(pick(item, 'version')) ?? 'Not set',
+          codeValue(pick(item, 'promotedReleaseId')),
+        ]),
+      ));
+    resources.append(applicationsPanel.section, environmentsPanel.section);
+    stack.append(resources);
+    return stack;
+  }
+
+  function renderPlatformAuditPage() {
+    if (!hasPlatformCapability('platform:audit:read')) {
+      return platformAccessUnavailable('Security & audit');
+    }
+    const projection = state.platformAudit;
+    if (!projection) {
+      return unavailablePage('Security & audit', platformDataUnavailableReason('platform-audit'));
+    }
+    const events = arrayValue(projection.events);
+    const panel = makePanel(
+      'Platform audit events',
+      'Administrative and security events explicitly recorded for the platform audience. Customer audit rows are not relabeled here.',
+      `${events.length} returned`,
+    );
+    panel.body.append(events.length === 0
+      ? stateBlock('empty', 'No platform audit events', stringValue(pick(projection, 'note')) ?? 'No platform-audience events were returned.')
+      : recordTable(
+        ['Action', 'Organization', 'Resource', 'Result', 'Actor', 'Created', 'Exact record'],
+        events,
+        (item) => tableRow([
+          primaryCell(pick(item, 'action'), pick(item, 'resourceType')),
+          codeValue(pick(item, 'organizationId')),
+          primaryCell(pick(item, 'resourceType'), pick(item, 'resourceId')),
+          statusTag(pick(item, 'result')),
+          codeValue(pick(item, 'actorId')),
+          dateValue(pick(item, 'createdAt')),
+          exactRecordDetails(item),
+        ]),
+      ));
+    return panel.section;
+  }
+
+  function renderPlatformUsersPage() {
+    if (!hasPlatformCapability('platform:accounts:read')) {
+      return platformAccessUnavailable('Platform users');
+    }
+    const projection = state.platformUsers;
+    if (!projection) {
+      return unavailablePage('Platform users', platformDataUnavailableReason('platform-users'));
+    }
+    const users = arrayValue(projection.users);
+    const panel = makePanel(
+      'Hyfens staff',
+      'Platform-audience staff metadata for operator access review. Customer members and credential material are excluded.',
+      `${users.length} returned`,
+    );
+    panel.body.append(users.length === 0
+      ? stateBlock('empty', 'No platform staff returned', 'No active platform capability memberships are present in this projection.')
+      : recordTable(
+        ['Staff', 'Status', 'Platform role / capabilities', 'Platform scopes', 'Created'],
+        users,
+        (user) => {
+          const memberships = arrayValue(pick(user, 'memberships'));
+          const capabilities = [...new Set(
+            memberships.flatMap((membership) => arrayValue(pick(membership, 'platformCapabilities'))),
+          )].sort(compareText);
+          const roles = memberships
+            .map((membership) => stringValue(pick(membership, 'role')))
+            .filter(Boolean)
+            .join(', ');
+          return tableRow([
+            primaryCell(pick(user, 'email'), pick(user, 'id')),
+            statusTag(pick(user, 'active') === true ? 'active' : 'inactive'),
+            primaryCell(roles || 'Role not set', `${memberships.length} platform membership${memberships.length === 1 ? '' : 's'}`),
+            element('span', 'subvalue', capabilities.join(', ') || 'No capabilities'),
+            dateValue(pick(user, 'createdAt')),
+          ]);
+        },
+      ));
+    return panel.section;
+  }
+
+  function formatMinorAmount(value, currency) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 'Not set';
+    const normalizedCurrency = stringValue(currency)?.toUpperCase();
+    return normalizedCurrency
+      ? `${normalizedCurrency} ${(value / 100).toFixed(2)}`
+      : `${(value / 100).toFixed(2)} units`;
+  }
+
+  function renderPlatformEntitlementsPage() {
+    if (!hasPlatformCapability('platform:entitlements:read')) {
+      return platformAccessUnavailable('Plans & entitlements');
+    }
+    const projection = state.platformEntitlements;
+    if (!projection) {
+      return unavailablePage('Plans & entitlements', platformDataUnavailableReason('platform-entitlements'));
+    }
+    const plans = arrayValue(projection.plans);
+    const subscriptions = arrayValue(projection.subscriptions);
+    const stack = element('div', 'page-stack');
+    const plansPanel = makePanel(
+      'Plans',
+      'Read-only plan metadata. Provider identifiers and payment secrets are not exposed.',
+      `${plans.length} returned`,
+    );
+    plansPanel.body.append(plans.length === 0
+      ? stateBlock('empty', 'No plans returned', 'No billing plan records are configured in this control plane.')
+      : recordTable(
+        ['Plan', 'Organization', 'Price', 'Billing interval', 'Status'],
+        plans,
+        (plan) => tableRow([
+          primaryCell(pick(plan, 'name') || pick(plan, 'key'), pick(plan, 'id')),
+          primaryCell(pick(plan, 'organizationName') || 'Platform-wide', pick(plan, 'organizationId')),
+          primaryCell(formatMinorAmount(pick(plan, 'amountMinor'), pick(plan, 'currency')), pick(plan, 'currency')),
+          primaryCell(pick(plan, 'interval') || pick(plan, 'period') || 'Not set', pick(plan, 'description')),
+          statusTag(pick(plan, 'active') === true ? 'active' : 'inactive'),
+        ]),
+      ));
+    const subscriptionsPanel = makePanel(
+      'Subscriptions',
+      'Read-only organization subscription status and usage counters where configured.',
+      `${subscriptions.length} returned`,
+    );
+    subscriptionsPanel.body.append(subscriptions.length === 0
+      ? stateBlock('empty', 'No subscriptions returned', 'No organization subscriptions are configured in this control plane.')
+      : recordTable(
+        ['Organization', 'Status', 'Plan', 'Usage', 'Current period'],
+        subscriptions,
+        (subscription) => tableRow([
+          primaryCell(pick(subscription, 'organizationName') || 'Organization', pick(subscription, 'organizationId')),
+          statusTag(pick(subscription, 'status')),
+          codeValue(pick(subscription, 'planId')),
+          primaryCell(
+            `${countValue(pick(subscription, 'paidCount'))} paid / ${countValue(pick(subscription, 'totalCount'))} total`,
+            `${countValue(pick(subscription, 'remainingCount'))} remaining`,
+          ),
+          primaryCell(dateValue(pick(subscription, 'currentStartAt')), dateValue(pick(subscription, 'currentEndAt'))),
+        ]),
+      ));
+    stack.append(plansPanel.section, subscriptionsPanel.section);
+    return stack;
+  }
+
+  function renderPlatformSettingsPage() {
+    if (!hasPlatformCapability('platform:overview')) {
+      return platformAccessUnavailable('Platform settings');
+    }
+    const profile = selectedProfile();
+    const panel = makePanel(
+      'Platform access boundary',
+      'Operator metadata for this console. Configuration mutations and customer membership management remain outside this read-focused MVP.',
+      'Read only',
+    );
+    const fields = element('div', 'field-grid');
+    fields.append(
+      metadataItem('Audience', pick(profile, 'audience') ?? 'platform'),
+      metadataItem('Profile', pick(profile, 'name')),
+      metadataItem('Role', pick(profile, 'role')),
+      metadataItem('Control plane', displayEndpoint(), { code: !isManagedControlPlaneEndpoint() }),
+      metadataItem('Platform capabilities', arrayValue(pick(profile, 'platformCapabilities', 'platform_capabilities')).join(', ') || 'None'),
+      metadataItem('Signed-in identity', pick(state.identity, 'email')),
+    );
+    panel.body.append(fields);
+    panel.body.append(element('p', 'settings-note', 'The Platform Console does not include a customer organization switcher. Open an organization from the bounded directory when an authorized inspection is required.'));
+    return panel.section;
+  }
+
   function truncatedCollectionKeys(body = state.overview) {
     const truncated = objectValue(body?.truncated);
     return RESOURCE_KEYS.filter((key) => (
@@ -1741,48 +2723,164 @@
     return key === 'rollouts' ? 'deployments' : key;
   }
 
+  function renderApplicationCreatePanel() {
+    const panel = makePanel(
+      'Register an application',
+      'Bind one Android package or iOS bundle identity to this customer organization. Create a separate application record when the platform identity differs.',
+      hasCustomerCapability('application:write') ? 'Customer action' : 'CLI handoff',
+    );
+    if (!hasCustomerCapability('application:write')) {
+      panel.body.append(cliHandoff(
+        'Application registration is not available for this profile.',
+        'Use the authenticated CLI profile to initialize the project and register its runtime identity.',
+        ['hyfens init', 'hyfens release android --metadata-only'],
+      ));
+      return panel.section;
+    }
+    const form = element('form', 'action-form');
+    form.dataset.dashboardAction = 'application-create';
+    const name = element('input');
+    name.type = 'text';
+    name.name = 'name';
+    name.placeholder = 'Kavach360 Android';
+    name.maxLength = 120;
+    name.required = true;
+    name.autocomplete = 'off';
+    const platform = element('select');
+    platform.name = 'platform';
+    platform.required = true;
+    for (const value of ['android', 'ios']) {
+      const option = element('option', '', value[0].toUpperCase() + value.slice(1));
+      option.value = value;
+      platform.append(option);
+    }
+    const runtimeId = element('input');
+    runtimeId.type = 'text';
+    runtimeId.name = 'runtime_application_id';
+    runtimeId.placeholder = 'com.example.app';
+    runtimeId.required = true;
+    runtimeId.maxLength = 256;
+    runtimeId.autocomplete = 'off';
+    const fields = element('div', 'action-form-grid');
+    fields.append(
+      formField('Application name', name, 'A display name for the workspace.'),
+      formField('Platform', platform),
+      formField('Package or bundle identity', runtimeId, 'This identity is immutable once a release is registered.'),
+    );
+    const actions = element('div', 'action-form-actions');
+    actions.append(actionSubmitButton('application-create', 'Register application'));
+    form.append(fields);
+    const error = actionErrorMessage('application-create');
+    if (error) form.append(error);
+    form.append(actions);
+    panel.body.append(form);
+    return panel.section;
+  }
+
   function renderApplicationsPage() {
     if (!state.overview) return unavailablePage('Applications', overviewUnavailableReason());
     const body = state.overview;
     const items = scopedItems('applications');
-    return collectionPanel(
-      body,
-      'applications',
-      'Applications',
-      'Runtime application identities registered for the selected organization.',
-      ['Application', 'Runtime identity', 'Created', 'Exact record'],
-      items,
-      (item) => tableRow([
-        primaryCell(recordId(item)),
-        codeValue(pick(item, 'runtimeApplicationId')),
-        dateValue(pick(item, 'createdAt')),
-        exactRecordDetails(item),
-      ]),
-      'The control plane returned no application records for this membership scope.',
+    const stack = element('div', 'page-stack');
+    stack.append(
+      renderApplicationCreatePanel(),
+      collectionPanel(
+        body,
+        'applications',
+        'Applications',
+        'Runtime application identities registered for the selected organization.',
+        ['Application', 'Runtime identity', 'Platform', 'Created', 'Exact record'],
+        items,
+        (item) => tableRow([
+          primaryCell(pick(item, 'name') || recordId(item), recordId(item)),
+          codeValue(pick(item, 'runtimeApplicationId')),
+          statusTag(pick(item, 'platform'), 'Not specified'),
+          dateValue(pick(item, 'createdAt')),
+          exactRecordDetails(item),
+        ]),
+        'The control plane returned no application records for this membership scope.',
+      ),
     );
+    return stack;
+  }
+
+  function renderEnvironmentCreatePanel() {
+    const panel = makePanel(
+      'Create an environment',
+      'Add a version pointer under an application. Environments start at version zero and are promoted only through an authorized release action.',
+      hasCustomerCapability('environment:write') ? 'Customer action' : 'CLI handoff',
+    );
+    if (!hasCustomerCapability('environment:write')) {
+      panel.body.append(cliHandoff(
+        'Environment creation is not available for this profile.',
+        'Use the CLI project workflow for local setup, then return here to inspect the environment.',
+        ['hyfens init', 'hyfens status'],
+      ));
+      return panel.section;
+    }
+    const applications = customerApplications();
+    if (applications.length === 0) {
+      panel.body.append(stateBlock('empty', 'Create an application first', 'An environment must belong to an existing customer application.'));
+      return panel.section;
+    }
+    const form = element('form', 'action-form');
+    form.dataset.dashboardAction = 'environment-create';
+    const application = element('select');
+    application.name = 'application_id';
+    application.required = true;
+    for (const item of applications) {
+      const option = element('option', '', `${pick(item, 'name') || pick(item, 'runtimeApplicationId') || 'Application'} / ${recordId(item)}`);
+      option.value = recordId(item) ?? '';
+      application.append(option);
+    }
+    const name = element('input');
+    name.type = 'text';
+    name.name = 'name';
+    name.placeholder = 'staging';
+    name.maxLength = 64;
+    name.required = true;
+    name.autocomplete = 'off';
+    const fields = element('div', 'action-form-grid');
+    fields.append(
+      formField('Application', application),
+      formField('Environment name', name, 'Names are unique per application, case-insensitively.'),
+    );
+    const actions = element('div', 'action-form-actions');
+    actions.append(actionSubmitButton('environment-create', 'Create environment'));
+    form.append(fields);
+    const error = actionErrorMessage('environment-create');
+    if (error) form.append(error);
+    form.append(actions);
+    panel.body.append(form);
+    return panel.section;
   }
 
   function renderEnvironmentsPage() {
     if (!state.overview) return unavailablePage('Environments', overviewUnavailableReason());
     const body = state.overview;
     const items = scopedItems('environments');
-    return collectionPanel(
-      body,
-      'environments',
-      'Environments',
-      'Environment version pointers and promoted release references.',
-      ['Environment', 'Application', 'Version', 'Promoted release', 'Created', 'Exact record'],
-      items,
-      (item) => tableRow([
-        primaryCell(pick(item, 'name'), recordId(item)),
-        codeValue(pick(item, 'applicationId')),
-        stringValue(pick(item, 'version')) ?? 'Not set',
-        codeValue(pick(item, 'promotedReleaseId')),
-        dateValue(pick(item, 'createdAt')),
-        exactRecordDetails(item),
-      ]),
-      'The control plane returned no environment records for this membership scope.',
+    const stack = element('div', 'page-stack');
+    stack.append(
+      renderEnvironmentCreatePanel(),
+      collectionPanel(
+        body,
+        'environments',
+        'Environments',
+        'Environment version pointers and promoted release references.',
+        ['Environment', 'Application', 'Version', 'Promoted release', 'Created', 'Exact record'],
+        items,
+        (item) => tableRow([
+          primaryCell(pick(item, 'name'), recordId(item)),
+          codeValue(pick(item, 'applicationId')),
+          stringValue(pick(item, 'version')) ?? 'Not set',
+          codeValue(pick(item, 'promotedReleaseId')),
+          dateValue(pick(item, 'createdAt')),
+          exactRecordDetails(item),
+        ]),
+        'The control plane returned no environment records for this membership scope.',
+      ),
     );
+    return stack;
   }
 
   function renderReleasesPage() {
@@ -1856,36 +2954,120 @@
     );
   }
 
+  function renderPromotionPanel() {
+    const canPromote = hasCustomerCapability('release:promote');
+    const panel = makePanel(
+      'Delivery actions',
+      'Promotion changes the selected environment pointer only after the control plane verifies a matching ready patch and artifact.',
+      canPromote ? 'Explicit confirmation' : 'CLI handoff',
+    );
+    if (!canPromote) {
+      panel.body.append(cliHandoff(
+        'Browser promotion is not available for this profile.',
+        'Use the CLI for release and patch creation. The same server-side authorization and verification rules apply there.',
+        ['hyfens release android', 'hyfens patch android', 'hyfens deploy', 'hyfens rollback --help'],
+      ));
+      return panel.section;
+    }
+    const environments = customerEnvironments();
+    const releases = customerReleases();
+    if (environments.length === 0 || releases.length === 0) {
+      panel.body.append(stateBlock(
+        'empty',
+        environments.length === 0 ? 'Create an environment first' : 'Create a release first',
+        'Promotion becomes available after an environment and release exist in this customer context. A verified ready patch is still required by the control plane.',
+      ));
+      panel.body.append(cliHandoff(
+        'Continue from the project directory',
+        'Release and patch artifacts are created from the local Flutter source tree.',
+        ['hyfens release android', 'hyfens patch android'],
+      ));
+      return panel.section;
+    }
+    const form = element('form', 'action-form');
+    form.dataset.dashboardAction = 'promotion';
+    const environment = element('select');
+    environment.name = 'environment_id';
+    environment.required = true;
+    for (const item of environments) {
+      const option = element('option', '', `${pick(item, 'name') || 'Environment'} / ${recordId(item)} / v${pick(item, 'version') ?? 0}`);
+      option.value = recordId(item) ?? '';
+      option.dataset.environmentVersion = String(pick(item, 'version') ?? 0);
+      environment.append(option);
+    }
+    environment.dataset.promotionEnvironment = 'true';
+    const release = element('select');
+    release.name = 'release_id';
+    release.required = true;
+    for (const item of releases) {
+      const option = element('option', '', `${pick(item, 'displayVersion') || pick(item, 'runtimeReleaseId') || 'Release'} / ${recordId(item)}`);
+      option.value = recordId(item) ?? '';
+      release.append(option);
+    }
+    const expectedVersion = element('input');
+    expectedVersion.type = 'number';
+    expectedVersion.name = 'expected_version';
+    expectedVersion.min = '0';
+    expectedVersion.step = '1';
+    expectedVersion.value = String(pick(environments[0], 'version') ?? 0);
+    expectedVersion.required = true;
+    expectedVersion.readOnly = true;
+    const fields = element('div', 'action-form-grid');
+    fields.append(
+      formField('Target environment', environment),
+      formField('Release', release, 'The server verifies that a ready patch for this release exists.'),
+      formField('Current environment version', expectedVersion, 'Promotion fails closed if this value is stale.'),
+    );
+    const actions = element('div', 'action-form-actions');
+    actions.append(actionSubmitButton('promotion', 'Promote release'));
+    const error = actionErrorMessage('promotion');
+    form.append(fields);
+    if (error) form.append(error);
+    form.append(actions);
+    panel.body.append(form);
+    panel.body.append(cliHandoff(
+      'Release and patch creation stays in the CLI',
+      'The browser action above promotes an already verified remote artifact. Rollback remains an explicit CLI/runtime operation.',
+      ['hyfens release android', 'hyfens patch android', 'hyfens rollback --help'],
+    ));
+    return panel.section;
+  }
+
   function renderDeploymentsPage() {
     if (!state.overview) return unavailablePage('Deployment records', overviewUnavailableReason());
     const body = state.overview;
     const items = scopedItems('rollouts');
-    return collectionPanel(
-      body,
-      'rollouts',
-      'Deployment records',
-      'The backend exposes rollout policy records, not a runtime deployment success signal.',
-      ['Rollout', 'State', 'Revision', 'Target', 'Policy', 'Exact record'],
-      items,
-      (item) => {
-        const revision = objectValue(item.currentRevision);
-        const target = objectValue(revision?.target);
-        const policy = objectValue(revision?.policy);
-        return tableRow([
-          primaryCell(recordId(item), `Created ${formatDateText(pick(item, 'createdAt'))}`),
-          statusTag(pick(item, 'state')),
-          primaryCell(pick(revision, 'revision'), statusTag(pick(item, 'currentRevisionStatus'))),
-          compoundCell([
-            ['Environment', pick(target, 'environmentId')],
-            ['Release', pick(target, 'releaseId')],
-            ['Patch', pick(target, 'patchId')],
-          ]),
-          policyCell(policy),
-          exactRecordDetails(item),
-        ]);
-      },
-      'The control plane returned no rollout records for this membership scope.',
+    const stack = element('div', 'page-stack');
+    stack.append(
+      renderPromotionPanel(),
+      collectionPanel(
+        body,
+        'rollouts',
+        'Deployment records',
+        'The backend exposes rollout policy records, not a runtime deployment success signal.',
+        ['Rollout', 'State', 'Revision', 'Target', 'Policy', 'Exact record'],
+        items,
+        (item) => {
+          const revision = objectValue(item.currentRevision);
+          const target = objectValue(revision?.target);
+          const policy = objectValue(revision?.policy);
+          return tableRow([
+            primaryCell(recordId(item), `Created ${formatDateText(pick(item, 'createdAt'))}`),
+            statusTag(pick(item, 'state')),
+            primaryCell(pick(revision, 'revision'), statusTag(pick(item, 'currentRevisionStatus'))),
+            compoundCell([
+              ['Environment', pick(target, 'environmentId')],
+              ['Release', pick(target, 'releaseId')],
+              ['Patch', pick(target, 'patchId')],
+            ]),
+            policyCell(policy),
+            exactRecordDetails(item),
+          ]);
+        },
+        'The control plane returned no rollout records for this membership scope.',
+      ),
     );
+    return stack;
   }
 
   function compoundCell(entries) {
@@ -1972,6 +3154,191 @@
     return undefined;
   }
 
+  function renderOrganizationMembersPanel() {
+    const members = state.organizationMembers;
+    const panel = makePanel(
+      'Team members',
+      'Members of the selected customer organization. Passwords, sessions, and credential material are never returned.',
+      members ? `${members.length} returned` : 'Loading',
+    );
+    if (!members) {
+      panel.body.append(stateBlock('unavailable', 'Member metadata unavailable', customerSettingsUnavailableReason('members')));
+      return panel.section;
+    }
+    if (members.length === 0) {
+      panel.body.append(stateBlock('empty', 'No members returned', 'The selected organization has no member metadata in the current projection.'));
+      return panel.section;
+    }
+    panel.body.append(recordTable(
+      ['Member', 'Status', 'Role / capabilities', 'Application / environment', 'Joined'],
+      members,
+      (member) => {
+        const membership = objectValue(arrayValue(pick(member, 'memberships'))[0]);
+        const capabilities = arrayValue(pick(membership, 'capabilities'))
+          .map(stringValue)
+          .filter(Boolean);
+        const roleDetails = [
+          stringValue(pick(membership, 'profileName')) && `Profile ${pick(membership, 'profileName')}`,
+          capabilities.length > 0 ? `Capabilities: ${capabilities.join(', ')}` : null,
+        ].filter(Boolean).join(' · ');
+        return tableRow([
+          primaryCell(pick(member, 'email'), pick(member, 'id')),
+          statusTag(pick(member, 'active') === true ? 'active' : 'inactive'),
+          primaryCell(pick(membership, 'role'), roleDetails || undefined),
+          primaryCell(
+            pick(membership, 'applicationId') ?? 'All applications',
+            pick(membership, 'environmentId') ?? 'All environments',
+          ),
+          dateValue(pick(member, 'createdAt')),
+        ]);
+      },
+    ));
+    panel.body.append(element('p', 'settings-note', 'Member invitations and role changes are not exposed until their server contracts are available. This view is metadata-only.'));
+    return panel.section;
+  }
+
+  function credentialScopePresets() {
+    return [
+      {
+        value: 'read',
+        label: 'Read only',
+        scopes: ['application:read', 'release:read', 'patch:read', 'artifact:read', 'rollout:read', 'audit:read'],
+      },
+      {
+        value: 'developer',
+        label: 'Developer',
+        scopes: ['application:read', 'application:write', 'environment:write', 'release:read', 'release:write', 'patch:read', 'patch:write', 'artifact:read', 'artifact:write', 'rollout:read', 'audit:read'],
+      },
+      {
+        value: 'operator',
+        label: 'Release operator',
+        scopes: ['application:read', 'environment:write', 'release:read', 'release:write', 'release:promote', 'patch:read', 'patch:write', 'artifact:read', 'artifact:write', 'rollout:read', 'rollout:create', 'rollout:update', 'rollout:promote', 'rollout:halt', 'audit:read'],
+      },
+    ];
+  }
+
+  function renderIssuedCredential() {
+    const issued = objectValue(state.issuedCredential);
+    const token = stringValue(issued?.token);
+    if (!token) return null;
+    const wrapper = element('div', 'one-time-secret');
+    wrapper.append(
+      element('strong', '', 'Credential created — copy it now'),
+      element('p', 'form-hint', 'This secret is displayed once and will not be returned by a later request.'),
+    );
+    const value = element('code', 'secret-value', token);
+    value.setAttribute('aria-label', 'New credential secret');
+    const copy = element('button', 'button button-secondary', 'Copy credential');
+    copy.type = 'button';
+    copy.dataset.copyCredential = 'true';
+    wrapper.append(value, copy);
+    return wrapper;
+  }
+
+  function renderCredentialIssueForm() {
+    const wrapper = element('div', 'action-form-inset');
+    const canIssue = hasCustomerCapability('credential:issue');
+    wrapper.append(
+      element('h3', '', 'Create credential'),
+      element('p', 'form-hint', canIssue
+        ? 'Issue a scoped service credential for CLI or CI use. The plaintext secret is shown exactly once.'
+        : 'Credential issuance is not available for the selected profile.'),
+    );
+    if (!canIssue) return wrapper;
+    const form = element('form', 'action-form');
+    form.dataset.dashboardAction = 'credential-issue';
+    const name = element('input');
+    name.type = 'text';
+    name.name = 'name';
+    name.placeholder = 'Kavach360 CI';
+    name.maxLength = 120;
+    name.required = true;
+    name.autocomplete = 'off';
+    const preset = element('select');
+    preset.name = 'scope_preset';
+    preset.required = true;
+    for (const item of credentialScopePresets()) {
+      const option = element('option', '', item.label);
+      option.value = item.value;
+      preset.append(option);
+    }
+    const expiry = element('select');
+    expiry.name = 'expiry_days';
+    for (const [value, label] of [
+      ['0', 'No expiry'],
+      ['30', '30 days'],
+      ['90', '90 days'],
+      ['365', '1 year'],
+    ]) {
+      const option = element('option', '', label);
+      option.value = value;
+      expiry.append(option);
+    }
+    const fields = element('div', 'action-form-grid');
+    fields.append(
+      formField('Credential name', name),
+      formField('Scope', preset),
+      formField('Expiration', expiry, 'Short-lived credentials are recommended for CI and demos.'),
+    );
+    const actions = element('div', 'action-form-actions');
+    actions.append(actionSubmitButton('credential-issue', 'Generate credential'));
+    const error = actionErrorMessage('credential-issue');
+    form.append(fields);
+    if (error) form.append(error);
+    form.append(actions);
+    wrapper.append(form);
+    return wrapper;
+  }
+
+  function renderCredentialsPanel() {
+    const credentials = state.credentials;
+    const panel = makePanel(
+      'Credentials',
+      'Customer service credentials are shown as metadata only. A token is displayed once at issuance and cannot be recovered from this page.',
+      credentials ? `${credentials.length} returned` : 'Loading',
+    );
+    panel.body.append(renderCredentialIssueForm());
+    const issued = renderIssuedCredential();
+    if (issued) panel.body.append(issued);
+    if (!credentials) {
+      panel.body.append(stateBlock('unavailable', 'Credential metadata unavailable', customerSettingsUnavailableReason('credentials')));
+      return panel.section;
+    }
+    if (credentials.length === 0) {
+      panel.body.append(stateBlock('empty', 'No credentials returned', 'No customer service credentials are currently recorded for this organization.'));
+      return panel.section;
+    }
+    panel.body.append(recordTable(
+      ['Credential', 'Kind / scope', 'Application / environment', 'Status', 'Created', 'Action'],
+      credentials,
+      (credential) => {
+        const scopes = arrayValue(pick(credential, 'scopes'));
+        const action = pick(credential, 'revoked') === true
+          ? statusTag('revoked')
+          : !hasCustomerCapability('credential:revoke')
+            ? element('span', 'metadata-value muted', 'Not authorized')
+          : (() => {
+            const button = element('button', 'button button-quiet button-danger', 'Revoke');
+            button.type = 'button';
+            button.dataset.credentialRevoke = stringValue(pick(credential, 'id')) ?? '';
+            return button;
+          })();
+        return tableRow([
+          primaryCell(pick(credential, 'id'), pick(credential, 'kind')),
+          element('span', 'subvalue', scopes.length > 0 ? scopes.join(', ') : 'No scopes'),
+          primaryCell(
+            pick(credential, 'applicationId') ?? 'Organization-wide',
+            pick(credential, 'environmentId') ?? 'All environments',
+          ),
+          pick(credential, 'revoked') === true ? statusTag('revoked') : statusTag('active'),
+          dateValue(pick(credential, 'createdAt')),
+          action,
+        ]);
+      },
+    ));
+    return panel.section;
+  }
+
   function renderSettingsPage() {
     const identity = state.identity;
     const profile = selectedProfile();
@@ -1984,7 +3351,7 @@
     fields.append(
       metadataItem('Email', pick(identity, 'email')),
       metadataItem('User ID', pick(identity, 'user_id', 'userId'), { code: true }),
-      metadataItem('Endpoint', state.endpoint, { code: true }),
+      metadataItem('Control plane', displayEndpoint(), { code: !isManagedControlPlaneEndpoint() }),
       metadataItem('Access token expiry', state.api?.accessExpiresAt ? formatDateText(state.api.accessExpiresAt) : 'Not returned'),
       metadataItem('Session expiry', state.api?.sessionExpiresAt ? formatDateText(state.api.sessionExpiresAt) : 'Not returned'),
       metadataItem('Selected role', pick(profile, 'role')),
@@ -1992,16 +3359,17 @@
     sessionPanel.body.append(fields);
     sessionPanel.body.append(element('p', 'settings-note', 'Sign out revokes the shared human session when the control plane responds. Session material is cleared from this tab even if the remote service is unavailable.'));
 
+    const customerProfiles = customerProfileList();
     const membershipsPanel = makePanel(
-      'Memberships',
-      'Profiles returned by /auth/me. Application and environment scope is not broadened in the browser.',
-      `${profileList().length} returned`,
+      'Your workspaces',
+      'Customer memberships returned by /auth/me. Platform operator profiles are intentionally kept out of this workspace context.',
+      `${customerProfiles.length} returned`,
     );
     const list = element('ul', 'membership-list');
-    if (profileList().length === 0) {
-      list.append(stateBlock('unavailable', 'Membership unavailable', 'The auth service did not return a membership profile.'));
+    if (customerProfiles.length === 0) {
+      list.append(stateBlock('unavailable', 'Membership unavailable', 'The auth service did not return a customer workspace membership.'));
     } else {
-      for (const item of profileList()) {
+      for (const item of customerProfiles) {
         const row = element('li');
         const title = element('strong', '', pick(item, 'name') || 'Profile');
         const details = element('span');
@@ -2019,24 +3387,11 @@
     }
     membershipsPanel.body.append(list);
 
-    const apiKeysPanel = makePanel(
-      'API keys',
-      'Machine authentication is separate from a human browser session.',
-      'Unavailable',
-    );
-    apiKeysPanel.body.append(
-      stateBlock(
-        'unavailable',
-        'API-key management is not available here',
-        'The current backend does not expose a browser-safe credential inventory contract. Create and revoke actions are intentionally omitted. No API key is generated by this page.',
-      ),
-    );
-
     const stack = element('div', 'settings-grid');
     const left = element('div', 'page-stack');
     left.append(sessionPanel.section, membershipsPanel.section);
     const right = element('div', 'page-stack');
-    right.append(apiKeysPanel.section);
+    right.append(renderOrganizationMembersPanel(), renderCredentialsPanel());
     stack.append(left, right);
     return stack;
   }
@@ -2056,6 +3411,46 @@
     if (error?.status === 503) return 'The control plane reported that the overview dependency is unavailable.';
     if (error) return 'The control plane did not return a safe read-only overview. Check the endpoint and try again.';
     return 'The dashboard has not received a safe read-only overview from the configured control plane.';
+  }
+
+  function platformMetricsUnavailableReason() {
+    const error = state.platformMetricsError;
+    if (error?.status === 404) return 'The configured control plane does not expose platform metrics.';
+    if (error?.status === 401) return 'The human session could not be authenticated for platform metrics.';
+    if (error?.status === 403) return 'The selected profile is not authorized for platform-level metrics.';
+    if (error?.status === 503) return 'Human authentication or the platform metrics dependency is unavailable.';
+    if (error) return 'The control plane did not return a safe platform metrics snapshot. Check the endpoint and try again.';
+    return 'The dashboard has not received a platform metrics snapshot yet.';
+  }
+
+  function platformDataUnavailableReason(view) {
+    const error = view === 'platform-organizations'
+      ? state.platformOrganizationsError
+      : view === 'platform-organization'
+        ? state.platformOrganizationError
+        : view === 'platform-audit'
+          ? state.platformAuditError
+          : view === 'platform-users'
+            ? state.platformUsersError
+            : state.platformEntitlementsError;
+    if (error?.status === 404) return 'The configured control plane does not expose this Platform Console projection.';
+    if (error?.status === 401) return 'The human session could not be authenticated for this Platform Console projection.';
+    if (error?.status === 403) return 'The selected profile is not authorized for this Platform Console projection.';
+    if (error?.status === 503) return 'Human authentication or the platform projection dependency is unavailable.';
+    if (error) return 'The control plane did not return a safe Platform Console projection. Check the endpoint and try again.';
+    return 'The dashboard has not received this Platform Console projection yet.';
+  }
+
+  function customerSettingsUnavailableReason(kind) {
+    const error = kind === 'members'
+      ? state.organizationMembersError
+      : state.credentialsError;
+    if (error?.status === 404) return 'The configured control plane does not expose this customer settings projection.';
+    if (error?.status === 401) return 'The human session could not be authenticated for this customer settings projection.';
+    if (error?.status === 403) return 'The selected organization membership cannot read this customer settings projection.';
+    if (error?.status === 503) return 'Human authentication is unavailable on this control plane.';
+    if (error) return 'The control plane did not return safe customer settings metadata. Check the endpoint and try again.';
+    return 'The dashboard has not received this customer settings projection yet.';
   }
 
   function formatDateText(value) {
@@ -2081,7 +3476,10 @@
   }
 
   function renderContextControls() {
-    const profiles = profileList();
+    const customerProfiles = profileList()
+      .map((profile, index) => ({ profile, index }))
+      .filter(({ profile }) => !isPlatformProfile(profile));
+    const profiles = customerProfiles.map(({ profile }) => profile);
     const profile = selectedProfile();
     const memberships = organizationMemberships();
     const activeOrganizationId = profileOrganizationId(profile);
@@ -2099,7 +3497,7 @@
     }
     populateSelect(
       nodes.profileContext,
-      profiles.map((item, index) => ({
+      customerProfiles.map(({ profile: item, index }) => ({
         value: String(index),
         label: `${pick(item, 'name') || 'Profile'} / ${pick(item, 'role') || 'role not set'}`,
       })),
@@ -2375,7 +3773,11 @@
       const email = nodes.email.value.trim();
       if (!email || !password) throw new Error('Email and password are required.');
       api = new DashboardApi(endpoint);
-      const loginPayload = await api.login(email, password);
+      const loginPayload = await api.login(
+        email,
+        password,
+        requestedLoginAudience(),
+      );
       await establishAuthenticatedSession(api, endpoint, loginPayload);
       setLoginMessage('', '');
     } catch (error) {
@@ -2464,7 +3866,7 @@
     nodes.appView.hidden = false;
     syncAccountMenuPlacement();
     renderCurrentPage();
-    await loadOverview();
+    await loadCurrentViewData();
   }
 
   function discardAuthenticationAttempt(api) {
@@ -2480,13 +3882,49 @@
     state.identity = normalizeIdentity(identity);
     state.overview = null;
     state.overviewError = null;
+    state.platformMetrics = null;
+    state.platformMetricsError = null;
+    state.platformMetricsLoading = false;
+    state.platformOrganizations = null;
+    state.platformOrganizationsError = null;
+    state.platformOrganization = null;
+    state.platformOrganizationError = null;
+    state.platformAudit = null;
+    state.platformAuditError = null;
+    state.platformUsers = null;
+    state.platformUsersError = null;
+    state.platformEntitlements = null;
+    state.platformEntitlementsError = null;
+    state.platformDataLoading = false;
+    invalidatePlatformDataRequest();
+    state.organizationMembers = null;
+    state.organizationMembersError = null;
+    state.credentials = null;
+    state.credentialsError = null;
+    state.issuedCredential = null;
+    state.credentialIssueError = null;
+    state.credentialIssueLoading = false;
+    state.actionLoading = null;
+    state.actionError = null;
+    state.customerSettingsLoading = false;
+    state.customerSettingsGeneration += 1;
     state.profileIndex = 0;
     state.selectedApplication = '';
     state.selectedEnvironment = '';
     state.lastFetchedAt = null;
     resetDashboardInteractionState();
+    const route = readRoute();
+    state.platformOrganizationId = route.organizationId;
+    state.shell = route.shell;
+    state.currentView = route.view;
+    if (!canEnterView(state.currentView)) {
+      state.currentView = fallbackViewForProfile(state.currentView);
+      state.shell = isPlatformView(state.currentView) ? 'platform' : 'customer';
+      window.history.replaceState({}, '', viewPath(state.currentView));
+    }
     renderShellIdentity();
     renderContextControls();
+    applyShellMode();
     syncAccountMenuPlacement();
     setConnectionStatus(state.discovery.status === 'available' ? 'Signed in' : 'Signed in / limited', state.discovery.status === 'available' ? 'success' : 'warning');
   }
@@ -2563,6 +4001,26 @@
       state.identity = null;
       state.overview = null;
       state.overviewError = null;
+      state.platformMetrics = null;
+      state.platformMetricsError = null;
+      state.platformMetricsLoading = false;
+      state.platformOrganizations = null;
+      state.platformOrganizationsError = null;
+      state.platformOrganization = null;
+      state.platformOrganizationError = null;
+      state.platformAudit = null;
+      state.platformAuditError = null;
+      state.platformDataLoading = false;
+      invalidatePlatformDataRequest();
+      state.organizationMembers = null;
+      state.organizationMembersError = null;
+      state.credentials = null;
+      state.credentialsError = null;
+      clearIssuedCredential();
+      state.actionLoading = null;
+      state.actionError = null;
+      state.customerSettingsLoading = false;
+      state.customerSettingsGeneration += 1;
       state.loading = false;
       state.lastFetchedAt = null;
       resetDashboardInteractionState();
@@ -2583,11 +4041,17 @@
       return {
         name: pick(profile, 'name', 'profileName', 'profile_name'),
         role: pick(profile, 'role'),
+        capabilities: arrayValue(pick(profile, 'capabilities')),
         organizationId: pick(profile, 'organization_id', 'organizationId'),
         organizationName: pick(profile, 'organization_name', 'organizationName')
           ?? pick(objectValue(pick(profile, 'organization')), 'name'),
         applicationId: pick(profile, 'application_id', 'applicationId'),
         environmentId: pick(profile, 'environment_id', 'environmentId'),
+        platform: pick(profile, 'platform', 'is_platform', 'isPlatform') === true,
+        audience: pick(profile, 'audience') || 'customer',
+        platformCapabilities: arrayValue(
+          pick(profile, 'platform_capabilities', 'platformCapabilities'),
+        ),
       };
     }).filter((item) => item.organizationId);
     return {
@@ -2659,6 +4123,262 @@
     activeOverviewController = null;
   }
 
+  function invalidatePlatformMetricsRequest() {
+    platformMetricsRequestGeneration += 1;
+    activePlatformMetricsController?.abort();
+    activePlatformMetricsController = null;
+  }
+
+  function invalidatePlatformDataRequest() {
+    state.platformDataGeneration += 1;
+  }
+
+  function platformDataRequestIsCurrent(generation, view) {
+    return generation === state.platformDataGeneration &&
+      state.api !== null &&
+      state.currentView === view &&
+      state.shell === 'platform';
+  }
+
+  async function loadCurrentViewData({ announce = false } = {}) {
+    if (isPlatformView(state.currentView)) {
+      if (state.currentView === 'platform' || state.currentView === 'platform-operations') {
+        return loadPlatformMetrics({ announce });
+      }
+      if (state.currentView === 'platform-settings') {
+        state.platformDataLoading = false;
+        renderCurrentPage();
+        return;
+      }
+      return loadPlatformViewData({ announce });
+    }
+    if (state.currentView === 'settings') return loadCustomerSettingsData({ announce });
+    return loadOverview({ announce });
+  }
+
+  async function loadPlatformViewData({ announce = false } = {}) {
+    const api = state.api;
+    if (!api) {
+      invalidatePlatformDataRequest();
+      if (announce) showToast('Sign in before refreshing platform data.', 'warning');
+      return;
+    }
+    const view = state.currentView;
+    const profile = selectedProfile();
+    const generation = state.platformDataGeneration + 1;
+    state.platformDataGeneration = generation;
+    if (!hasPlatformCapability(platformCapabilityForView(view), profile)) {
+      state.platformDataLoading = false;
+      state.platformOrganization = null;
+      state.platformOrganizations = null;
+      state.platformAudit = null;
+      state.platformUsers = null;
+      state.platformEntitlements = null;
+      state.platformOrganizationError = new ApiError(
+        'The selected profile is not authorized for the Platform Console.',
+        { status: 403 },
+      );
+      state.platformOrganizationsError = state.platformOrganizationError;
+      state.platformAuditError = state.platformOrganizationError;
+      state.platformUsersError = state.platformOrganizationError;
+      state.platformEntitlementsError = state.platformOrganizationError;
+      renderCurrentPage();
+      return;
+    }
+    state.platformDataLoading = true;
+    state.platformOrganizationError = null;
+    state.platformOrganizationsError = null;
+    state.platformAuditError = null;
+    state.platformUsersError = null;
+    state.platformEntitlementsError = null;
+    if (view === 'platform-organizations') state.platformOrganizations = null;
+    if (view === 'platform-organization') state.platformOrganization = null;
+    if (view === 'platform-audit') state.platformAudit = null;
+    if (view === 'platform-users') state.platformUsers = null;
+    if (view === 'platform-entitlements') state.platformEntitlements = null;
+    renderCurrentPage();
+    let loaded = false;
+    try {
+      const profileName = stringValue(pick(profile, 'name'));
+      if (view === 'platform-organizations') {
+        const body = await api.platformOrganizations(profileName, '', {});
+        if (!platformDataRequestIsCurrent(generation, view)) return;
+        state.platformOrganizations = validatePlatformOrganizations(body);
+      } else if (view === 'platform-organization') {
+        if (!state.platformOrganizationId) throw new ApiError('No organization was selected.');
+        const body = await api.platformOrganization(
+          profileName,
+          state.platformOrganizationId,
+          {},
+        );
+        if (!platformDataRequestIsCurrent(generation, view)) return;
+        state.platformOrganization = validatePlatformOrganization(body);
+      } else if (view === 'platform-audit') {
+        const body = await api.platformAudit(profileName, '', {});
+        if (!platformDataRequestIsCurrent(generation, view)) return;
+        state.platformAudit = validatePlatformAudit(body);
+      } else if (view === 'platform-users') {
+        const body = await api.platformUsers(profileName, {});
+        if (!platformDataRequestIsCurrent(generation, view)) return;
+        state.platformUsers = validatePlatformUsers(body);
+      } else if (view === 'platform-entitlements') {
+        const body = await api.platformEntitlements(profileName, {});
+        if (!platformDataRequestIsCurrent(generation, view)) return;
+        state.platformEntitlements = validatePlatformEntitlements(body);
+      }
+      state.lastFetchedAt = new Date().toISOString();
+      loaded = true;
+    } catch (error) {
+      if (!platformDataRequestIsCurrent(generation, view) || isAbortError(error)) return;
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      if (view === 'platform-organizations') state.platformOrganizationsError = error;
+      if (view === 'platform-organization') state.platformOrganizationError = error;
+      if (view === 'platform-audit') state.platformAuditError = error;
+      if (view === 'platform-users') state.platformUsersError = error;
+      if (view === 'platform-entitlements') state.platformEntitlementsError = error;
+    } finally {
+      if (!platformDataRequestIsCurrent(generation, view)) return;
+      state.platformDataLoading = false;
+      renderCurrentPage();
+      if (announce) {
+        showToast(
+          loaded ? 'Platform data refreshed.' : 'Platform data could not be refreshed.',
+          loaded ? 'success' : 'error',
+        );
+      }
+    }
+  }
+
+  function validatePlatformOrganizations(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || root.scope !== 'platform' || !Array.isArray(root.organizations)) {
+      throw new ApiError('The control plane did not return the required platform organization projection.');
+    }
+    return root;
+  }
+
+  function validatePlatformOrganization(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || root.scope !== 'platform' || !objectValue(root.organization)) {
+      throw new ApiError('The control plane did not return the required organization detail projection.');
+    }
+    return root;
+  }
+
+  function validatePlatformAudit(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || root.scope !== 'platform' || !Array.isArray(root.events)) {
+      throw new ApiError('The control plane did not return the required platform audit projection.');
+    }
+    return root;
+  }
+
+  function validatePlatformUsers(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || root.scope !== 'platform' || !Array.isArray(root.users)) {
+      throw new ApiError('The control plane did not return the required platform user projection.');
+    }
+    return root;
+  }
+
+  function validatePlatformEntitlements(body) {
+    const root = unwrapPayload(body);
+    if (
+      root.readOnly !== true ||
+      root.scope !== 'platform' ||
+      !Array.isArray(root.plans) ||
+      !Array.isArray(root.subscriptions)
+    ) {
+      throw new ApiError('The control plane did not return the required entitlement projection.');
+    }
+    return root;
+  }
+
+  function validateOrganizationMembers(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || !Array.isArray(root.members)) {
+      throw new ApiError('The control plane did not return safe organization member metadata.');
+    }
+    return root.members;
+  }
+
+  function validateCredentials(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || !Array.isArray(root.credentials)) {
+      throw new ApiError('The control plane did not return safe credential metadata.');
+    }
+    return root.credentials;
+  }
+
+  function customerSettingsRequestIsCurrent(generation, api, organizationId) {
+    return generation === state.customerSettingsGeneration &&
+      state.api === api &&
+      state.currentView === 'settings' &&
+      state.shell === 'customer' &&
+      profileOrganizationId() === organizationId;
+  }
+
+  async function loadCustomerSettingsData({ announce = false } = {}) {
+    const api = state.api;
+    if (!api) {
+      if (announce) showToast('Sign in before refreshing customer settings.', 'warning');
+      return;
+    }
+    const organizationId = profileOrganizationId();
+    const generation = state.customerSettingsGeneration + 1;
+    state.customerSettingsGeneration = generation;
+    state.customerSettingsLoading = true;
+    state.organizationMembers = null;
+    state.organizationMembersError = null;
+    state.credentials = null;
+    state.credentialsError = null;
+    clearIssuedCredential();
+    state.actionLoading = null;
+    state.actionError = null;
+    if (!organizationId) {
+      state.customerSettingsLoading = false;
+      state.organizationMembersError = new ApiError('Organization membership is unavailable.');
+      state.credentialsError = state.organizationMembersError;
+      renderCurrentPage();
+      return;
+    }
+    if (announce) showToast('Refreshing organization settings…');
+    renderCurrentPage();
+    let loaded = false;
+    try {
+      const [membersBody, credentialsBody] = await Promise.all([
+        api.organizationMembers(organizationId),
+        api.credentials(organizationId),
+      ]);
+      if (!customerSettingsRequestIsCurrent(generation, api, organizationId)) return;
+      state.organizationMembers = validateOrganizationMembers(membersBody);
+      state.credentials = validateCredentials(credentialsBody);
+      state.lastFetchedAt = new Date().toISOString();
+      loaded = true;
+    } catch (error) {
+      if (!customerSettingsRequestIsCurrent(generation, api, organizationId)) return;
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      state.organizationMembersError = error;
+      state.credentialsError = error;
+    } finally {
+      if (!customerSettingsRequestIsCurrent(generation, api, organizationId)) return;
+      state.customerSettingsLoading = false;
+      renderCurrentPage();
+      if (announce) {
+        showToast(
+          loaded ? 'Organization settings refreshed.' : 'Organization settings could not be refreshed.',
+          loaded ? 'success' : 'error',
+        );
+      }
+    }
+  }
+
   function beginOverviewRequest(api, profile, organizationId) {
     overviewRequestGeneration += 1;
     activeOverviewController?.abort();
@@ -2686,6 +4406,113 @@
       profileOrganizationId() === request.organizationId &&
       activeOverviewController === request.controller &&
       (!request.controller || !request.controller.signal.aborted);
+  }
+
+  function beginPlatformMetricsRequest(api, profile) {
+    platformMetricsRequestGeneration += 1;
+    activePlatformMetricsController?.abort();
+    const controller = typeof AbortController === 'function'
+      ? new AbortController()
+      : null;
+    activePlatformMetricsController = controller;
+    return {
+      generation: platformMetricsRequestGeneration,
+      api,
+      identity: state.identity,
+      profileIndex: state.profileIndex,
+      profile,
+      controller,
+    };
+  }
+
+  function platformMetricsRequestIsCurrent(request) {
+    return request.generation === platformMetricsRequestGeneration &&
+      state.api === request.api &&
+      state.identity === request.identity &&
+      state.profileIndex === request.profileIndex &&
+      selectedProfile() === request.profile &&
+      activePlatformMetricsController === request.controller &&
+      (!request.controller || !request.controller.signal.aborted);
+  }
+
+  async function loadPlatformMetrics({ announce = false } = {}) {
+    const api = state.api;
+    if (!api) {
+      invalidatePlatformMetricsRequest();
+      if (announce) showToast('Sign in before refreshing platform metrics.', 'warning');
+      return;
+    }
+    const profile = selectedProfile();
+    const request = beginPlatformMetricsRequest(api, profile);
+    if (!hasPlatformCapability(platformCapabilityForView(), profile)) {
+      if (!platformMetricsRequestIsCurrent(request)) return;
+      activePlatformMetricsController = null;
+      state.platformMetrics = null;
+      state.platformMetricsError = new ApiError(
+        'The selected profile is not authorized for platform-level metrics.',
+        { status: 403 },
+      );
+      state.platformMetricsLoading = false;
+      renderCurrentPage();
+      return;
+    }
+    if (announce) showToast('Refreshing platform metrics…');
+    state.platformMetricsLoading = true;
+    state.platformMetrics = null;
+    state.platformMetricsError = null;
+    let loaded = false;
+    renderCurrentPage();
+    try {
+      const profileName = stringValue(pick(profile, 'name'));
+      const body = await api.platformMetrics(profileName, {
+        signal: request.controller?.signal,
+      });
+      if (!platformMetricsRequestIsCurrent(request)) return;
+      state.platformMetrics = validatePlatformMetrics(body);
+      state.lastFetchedAt = new Date().toISOString();
+      loaded = true;
+    } catch (error) {
+      if (!platformMetricsRequestIsCurrent(request) || isAbortError(error)) return;
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      state.platformMetricsError = error;
+    } finally {
+      if (!platformMetricsRequestIsCurrent(request)) return;
+      activePlatformMetricsController = null;
+      state.platformMetricsLoading = false;
+      renderCurrentPage();
+      if (announce) {
+        showToast(
+          loaded ? 'Platform metrics refreshed.' : 'Platform metrics could not be refreshed.',
+          loaded ? 'success' : 'error',
+        );
+      }
+    }
+  }
+
+  function validatePlatformMetrics(body) {
+    const root = unwrapPayload(body);
+    if (root.readOnly !== true || root.scope !== 'platform') {
+      throw new ApiError('The control plane did not return the required platform projection.');
+    }
+    if (!objectValue(root.counts) || !objectValue(root.activity)) {
+      throw new ApiError('The platform metrics projection is incomplete.');
+    }
+    return root;
+  }
+
+  function refreshCurrentPageData(options = {}) {
+    return loadCurrentViewData(options);
+  }
+
+  function refreshAfterContextChange() {
+    syncPlatformNavigation();
+    if (isPlatformView(state.currentView) && !hasPlatformCapability(platformCapabilityForView())) {
+      navigateToView('overview');
+    }
+    return refreshCurrentPageData();
   }
 
   async function loadOverview({ announce = false } = {}) {
@@ -2761,12 +4588,33 @@
 
   async function expireSession() {
     invalidateOverviewRequest();
+    invalidatePlatformMetricsRequest();
     state.api?.clear();
     state.api = null;
     clearStoredSession();
     state.identity = null;
     state.overview = null;
     state.overviewError = null;
+    state.platformMetrics = null;
+    state.platformMetricsError = null;
+    state.platformMetricsLoading = false;
+    state.platformOrganizations = null;
+    state.platformOrganizationsError = null;
+    state.platformOrganization = null;
+    state.platformOrganizationError = null;
+    state.platformAudit = null;
+    state.platformAuditError = null;
+    state.platformDataLoading = false;
+    invalidatePlatformDataRequest();
+    state.organizationMembers = null;
+    state.organizationMembersError = null;
+    state.credentials = null;
+    state.credentialsError = null;
+    clearIssuedCredential();
+    state.actionLoading = null;
+    state.actionError = null;
+    state.customerSettingsLoading = false;
+    state.customerSettingsGeneration += 1;
     state.loading = false;
     state.lastFetchedAt = null;
     resetDashboardInteractionState();
@@ -2781,7 +4629,9 @@
 
   async function handleLogout() {
     invalidateOverviewRequest();
+    invalidatePlatformMetricsRequest();
     nodes.logoutButton.disabled = true;
+    nodes.platformLogoutButton.disabled = true;
     let remoteError = null;
     try {
       await state.api?.logout();
@@ -2794,6 +4644,26 @@
       state.identity = null;
       state.overview = null;
       state.overviewError = null;
+      state.platformMetrics = null;
+      state.platformMetricsError = null;
+      state.platformMetricsLoading = false;
+      state.platformOrganizations = null;
+      state.platformOrganizationsError = null;
+      state.platformOrganization = null;
+      state.platformOrganizationError = null;
+      state.platformAudit = null;
+      state.platformAuditError = null;
+      state.platformDataLoading = false;
+      invalidatePlatformDataRequest();
+      state.organizationMembers = null;
+      state.organizationMembersError = null;
+      state.credentials = null;
+      state.credentialsError = null;
+      clearIssuedCredential();
+      state.actionLoading = null;
+      state.actionError = null;
+      state.customerSettingsLoading = false;
+      state.customerSettingsGeneration += 1;
       state.loading = false;
       state.lastFetchedAt = null;
       resetDashboardInteractionState();
@@ -2809,6 +4679,7 @@
       setLoginMessage(remoteError ? 'Local session cleared. Remote revocation was not confirmed.' : 'Signed out.', remoteError ? 'error' : 'success');
       setConnectionStatus('Signed out', 'neutral');
       nodes.logoutButton.disabled = false;
+      nodes.platformLogoutButton.disabled = false;
       focusVisibleLoginTarget();
     }
   }
@@ -2833,7 +4704,9 @@
   }
 
   function renderCurrentPage({ focusTarget = null, transition = false } = {}) {
-    const globalQuery = normalizeSearchQuery(state.globalSearchQuery);
+    const globalQuery = state.shell === 'customer'
+      ? normalizeSearchQuery(state.globalSearchQuery)
+      : '';
     const copy = globalQuery
       ? {
         title: 'Search records',
@@ -2846,16 +4719,20 @@
     nodes.pageDescription.textContent = copy.description;
     nodes.topbarPage.textContent = copy.title;
     for (const link of nodes.viewLinks) {
-      const active = link.dataset.viewLink === state.currentView;
+      const active = link.dataset.viewLink === state.currentView || (
+        state.currentView === 'platform-organization' &&
+        link.dataset.viewLink === 'platform-organizations'
+      );
       if (active) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     }
     renderGlobalBanner();
     renderLastFetched();
-    nodes.refreshButton.disabled = state.loading || !state.api;
-    nodes.refreshButton.setAttribute('aria-busy', String(state.loading));
-    nodes.pageRegion.setAttribute('aria-busy', state.loading ? 'true' : 'false');
-    if (state.loading) {
+    const pageLoading = state.loading || state.platformMetricsLoading || state.platformDataLoading || state.customerSettingsLoading;
+    nodes.refreshButton.disabled = pageLoading || !state.api || state.currentView === 'platform-settings';
+    nodes.refreshButton.setAttribute('aria-busy', String(pageLoading));
+    nodes.pageRegion.setAttribute('aria-busy', pageLoading ? 'true' : 'false');
+    if (pageLoading) {
       replacePageRegion(renderLoadingState(), { transition });
       return;
     }
@@ -2865,6 +4742,14 @@
     }
     const page = {
       overview: renderOverviewPage,
+      platform: renderPlatformPage,
+      'platform-organizations': renderPlatformOrganizationsPage,
+      'platform-organization': renderPlatformOrganizationPage,
+      'platform-audit': renderPlatformAuditPage,
+      'platform-operations': renderPlatformPage,
+      'platform-users': renderPlatformUsersPage,
+      'platform-entitlements': renderPlatformEntitlementsPage,
+      'platform-settings': renderPlatformSettingsPage,
       applications: renderApplicationsPage,
       environments: renderEnvironmentsPage,
       releases: renderReleasesPage,
@@ -2970,6 +4855,13 @@
 
   function handleCollectionChange(event) {
     const target = event.target;
+    if (target?.dataset?.promotionEnvironment === 'true') {
+      const version = target.selectedOptions?.[0]?.dataset?.environmentVersion;
+      const form = target.closest('form[data-dashboard-action="promotion"]');
+      const expectedVersion = form?.elements?.namedItem('expected_version');
+      if (expectedVersion && version !== undefined) expectedVersion.value = version;
+      return;
+    }
     const control = target?.dataset?.collectionControl;
     if (!['search', 'status', 'sort'].includes(control)) return;
     const panel = target.closest('[data-collection-key]');
@@ -2999,11 +4891,195 @@
     navigateToView(view);
   }
 
+  function handlePlatformOrganizationClick(event) {
+    const link = event.target.closest?.('[data-platform-organization-id]');
+    if (!link) return;
+    const organizationId = stringValue(link.dataset.platformOrganizationId);
+    if (!organizationId) return;
+    event.preventDefault();
+    navigateToView('platform-organization', { organizationId });
+  }
+
+  function customerActionErrorMessage(action, error) {
+    if (error instanceof SessionExpiredError) return 'Your session expired. Sign in again.';
+    if (error instanceof ApiError) {
+      if (error.status === 401 || error.status === 403) return 'This profile is not authorized for that customer action.';
+      if (error.status === 409 || error.status === 412) {
+        return action === 'promotion'
+          ? 'The environment or release state changed. Refresh and verify that a ready patch is available before trying again.'
+          : 'That record already exists or changed. Refresh the workspace and try again.';
+      }
+      if (error.status === 422) return 'Check the submitted values and try again.';
+      if (error.status === 503) return 'The control plane is temporarily unavailable. Try again shortly.';
+    }
+    return 'The requested customer action could not be completed. Try again.';
+  }
+
+  async function refreshAfterCustomerMutation(message) {
+    state.actionLoading = null;
+    state.actionError = null;
+    state.overview = null;
+    state.overviewError = null;
+    renderCurrentPage();
+    await loadOverview();
+    showToast(message, 'success');
+  }
+
+  async function handleCustomerActionSubmit(event) {
+    const form = event.target.closest?.('form[data-dashboard-action]');
+    if (!form || !nodes.pageRegion.contains(form)) return;
+    event.preventDefault();
+    if (state.actionLoading) return;
+    const action = form.dataset.dashboardAction;
+    const data = new FormData(form);
+    const value = (name) => stringValue(data.get(name))?.trim() ?? '';
+    const organizationId = profileOrganizationId();
+    if (!state.api || !organizationId) {
+      state.actionError = { action, message: 'Customer organization context is unavailable.' };
+      renderCurrentPage();
+      return;
+    }
+    state.actionLoading = action;
+    state.actionError = null;
+    renderCurrentPage();
+    try {
+      if (action === 'application-create') {
+        const runtimeApplicationId = value('runtime_application_id');
+        const name = value('name');
+        const platform = value('platform');
+        if (!name || !runtimeApplicationId || !['android', 'ios'].includes(platform)) {
+          throw new Error('Application name, platform, and runtime identity are required.');
+        }
+        await state.api.createApplication(
+          organizationId,
+          { name, platform, runtime_application_id: runtimeApplicationId },
+          makeIdempotencyKey('application-create'),
+        );
+        await refreshAfterCustomerMutation('Application registered.');
+        return;
+      }
+      if (action === 'environment-create') {
+        const applicationId = value('application_id');
+        const name = value('name');
+        if (!applicationId || !name) throw new Error('Application and environment name are required.');
+        await state.api.createEnvironment(
+          organizationId,
+          applicationId,
+          { name },
+          makeIdempotencyKey('environment-create'),
+        );
+        await refreshAfterCustomerMutation('Environment created.');
+        return;
+      }
+      if (action === 'credential-issue') {
+        const preset = credentialScopePresets().find((item) => item.value === value('scope_preset'));
+        if (!preset || !value('name')) throw new Error('Credential name and scope are required.');
+        const expiryDays = Number.parseInt(value('expiry_days') || '0', 10);
+        const body = {
+          name: value('name'),
+          kind: 'control',
+          scopes: preset.scopes,
+        };
+        if (Number.isInteger(expiryDays) && expiryDays > 0) {
+          body.expires_at = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
+        }
+        const response = await state.api.issueCredential(organizationId, body);
+        const issued = unwrapPayload(response);
+        const token = stringValue(pick(issued, 'token'));
+        if (!token) throw new ApiError('The control plane did not return the one-time credential.');
+        const metadata = Object.fromEntries(
+          Object.entries(issued).filter(([key]) => key !== 'token'),
+        );
+        state.issuedCredential = { token, metadata };
+        state.credentials = [metadata, ...arrayValue(state.credentials)];
+        state.actionLoading = null;
+        renderCurrentPage();
+        showToast('Credential created. Copy the secret now.', 'success');
+        return;
+      }
+      if (action === 'promotion') {
+        const environmentId = value('environment_id');
+        const releaseId = value('release_id');
+        const expectedVersion = Number.parseInt(value('expected_version'), 10);
+        if (!environmentId || !releaseId || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+          throw new Error('Environment, release, and current version are required.');
+        }
+        await state.api.promote(
+          organizationId,
+          environmentId,
+          { release_id: releaseId, expected_version: expectedVersion },
+          makeIdempotencyKey('promotion'),
+          expectedVersion,
+        );
+        await refreshAfterCustomerMutation('Release promoted to the environment.');
+        return;
+      }
+      throw new Error('Unsupported customer action.');
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      state.actionError = { action, message: customerActionErrorMessage(action, error) };
+    } finally {
+      if (state.actionLoading === action) {
+        state.actionLoading = null;
+        renderCurrentPage();
+      }
+    }
+  }
+
+  async function handleCredentialCopy(event) {
+    const button = event.target.closest?.('[data-copy-credential]');
+    if (!button) return;
+    const token = stringValue(state.issuedCredential?.token);
+    if (!token) return;
+    event.preventDefault();
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(token);
+      showToast('Credential copied. It will not be shown again after leaving this page.', 'success');
+    } catch (error) {
+      showToast('Clipboard access is unavailable. Copy the credential manually before leaving this page.', 'warning');
+    }
+  }
+
+  async function handleCustomerSettingsClick(event) {
+    if (event.target.closest?.('[data-copy-credential]')) {
+      await handleCredentialCopy(event);
+      return;
+    }
+    const button = event.target.closest?.('[data-credential-revoke]');
+    if (!button || button.disabled) return;
+    const credentialId = stringValue(button.dataset.credentialRevoke);
+    const organizationId = profileOrganizationId();
+    if (!credentialId || !organizationId || !state.api) return;
+    if (!hasCustomerCapability('credential:revoke')) {
+      showToast('This profile cannot revoke customer credentials.', 'warning');
+      return;
+    }
+    if (!window.confirm('Revoke this credential? Existing clients using it will stop being authorized.')) return;
+    button.disabled = true;
+    try {
+      await state.api.revokeCredential(organizationId, credentialId);
+      showToast('Credential revoked.', 'success');
+      await loadCustomerSettingsData();
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      showToast('The credential could not be revoked.', 'error');
+      button.disabled = false;
+    }
+  }
+
   function handleViewLinkClick(event) {
     event.preventDefault();
     clearGlobalSearch({ render: false });
     closeSidebar();
-    navigateToView(event.currentTarget.dataset.viewLink);
+    const view = event.currentTarget.dataset.viewLink;
+    navigateToView(view);
   }
 
   function handleIntakeLinkClick(event) {
@@ -3012,8 +5088,24 @@
   }
 
   function handleLocationChange() {
-    state.currentView = canonicalizeViewLocation();
+    const route = readRoute();
+    state.platformOrganizationId = route.organizationId;
+    let nextView = route.view;
+    if (state.api && !canEnterView(nextView)) {
+      announceViewAccessDenied(nextView);
+      nextView = fallbackViewForProfile(nextView);
+      window.history.replaceState({}, '', viewPath(nextView));
+    } else {
+      const path = viewPath(nextView, route.organizationId);
+      if (window.location.pathname !== path || window.location.search || window.location.hash) {
+        window.history.replaceState({}, '', path);
+      }
+    }
+    state.shell = isPlatformView(nextView) ? 'platform' : 'customer';
+    state.currentView = nextView;
+    applyShellMode();
     renderCurrentPage({ transition: true });
+    if (state.api) void loadCurrentViewData();
   }
 
   function isEditableKeyboardTarget(target) {
@@ -3047,7 +5139,7 @@
     }
 
     if (event.key === '/' && !event.shiftKey) {
-      if (hasBlockingKeyboardLayer()) return;
+      if (hasBlockingKeyboardLayer() || state.shell === 'platform') return;
       event.preventDefault();
       nodes.globalSearch.focus({ preventScroll: true });
       nodes.globalSearch.select();
@@ -3059,7 +5151,7 @@
     if (!event.shiftKey && event.key.toLowerCase() === 'r') {
       if (nodes.refreshButton.disabled) return;
       event.preventDefault();
-      void loadOverview({ announce: true });
+      void refreshCurrentPageData({ announce: true });
       return;
     }
 
@@ -3082,7 +5174,31 @@
   function renderGlobalBanner() {
     let text = '';
     let status = 'neutral';
-    if (state.overviewError) {
+    const platformError = state.currentView === 'platform' || state.currentView === 'platform-operations'
+      ? state.platformMetricsError
+      : state.currentView === 'platform-organizations'
+        ? state.platformOrganizationsError
+        : state.currentView === 'platform-organization'
+          ? state.platformOrganizationError
+          : state.currentView === 'platform-audit'
+            ? state.platformAuditError
+            : state.currentView === 'platform-users'
+              ? state.platformUsersError
+              : state.currentView === 'platform-entitlements'
+                ? state.platformEntitlementsError
+            : null;
+    if (isPlatformView(state.currentView) && platformError) {
+      if (state.currentView === 'platform' || state.currentView === 'platform-operations') {
+        text = platformMetricsUnavailableReason();
+      } else {
+        text = platformDataUnavailableReason(state.currentView);
+      }
+      status = platformError.status === 401 || platformError.status === 403 ? 'warning' : 'error';
+    } else if (state.currentView === 'settings' && (state.organizationMembersError || state.credentialsError)) {
+      const error = state.organizationMembersError ?? state.credentialsError;
+      text = customerSettingsUnavailableReason(state.organizationMembersError ? 'members' : 'credentials');
+      status = error.status === 401 || error.status === 403 ? 'warning' : 'error';
+    } else if (state.overviewError) {
       text = overviewUnavailableReason();
       status = state.overviewError.status === 401 || state.overviewError.status === 403 ? 'warning' : 'error';
     } else if (state.discovery.status !== 'available') {
@@ -3106,7 +5222,8 @@
   }
 
   function setSidebarFallbackUnavailable(unavailable) {
-    const descendants = nodes.sidebar.querySelectorAll(
+    const sidebar = state.shell === 'platform' ? nodes.platformSidebar : nodes.sidebar;
+    const descendants = sidebar.querySelectorAll(
       'a[href], button, input, select, textarea, [tabindex]',
     );
     for (const node of descendants) {
@@ -3125,29 +5242,27 @@
   }
 
   function syncSidebarAccessibility() {
-    if (!nodes.sidebar) return;
+    if (!nodes.sidebar || !nodes.platformSidebar) return;
     const mobile = isMobileSidebarViewport();
     const open = nodes.appView.dataset.navOpen === 'true';
     const unavailable = mobile && !open;
-    if (mobile) nodes.sidebar.setAttribute('aria-hidden', String(!open));
-    else nodes.sidebar.removeAttribute('aria-hidden');
-
-    if ('inert' in nodes.sidebar) nodes.sidebar.inert = unavailable;
+    for (const sidebar of [nodes.sidebar, nodes.platformSidebar]) {
+      const hidden = sidebar.hidden;
+      if (hidden || mobile) sidebar.setAttribute('aria-hidden', String(hidden || !open));
+      else sidebar.removeAttribute('aria-hidden');
+      const unavailableForSidebar = hidden || unavailable;
+      if ('inert' in sidebar) sidebar.inert = unavailableForSidebar;
+      if (unavailableForSidebar) sidebar.setAttribute('data-inert-fallback', 'true');
+      else sidebar.removeAttribute('data-inert-fallback');
+    }
     setSidebarFallbackUnavailable(unavailable);
-    if (unavailable) nodes.sidebar.setAttribute('data-inert-fallback', 'true');
-    else nodes.sidebar.removeAttribute('data-inert-fallback');
   }
 
   function sidebarFocusableElements() {
-    return [
-      nodes.sidebarBrand,
-      nodes.sidebarClose,
-      nodes.organizationContext,
-      ...nodes.viewLinks,
-      nodes.accountMenuTrigger,
-      ...nodes.accountMenuItems,
-    ]
-      .filter((node, index, all) => node && all.indexOf(node) === index)
+    const sidebar = state.shell === 'platform' ? nodes.platformSidebar : nodes.sidebar;
+    return [...sidebar.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )]
       .filter((node) => (
         !node.disabled &&
         node.tabIndex >= 0 &&
@@ -3165,7 +5280,7 @@
     nodes.sidebarScrim.hidden = false;
     nodes.sidebarOpen.setAttribute('aria-expanded', 'true');
     syncSidebarAccessibility();
-    nodes.sidebarClose.focus();
+    (state.shell === 'platform' ? nodes.platformSidebarClose : nodes.sidebarClose).focus();
   }
 
   function closeSidebar() {
@@ -3176,9 +5291,10 @@
     nodes.sidebarOpen.setAttribute('aria-expanded', 'false');
     const returnFocus = sidebarReturnFocus;
     sidebarReturnFocus = null;
-    if (returnFocus?.isConnected && !nodes.sidebar.contains(returnFocus)) {
+    const activeSidebar = state.shell === 'platform' ? nodes.platformSidebar : nodes.sidebar;
+    if (returnFocus?.isConnected && !activeSidebar.contains(returnFocus)) {
       returnFocus.focus({ preventScroll: true });
-    } else if (wasOpen && isMobileSidebarViewport() && nodes.sidebar.contains(document.activeElement)) {
+    } else if (wasOpen && isMobileSidebarViewport() && activeSidebar.contains(document.activeElement)) {
       nodes.sidebarOpen.focus({ preventScroll: true });
     }
     syncSidebarAccessibility();
@@ -3226,13 +5342,14 @@
   });
   nodes.intakeForm?.addEventListener('submit', handlePublicIntake);
   nodes.logoutButton.addEventListener('click', handleLogout);
+  nodes.platformLogoutButton.addEventListener('click', handleLogout);
   nodes.accountMenu?.addEventListener('toggle', handleAccountMenuToggle);
   nodes.accountMenuItems
     .filter((item) => item !== nodes.logoutButton)
     .forEach((item) => item.addEventListener('click', handleAccountMenuAction));
   document.addEventListener('click', handleAccountMenuDocumentClick);
   document.addEventListener('keydown', handleAccountMenuKeydown);
-  nodes.refreshButton.addEventListener('click', () => loadOverview({ announce: true }));
+  nodes.refreshButton.addEventListener('click', () => refreshCurrentPageData({ announce: true }));
   nodes.shortcutsButton?.addEventListener('click', () => openShortcutsDialog(nodes.shortcutsButton));
   nodes.shortcutsDialog?.addEventListener('click', handleShortcutsDialogClick);
   nodes.dashboardSearchForm.addEventListener('submit', handleGlobalSearchSubmit);
@@ -3240,6 +5357,7 @@
   nodes.globalSearch.addEventListener('keydown', handleGlobalSearchKeydown);
   nodes.sidebarOpen.addEventListener('click', openSidebar);
   nodes.sidebarClose.addEventListener('click', closeSidebar);
+  nodes.platformSidebarClose.addEventListener('click', closeSidebar);
   nodes.sidebarScrim.addEventListener('click', closeSidebar);
   document.addEventListener('keydown', handleSidebarKeydown);
   document.addEventListener('keydown', handleShortcutsDialogKeydown, true);
@@ -3249,7 +5367,10 @@
   document.addEventListener('keydown', handleRecordSheetKeydown, true);
   nodes.pageRegion.addEventListener('input', handleCollectionInput);
   nodes.pageRegion.addEventListener('change', handleCollectionChange);
+  nodes.pageRegion.addEventListener('submit', handleCustomerActionSubmit);
   nodes.pageRegion.addEventListener('click', handleSearchResultClick);
+  nodes.pageRegion.addEventListener('click', handlePlatformOrganizationClick);
+  nodes.pageRegion.addEventListener('click', handleCustomerSettingsClick);
   nodes.themeToggle.addEventListener('click', () => {
     setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
   });
@@ -3266,7 +5387,7 @@
     state.selectedApplication = '';
     state.selectedEnvironment = '';
     renderContextControls();
-    await loadOverview();
+    await refreshAfterContextChange();
   });
   nodes.profileContext.addEventListener('change', async () => {
     const nextIndex = Number.parseInt(nodes.profileContext.value, 10);
@@ -3275,7 +5396,7 @@
     state.selectedApplication = '';
     state.selectedEnvironment = '';
     renderContextControls();
-    await loadOverview();
+    await refreshAfterContextChange();
   });
   nodes.applicationContext.addEventListener('change', () => {
     if (!profileApplicationId()) state.selectedApplication = nodes.applicationContext.value;
@@ -3296,6 +5417,7 @@
   });
   window.addEventListener('pagehide', () => {
     invalidateOverviewRequest();
+    invalidatePlatformMetricsRequest();
   });
 
   nodes.apiBase.value = defaultEndpoint();
