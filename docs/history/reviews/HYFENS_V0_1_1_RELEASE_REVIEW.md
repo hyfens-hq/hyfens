@@ -15,6 +15,36 @@ Review date: 2026-09-02
 The tag points to the reviewed source commit. The post-release documentation
 update on `main` does not move or recreate the tag.
 
+## Release-boundary reconciliation
+
+Rechecked: 2026-09-03 from a fresh public-repository clone.
+
+The immutable release boundary remains
+`389fc7178b857aeaf9167e69aa5c98b8167c7a43`. The signed annotated tag
+`v0.1.1` already exists remotely and peels to that exact commit; no tag was
+created, moved, deleted, or force-updated during this reconciliation. Current
+`main` is `1a4dea95fc7d304139d4f6549decb6fcdace45f8` and remains the development
+line.
+
+The commits after the reviewed release candidate were inspected as follows:
+
+| Commits | Classification | Release-boundary decision |
+| --- | --- | --- |
+| `9d4ed84`, `76f0a68` | `DOCS_ONLY` | Excluded from the immutable artifact boundary. |
+| `efbaf3e` | `CLI_AFFECTING` (plus documentation) | Excluded; it is a later managed-Cloud endpoint/profile compatibility fix for a future release. |
+| `4da57c8`, `226671c`, `d402031` | `DASHBOARD_ONLY`, `CONTROL_PLANE_ONLY`, and self-host/image-input changes | Excluded; later operational-dashboard development remains on `main`. |
+| `7b1ab5d`, `853fbb8`, `1a4dea9` | `DOCS_ONLY` task records | Excluded from release artifacts. |
+
+The selected release commit therefore remains the explicitly validated
+`389fc717...`, not `HEAD`. The tag-triggered CLI and image workflows both ran
+from that commit and completed successfully. The later CLI change is retained
+on `main`; it is not silently absorbed into `v0.1.1`.
+
+The immutable `v0.1.1` binary's root help still contains the legacy
+`https://api.hyfens.com/p2/` example. The current `main` source removes that
+example, but changing the published binary would require a new release and
+was intentionally not attempted here.
+
 ## Workflow results
 
 - CLI release workflow: [run 33657294918](https://github.com/hyfens-hq/hyfens/actions/runs/33657294918) — PASS.
