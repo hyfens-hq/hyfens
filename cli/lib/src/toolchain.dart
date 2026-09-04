@@ -15,6 +15,7 @@ import 'discovery.dart';
 import 'graph.dart';
 import 'instrumentation.dart';
 import 'project.dart';
+import 'runtime_bundle.dart';
 import 'signing.dart';
 import 'source_fingerprints.dart';
 
@@ -1644,9 +1645,7 @@ final class HyfensToolchain {
   Future<ToolEnvironmentSnapshot> doctor({String? projectPath}) async {
     final current = project(projectPath: projectPath);
     final snapshot = await _environment.inspect(current);
-    final runtime = Isolate.resolvePackageUriSync(
-      Uri.parse('package:instrumentation_e0/e0_runtime.dart'),
-    );
+    final runtime = _runtimePackageFile();
     return snapshot.withRuntimeStatus(
       runtime == null ? 'NOT AVAILABLE' : 'SUPPORTED',
     );
@@ -3342,8 +3341,31 @@ final class HyfensToolchain {
       await _copyTree(
         project.root,
         workspace,
-        skip: <String>{'.git', '.tool', 'build', '.dart_tool'},
+        skip: <String>{
+          '.git',
+          '.tool',
+          'build',
+          '.dart_tool',
+          // Flutter's iOS SPM/CocoaPods staging tree contains symlinks to
+          // the developer's package cache. It must be regenerated in the
+          // isolated workspace rather than copied as a partial tree.
+          'ephemeral',
+        },
       );
+      final iosEphemeral = Directory(
+        p.join(project.root.path, 'ios', 'Flutter', 'ephemeral'),
+      );
+      if (iosEphemeral.existsSync()) {
+        // Flutter's iOS SPM staging tree contains symlinks into the local
+        // package cache. Resolve those links into the isolated workspace so
+        // Xcode sees a complete, self-contained package tree.
+        await _copyTree(
+          iosEphemeral,
+          Directory(p.join(workspace.path, 'ios', 'Flutter', 'ephemeral')),
+          skip: <String>{'.DS_Store', '.swiftpm'},
+          resolveLinks: true,
+        );
+      }
       await _copyTree(
         Directory(p.join(project.root.path, '.dart_tool')),
         Directory(p.join(workspace.path, '.dart_tool')),
@@ -3618,10 +3640,8 @@ final class HyfensToolchain {
       rewritten.add(<String, Object?>{...item, 'rootUri': rootUri.toString()});
     }
     if (!hasInstrumentationRuntime) {
-      final runtimeFile = Isolate.resolvePackageUriSync(
-        Uri.parse('package:instrumentation_e0/e0_runtime.dart'),
-      );
-      if (runtimeFile == null || runtimeFile.scheme != 'file') {
+      final runtimeFile = _runtimePackageFile();
+      if (runtimeFile == null) {
         throw ToolFailure.single(
           exitCode: ToolExitCode.environment,
           code: 'T1605',
@@ -3630,7 +3650,7 @@ final class HyfensToolchain {
           action: 'Install the tool with its runtime package and retry.',
         );
       }
-      final runtimeRoot = Directory.fromUri(runtimeFile).parent.parent;
+      final runtimeRoot = runtimeFile.parent.parent;
       rewritten.add(<String, Object?>{
         'name': 'instrumentation_e0',
         'rootUri': Directory(runtimeRoot.resolveSymbolicLinksSync())
@@ -3641,6 +3661,7 @@ final class HyfensToolchain {
         'languageVersion': '3.13',
       });
     }
+    _appendPackagedRuntimePackages(rewritten);
     _appendToolRuntimePackages(rewritten);
     final output = <String, Object?>{...raw, 'packages': rewritten};
     await writeAtomicText(
@@ -4039,6 +4060,42 @@ public final class GeneratedPluginRegistrant {
     }
   }
 
+  void _appendPackagedRuntimePackages(List<Object?> rewritten) {
+    final packages = RuntimePackageBundle.installedPackages();
+    if (packages.isEmpty) return;
+    final existing = <String>{
+      for (final item in rewritten)
+        if (item is Map<String, Object?> && item['name'] is String)
+          item['name']! as String,
+    };
+    for (final name in RuntimePackageBundle.packageNames) {
+      final root = packages[name];
+      if (root == null || !existing.add(name)) continue;
+      rewritten.add(<String, Object?>{
+        'name': name,
+        'rootUri': Directory(root.resolveSymbolicLinksSync()).absolute.uri
+            .toString(),
+        'packageUri': 'lib/',
+        'languageVersion': '3.13',
+      });
+    }
+  }
+
+  File? _runtimePackageFile() {
+    final packaged =
+        RuntimePackageBundle.installedPackages()['instrumentation_e0'];
+    if (packaged != null) {
+      final file = File(p.join(packaged.path, 'lib', 'e0_runtime.dart'));
+      if (file.existsSync()) return file;
+    }
+    final resolved = Isolate.resolvePackageUriSync(
+      Uri.parse('package:instrumentation_e0/e0_runtime.dart'),
+    );
+    if (resolved == null || resolved.scheme != 'file') return null;
+    final file = File.fromUri(resolved);
+    return file.existsSync() ? file : null;
+  }
+
   /// Rebuilds the temporary package graph after adding the runtime package.
   ///
   /// Flutter's plugin discovery follows `.dart_tool/package_graph.json`, not
@@ -4425,6 +4482,7 @@ Future<void> _copyTree(
   Directory source,
   Directory destination, {
   required Set<String> skip,
+  bool resolveLinks = false,
 }) async {
   await destination.create(recursive: true);
   final entries = source.listSync(followLinks: false)
@@ -4435,10 +4493,32 @@ Future<void> _copyTree(
     final target = p.join(destination.path, name);
     switch (FileSystemEntity.typeSync(entry.path, followLinks: false)) {
       case FileSystemEntityType.directory:
-        await _copyTree(Directory(entry.path), Directory(target), skip: skip);
+        await _copyTree(
+          Directory(entry.path),
+          Directory(target),
+          skip: skip,
+          resolveLinks: resolveLinks,
+        );
       case FileSystemEntityType.file:
         await File(entry.path).copy(target);
       case FileSystemEntityType.link:
+        if (!resolveLinks) break;
+        final resolvedPath = entry.resolveSymbolicLinksSync();
+        if (resolvedPath == entry.path) break;
+        switch (FileSystemEntity.typeSync(resolvedPath)) {
+          case FileSystemEntityType.directory:
+            await _copyTree(
+              Directory(resolvedPath),
+              Directory(target),
+              skip: skip,
+              resolveLinks: true,
+            );
+          case FileSystemEntityType.file:
+            await File(resolvedPath).copy(target);
+          case FileSystemEntityType.link:
+          case FileSystemEntityType.notFound:
+            break;
+        }
       case FileSystemEntityType.notFound:
         break;
     }

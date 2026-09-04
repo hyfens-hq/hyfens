@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../../cli/lib/src/runtime_bundle.dart';
 import 'release_support.dart';
 
 String get repositoryRoot =>
@@ -114,6 +116,63 @@ Future<void> copyDirectory(Directory source, Directory destination) async {
   }
 }
 
+Future<void> copyRuntimePackage(Directory source, Directory destination) async {
+  final sourceLib = Directory(p.join(source.path, 'lib'));
+  final sourcePubspec = File(p.join(source.path, 'pubspec.yaml'));
+  if (!sourceLib.existsSync() || !sourcePubspec.existsSync()) {
+    throw StateError('Runtime package is incomplete: ${source.path}');
+  }
+  await copyDirectory(sourceLib, Directory(p.join(destination.path, 'lib')));
+  await sourcePubspec.copy(p.join(destination.path, 'pubspec.yaml'));
+}
+
+Map<String, Directory> packageRootsFromConfig(Directory cliRoot) {
+  final file = File(p.join(cliRoot.path, '.dart_tool', 'package_config.json'));
+  if (!file.existsSync()) {
+    throw StateError('Dart package configuration is missing: ${file.path}');
+  }
+  final raw = jsonDecode(file.readAsStringSync());
+  if (raw is! Map<String, Object?> || raw['packages'] is! List<Object?>) {
+    throw StateError('Dart package configuration is malformed: ${file.path}');
+  }
+  final roots = <String, Directory>{};
+  for (final item in raw['packages']! as List<Object?>) {
+    if (item is! Map<String, Object?> ||
+        item['name'] is! String ||
+        item['rootUri'] is! String) {
+      continue;
+    }
+    final uri = Uri.parse(item['rootUri']! as String);
+    final resolved = uri.isAbsolute ? uri : file.parent.uri.resolveUri(uri);
+    if (resolved.scheme == 'file') {
+      roots[item['name']! as String] = Directory.fromUri(resolved);
+    }
+  }
+  return roots;
+}
+
+Future<void> stageRuntimePackages({
+  required Directory repository,
+  required Directory cliRoot,
+  required Directory packageDirectory,
+}) async {
+  final runtimeRoot = Directory(p.join(packageDirectory.path, 'runtime'));
+  final hostedRoots = packageRootsFromConfig(cliRoot);
+  for (final entry in RuntimePackageBundle.repositoryPackagePaths.entries) {
+    await copyRuntimePackage(
+      Directory(p.join(repository.path, entry.value)),
+      Directory(p.join(runtimeRoot.path, entry.key)),
+    );
+  }
+  for (final name in RuntimePackageBundle.hostedPackageNames) {
+    final source = hostedRoots[name];
+    if (source == null) {
+      throw StateError('Runtime package is missing from the CLI graph: $name');
+    }
+    await copyRuntimePackage(source, Directory(p.join(runtimeRoot.path, name)));
+  }
+}
+
 Future<void> createArchive({
   required String platform,
   required Directory packageDirectory,
@@ -203,6 +262,11 @@ Future<void> buildRelease({
     final binDirectory = Directory(p.join(packageDirectory.path, 'bin'));
     await binDirectory.create(recursive: true);
     final cliRoot = Directory(p.join(root.path, 'cli'));
+    await stageRuntimePackages(
+      repository: root,
+      cliRoot: cliRoot,
+      packageDirectory: packageDirectory,
+    );
     final canonicalBundle = await buildCliBundle(
       cliRoot: cliRoot,
       entrypoint: 'bin/hyfens.dart',
