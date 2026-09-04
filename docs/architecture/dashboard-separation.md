@@ -1,6 +1,6 @@
 # Dashboard and web product separation
 
-Status: AUTHORITATIVE — OSS/Cloud ownership frozen; migration in progress
+Status: AUTHORITATIVE — OSS/Cloud ownership and historical boundary audited
 
 Hyfens has separate web products over compatible identity, control-plane, and
 design contracts. Product ownership is a repository and build boundary, not

@@ -41,6 +41,9 @@ outside the public documentation tree.
   web ownership, shared contracts, routes, APIs, and authorization.
 - [Web product boundary audit](architecture/web-product-boundary-audit.md) —
   the approved repository and build ownership decision.
+- [Historical OSS exposure audit](architecture/historical-oss-exposure-audit.md)
+  — historical Cloud frontend exposure, release-surface findings, and the
+  non-destructive history decision.
 - [Control plane](architecture/control-plane.md)
 - [Runtime](architecture/runtime.md)
 - [Patch lifecycle](architecture/patch-lifecycle.md)
