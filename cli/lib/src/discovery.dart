@@ -389,8 +389,13 @@ final class SourceDiscoverer {
   SourceDiscoveryResult discover(
     FlutterProject project,
     ProjectGraph graph,
-    ToolConfig config,
-  ) {
+    ToolConfig config, {
+    String entrypointPath = 'lib/main.dart',
+  }) {
+    final selectedEntrypointPath = normalizeEntrypointPath(entrypointPath);
+    final selectedEntrypoint = File(
+      p.join(project.root.path, selectedEntrypointPath),
+    );
     final units = <SourceUnit>[];
     for (final package in graph.packages) {
       if (package.name != project.packageName &&
@@ -410,7 +415,8 @@ final class SourceDiscoverer {
         final libraryUri = 'package:${package.name}/$relative';
         final source = file.readAsStringSync();
         final kind = _kind(package, file, source, project);
-        final entrypoint = file.absolute.path == project.mainFile.absolute.path;
+        final entrypoint =
+            file.absolute.path == selectedEntrypoint.absolute.path;
         final decision = _decision(
           project: project,
           package: package,
@@ -435,14 +441,13 @@ final class SourceDiscoverer {
       }
     }
     units.sort((left, right) => left.libraryUri.compareTo(right.libraryUri));
-    if (project.mainFile.existsSync() &&
-        !units.any((unit) => unit.entrypoint && unit.selected)) {
+    if (!units.any((unit) => unit.entrypoint && unit.selected)) {
       throw ToolFailure.single(
         exitCode: ToolExitCode.analysis,
         code: 'T1401',
         summary: 'Application entrypoint is not selected for instrumentation',
-        detail: project.relative(project.mainFile),
-        action: 'Keep lib/main.dart inside instrumentation.include and remove it from exclude.',
+        detail: selectedEntrypointPath,
+        action: 'Ensure the selected entrypoint is under lib/, contains main(), and is not excluded; use --entrypoint to select it explicitly.',
       );
     }
     return SourceDiscoveryResult(project: project, units: units);

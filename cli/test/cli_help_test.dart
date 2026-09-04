@@ -112,6 +112,18 @@ void main() {
     },
   );
 
+  test('release and patch help expose flavor entrypoint options', () async {
+    final release = await _runCli(const <String>['release', '--help']);
+    final patch = await _runCli(const <String>['patch', '--help']);
+
+    expect(release.exitCode, 0, reason: release.stderr);
+    expect(release.stdout, contains('--flavor'));
+    expect(release.stdout, contains('--entrypoint'));
+    expect(patch.exitCode, 0, reason: patch.stderr);
+    expect(patch.stdout, contains('--flavor'));
+    expect(patch.stdout, contains('--entrypoint'));
+  });
+
   test(
     'unknown command suggests a close match and fails with usage status',
     () async {

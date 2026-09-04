@@ -20,7 +20,7 @@ import 'source_fingerprints.dart';
 
 // The CLI version is part of release identity and must match cli/pubspec.yaml
 // and the version used by the release workflows.
-const hyfensToolVersion = '0.1.1';
+const hyfensToolVersion = '0.1.2';
 const _bridgeExtensionType = 9;
 const _rollbackStateVersion = 1;
 const _rollbackTargetBaseAot = 'base-aot';
@@ -964,6 +964,8 @@ final class ReleaseRecord {
     required List<ToolDiagnostic> diagnostics,
     required this.configFingerprint,
     required this.nativeFingerprints,
+    this.entrypointPath = 'lib/main.dart',
+    this.flavor,
   }) : sources = List.unmodifiable(sources),
        functions = List.unmodifiable(functions),
        diagnostics = List.unmodifiable(diagnostics);
@@ -989,6 +991,8 @@ final class ReleaseRecord {
   final List<ToolDiagnostic> diagnostics;
   final String configFingerprint;
   final Map<String, Object?> nativeFingerprints;
+  final String entrypointPath;
+  final String? flavor;
 
   String encode() => canonicalJson(toJson());
 
@@ -1009,7 +1013,12 @@ final class ReleaseRecord {
     'graph': graph,
     'sourceFingerprints': sourceFingerprints,
     'instrumentation': instrumentation,
-    'build': build,
+    'build': <String, Object?>{
+      ...build,
+      if (!build.containsKey('entrypoint') && entrypointPath != 'lib/main.dart')
+        'entrypoint': entrypointPath,
+      if (!build.containsKey('flavor') && flavor != null) 'flavor': flavor,
+    },
     'sources': sources.map((item) => item.toJson()).toList(),
     'functions': functions.map((item) => item.toJson()).toList(),
     'diagnostics': diagnostics.map((item) => item.toJson()).toList(),
@@ -1057,6 +1066,13 @@ final class ReleaseRecord {
     final diagnostics = (raw['diagnostics']! as List<Object?>)
         .map(_diagnosticFromJson)
         .toList(growable: false);
+    final rawBuild = raw['build']! as Map<String, Object?>;
+    final entrypointPath = rawBuild['entrypoint'] == null
+        ? 'lib/main.dart'
+        : _decodeReleaseEntrypoint(rawBuild['entrypoint']!);
+    final flavor = rawBuild['flavor'] == null
+        ? null
+        : _decodeReleaseFlavor(rawBuild['flavor']!);
     final result = ReleaseRecord(
       applicationId: raw['applicationId']! as String,
       releaseId: raw['releaseId']! as String,
@@ -1073,17 +1089,38 @@ final class ReleaseRecord {
       graph: raw['graph']! as Map<String, Object?>,
       sourceFingerprints: raw['sourceFingerprints']! as Map<String, Object?>,
       instrumentation: raw['instrumentation']! as Map<String, Object?>,
-      build: raw['build']! as Map<String, Object?>,
+      build: rawBuild,
       sources: sources,
       functions: functions,
       diagnostics: diagnostics,
       configFingerprint: raw['configFingerprint']! as String,
       nativeFingerprints: raw['nativeFingerprints']! as Map<String, Object?>,
+      entrypointPath: entrypointPath,
+      flavor: flavor,
     );
     if (result.encode() != source) {
       throw const FormatException('Release metadata is not canonical');
     }
     return result;
+  }
+}
+
+String _decodeReleaseEntrypoint(Object value) {
+  if (value is! String)
+    throw const FormatException('Invalid release entrypoint');
+  try {
+    return normalizeEntrypointPath(value);
+  } on ToolFailure {
+    throw const FormatException('Invalid release entrypoint');
+  }
+}
+
+String _decodeReleaseFlavor(Object value) {
+  if (value is! String) throw const FormatException('Invalid release flavor');
+  try {
+    return normalizeFlavorName(value);
+  } on ToolFailure {
+    throw const FormatException('Invalid release flavor');
   }
 }
 
@@ -1531,6 +1568,78 @@ final class HyfensToolchain {
 
   ToolConfig config(FlutterProject project) =>
       ToolConfig.load(project.configFile);
+
+  EntrypointSelection _resolveEntrypoint({
+    required FlutterProject project,
+    required ToolConfig config,
+    required String target,
+    String? flavor,
+    String? entrypointPath,
+  }) {
+    final selection = config.resolveEntrypoint(
+      target: target,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
+    final entrypoint = File(
+      p.join(project.root.path, selection.entrypointPath),
+    );
+    if (!isWithin(project.root, entrypoint) ||
+        FileSystemEntity.typeSync(entrypoint.path, followLinks: false) !=
+            FileSystemEntityType.file) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'T1402',
+        summary: 'Flutter entrypoint was not found',
+        detail: selection.entrypointPath,
+        path: project.relative(entrypoint),
+        action: 'Create the entrypoint under lib/ or pass --entrypoint with the Dart file used by this flavor.',
+      );
+    }
+    return selection;
+  }
+
+  EntrypointSelection _resolveReleaseEntrypoint({
+    required FlutterProject project,
+    required ReleaseRecord release,
+    String? flavor,
+    String? entrypointPath,
+  }) {
+    final requestedFlavor = flavor == null ? null : normalizeFlavorName(flavor);
+    final requestedEntrypoint = entrypointPath == null
+        ? null
+        : normalizeEntrypointPath(entrypointPath);
+    if ((requestedFlavor != null && requestedFlavor != release.flavor) ||
+        (requestedEntrypoint != null &&
+            requestedEntrypoint != release.entrypointPath)) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.compatibility,
+        code: 'R5007',
+        summary: 'Entrypoint selection does not match the release baseline',
+        detail:
+            'Release uses ${release.flavor ?? 'default'} at ${release.entrypointPath}; requested ${requestedFlavor ?? 'default'} at ${requestedEntrypoint ?? release.entrypointPath}.',
+        action: 'Use the release baseline selection or create a new release for this flavor and entrypoint.',
+      );
+    }
+    final selected = EntrypointSelection(
+      target: release.target,
+      entrypointPath: release.entrypointPath,
+      flavor: release.flavor,
+    );
+    final file = File(p.join(project.root.path, selected.entrypointPath));
+    if (FileSystemEntity.typeSync(file.path, followLinks: false) !=
+        FileSystemEntityType.file) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'T1402',
+        summary: 'Release entrypoint was not found',
+        detail: selected.entrypointPath,
+        path: project.relative(file),
+        action: 'Restore the recorded entrypoint or create a new release with the current project structure.',
+      );
+    }
+    return selected;
+  }
 
   Future<ToolEnvironmentSnapshot> doctor({String? projectPath}) async {
     final current = project(projectPath: projectPath);
@@ -2053,6 +2162,8 @@ final class HyfensToolchain {
     String architecture = 'arm64',
     String buildMode = 'release',
     bool metadataOnly = false,
+    String? flavor,
+    String? entrypointPath,
   }) async {
     if (target != 'android' && target != 'ios') {
       throw ToolFailure.single(
@@ -2065,6 +2176,13 @@ final class HyfensToolchain {
     }
     final current = project(projectPath: projectPath);
     final config = this.config(current);
+    final selection = _resolveEntrypoint(
+      project: current,
+      config: config,
+      target: target,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
     final store = ToolStore(current);
     final configuredPublicKey = store.resolveConfiguredPath(
       config.publicKeyPath,
@@ -2076,7 +2194,12 @@ final class HyfensToolchain {
       _keyStore.readPublic(configuredPublicKey);
     }
     final graph = _graphLoader.load(current);
-    final source = _sourceDiscoverer.discover(current, graph, config);
+    final source = _sourceDiscoverer.discover(
+      current,
+      graph,
+      config,
+      entrypointPath: selection.entrypointPath,
+    );
     final environment = await _environment.inspect(current);
     final targetName = '$target-$architecture-$buildMode';
     final graphFingerprint = graph.fingerprint;
@@ -2094,9 +2217,12 @@ final class HyfensToolchain {
       'formatVersion': patchFormatV1,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
       'updateUrl': config.updateUrl,
+      'entrypoint': selection.entrypointPath,
+      'flavor': selection.flavor,
     });
     final applicationId =
-        config.applicationId ?? current.applicationIdFor(target);
+        config.applicationIdFor(target, flavor: selection.flavor) ??
+        current.applicationIdFor(target);
     final releaseId = releaseIdFor(
       applicationId: applicationId,
       sourceFingerprint: source.fingerprint,
@@ -2114,6 +2240,8 @@ final class HyfensToolchain {
       'format': patchFormatV1,
       'graph': graphFingerprint,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
+      'entrypoint': selection.entrypointPath,
+      'flavor': selection.flavor,
     });
     final plan = _instrumentationPlanner.build(
       project: current,
@@ -2150,13 +2278,19 @@ final class HyfensToolchain {
             plan: plan,
             target: target,
             buildMode: buildMode,
+            entrypointPath: selection.entrypointPath,
+            flavor: selection.flavor,
             environment: environment,
             graph: graph,
             artifactStagingDirectory: Directory(
               p.join(current.toolDirectory.path, '.builds', releaseId),
             ),
           );
-    final build = Map<String, Object?>.from(buildResult);
+    final build = <String, Object?>{
+      ...buildResult,
+      'entrypoint': selection.entrypointPath,
+      if (selection.flavor != null) 'flavor': selection.flavor,
+    };
     final stagedArtifactPath = build.remove('artifactPath');
     if (stagedArtifactPath is String) stagedArtifact = File(stagedArtifactPath);
     final functions = _functionRecords(current, plan);
@@ -2192,6 +2326,8 @@ final class HyfensToolchain {
       diagnostics: plan.diagnostics,
       configFingerprint: configFingerprint,
       nativeFingerprints: native,
+      entrypointPath: selection.entrypointPath,
+      flavor: selection.flavor,
     );
     try {
       await store.writeRelease(
@@ -2209,13 +2345,34 @@ final class HyfensToolchain {
     return record;
   }
 
-  AnalysisResult analyze({String? projectPath, String? releaseId}) {
+  AnalysisResult analyze({
+    String? projectPath,
+    String? releaseId,
+    String? flavor,
+    String? entrypointPath,
+  }) {
     final current = project(projectPath: projectPath);
     final config = this.config(current);
     final store = ToolStore(current);
-    final release = _selectRelease(store, releaseId);
+    final release = _selectRelease(
+      store,
+      releaseId,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
+    final selection = _resolveReleaseEntrypoint(
+      project: current,
+      release: release,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
     final graph = _graphLoader.load(current);
-    final source = _sourceDiscoverer.discover(current, graph, config);
+    final source = _sourceDiscoverer.discover(
+      current,
+      graph,
+      config,
+      entrypointPath: selection.entrypointPath,
+    );
     final plan = _instrumentationPlanner.build(
       project: current,
       discovery: source,
@@ -2666,8 +2823,15 @@ final class HyfensToolchain {
   Future<PatchBuildResult> patch({
     String? projectPath,
     String? releaseId,
+    String? flavor,
+    String? entrypointPath,
   }) async {
-    final analysis = analyze(projectPath: projectPath, releaseId: releaseId);
+    final analysis = analyze(
+      projectPath: projectPath,
+      releaseId: releaseId,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
     if (!analysis.canPatch) {
       final errors = analysis.diagnostics
           .where((item) => item.severity == DiagnosticSeverity.error)
@@ -2942,9 +3106,29 @@ final class HyfensToolchain {
     );
   }
 
-  ReleaseRecord _selectRelease(ToolStore store, String? releaseId) {
+  ReleaseRecord _selectRelease(
+    ToolStore store,
+    String? releaseId, {
+    String? flavor,
+    String? entrypointPath,
+  }) {
     if (releaseId != null) return store.readRelease(releaseId);
-    final records = store.listReleases();
+    final normalizedFlavor = flavor == null
+        ? null
+        : normalizeFlavorName(flavor);
+    final normalizedEntrypoint = entrypointPath == null
+        ? null
+        : normalizeEntrypointPath(entrypointPath);
+    final records = store
+        .listReleases()
+        .where(
+          (release) =>
+              (normalizedFlavor == null ||
+                  release.flavor == normalizedFlavor) &&
+              (normalizedEntrypoint == null ||
+                  release.entrypointPath == normalizedEntrypoint),
+        )
+        .toList(growable: false);
     if (records.length == 1) return records.single;
     if (records.isEmpty) {
       throw ToolFailure.single(
@@ -3137,6 +3321,8 @@ final class HyfensToolchain {
     required InstrumentationPlan plan,
     required String target,
     required String buildMode,
+    required String entrypointPath,
+    String? flavor,
     required ToolEnvironmentSnapshot environment,
     required ProjectGraph graph,
     required Directory artifactStagingDirectory,
@@ -3257,6 +3443,8 @@ final class HyfensToolchain {
       final command = <String>[
         'build',
         target == 'android' ? 'apk' : 'ipa',
+        '--target=$entrypointPath',
+        if (flavor != null) '--flavor=$flavor',
         if (buildMode == 'release') '--release',
         // Phase 1B validates installation on registered physical devices.
         // A local development export uses the existing Apple Development
@@ -3272,6 +3460,8 @@ final class HyfensToolchain {
         ...<String>[
           'build',
           target == 'android' ? 'apk' : 'ipa',
+          '--target=$entrypointPath',
+          if (flavor != null) '--flavor=$flavor',
           if (buildMode == 'release') '--release',
           if (target == 'ios') '--export-method=development',
           '--no-pub',

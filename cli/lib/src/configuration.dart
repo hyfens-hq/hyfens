@@ -1,9 +1,83 @@
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
 import 'canonical.dart';
 import 'diagnostics.dart';
+
+/// The resolved Dart application boundary for one target build.
+///
+/// A native flavor and its Dart entrypoint are one release boundary. Keeping
+/// them together prevents release, patch, and build adapters from selecting
+/// different application entrypoints.
+final class EntrypointSelection {
+  const EntrypointSelection({
+    required this.target,
+    required this.entrypointPath,
+    this.flavor,
+  });
+
+  final String target;
+  final String entrypointPath;
+  final String? flavor;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'target': target,
+    'entrypoint': entrypointPath,
+    'flavor': flavor,
+  };
+}
+
+String normalizeEntrypointPath(String value) {
+  final normalizedSeparators = value.trim().replaceAll(r'\', '/');
+  final segments = normalizedSeparators.split('/');
+  final invalid =
+      normalizedSeparators.isEmpty ||
+      normalizedSeparators.contains(RegExp(r'[\u0000\r\n]')) ||
+      normalizedSeparators.startsWith('/') ||
+      normalizedSeparators.startsWith('//') ||
+      RegExp(r'^[A-Za-z]:/').hasMatch(normalizedSeparators) ||
+      segments.contains('..') ||
+      !normalizedSeparators.startsWith('lib/') ||
+      !normalizedSeparators.toLowerCase().endsWith('.dart');
+  if (invalid) {
+    throw ToolFailure.single(
+      exitCode: ToolExitCode.environment,
+      code: 'T1206',
+      summary: 'Invalid Flutter entrypoint path',
+      detail: value,
+      action:
+          'Use a project-relative Dart file under lib/, such as lib/main.dart.',
+    );
+  }
+  final result = p.posix.normalize(normalizedSeparators);
+  if (result == '.' || result == '..' || result.startsWith('../')) {
+    throw ToolFailure.single(
+      exitCode: ToolExitCode.environment,
+      code: 'T1206',
+      summary: 'Invalid Flutter entrypoint path',
+      detail: value,
+      action:
+          'Use a project-relative Dart file under lib/, such as lib/main.dart.',
+    );
+  }
+  return result;
+}
+
+String normalizeFlavorName(String value) {
+  final normalized = value.trim();
+  if (!RegExp(r'^[A-Za-z][A-Za-z0-9_-]{0,63}$').hasMatch(normalized)) {
+    throw ToolFailure.single(
+      exitCode: ToolExitCode.usage,
+      code: 'T1207',
+      summary: 'Invalid Flutter flavor name',
+      detail: value,
+      action: 'Use the native flavor identifier, for example local, staging, or prod.',
+    );
+  }
+  return normalized;
+}
 
 final class ToolConfig {
   const ToolConfig({
@@ -13,6 +87,8 @@ final class ToolConfig {
     this.includeLocalPackages = true,
     this.includePackages = const <String>[],
     this.applicationId,
+    this.entrypoints = const <String, Map<String, String>>{},
+    this.applicationIds = const <String, Map<String, String>>{},
     this.publicKeyPath = '.tool/keys/public.key',
     this.privateKeyPath = '.tool/keys/private.key',
     this.updateUrl = 'http://127.0.0.1:18080/v1/patch',
@@ -24,6 +100,8 @@ final class ToolConfig {
   final bool includeLocalPackages;
   final List<String> includePackages;
   final String? applicationId;
+  final Map<String, Map<String, String>> entrypoints;
+  final Map<String, Map<String, String>> applicationIds;
   final String publicKeyPath;
   final String privateKeyPath;
   final String updateUrl;
@@ -34,6 +112,8 @@ final class ToolConfig {
     bool? includeLocalPackages,
     List<String>? includePackages,
     String? applicationId,
+    Map<String, Map<String, String>>? entrypoints,
+    Map<String, Map<String, String>>? applicationIds,
     String? publicKeyPath,
     String? privateKeyPath,
     String? updateUrl,
@@ -44,6 +124,8 @@ final class ToolConfig {
     includeLocalPackages: includeLocalPackages ?? this.includeLocalPackages,
     includePackages: includePackages ?? this.includePackages,
     applicationId: applicationId ?? this.applicationId,
+    entrypoints: entrypoints ?? this.entrypoints,
+    applicationIds: applicationIds ?? this.applicationIds,
     publicKeyPath: publicKeyPath ?? this.publicKeyPath,
     privateKeyPath: privateKeyPath ?? this.privateKeyPath,
     updateUrl: updateUrl ?? this.updateUrl,
@@ -73,6 +155,8 @@ final class ToolConfig {
     }
     final instrumentation = _map(raw['instrumentation'], 'instrumentation');
     final packages = _map(raw['packages'], 'packages');
+    final entrypoints = _entrypointMappings(raw['entrypoints']);
+    final applicationIds = _applicationIdMappings(raw['application_ids']);
     final signing = _map(raw['signing'], 'signing');
     final runtime = _map(raw['runtime'], 'runtime');
     return ToolConfig(
@@ -85,6 +169,8 @@ final class ToolConfig {
       ),
       includePackages: _strings(packages['include'], const <String>[]),
       applicationId: _nullableString(raw['application_id']),
+      entrypoints: entrypoints,
+      applicationIds: applicationIds,
       publicKeyPath: _string(signing['public_key'], '.tool/keys/public.key'),
       privateKeyPath: _string(signing['private_key'], '.tool/keys/private.key'),
       updateUrl: _url(runtime['update_url'], 'http://127.0.0.1:18080/v1/patch'),
@@ -106,6 +192,24 @@ final class ToolConfig {
         '',
         'application_id: $applicationId',
       ],
+      if (applicationIds.isNotEmpty) ...<String>[
+        '',
+        'application_ids:',
+        for (final target in applicationIds.keys.toList()..sort()) ...<String>[
+          '  $target:',
+          for (final flavor in applicationIds[target]!.keys.toList()..sort())
+            '    $flavor: ${_yamlQuote(applicationIds[target]![flavor]!)}',
+        ],
+      ],
+      if (entrypoints.isNotEmpty) ...<String>[
+        '',
+        'entrypoints:',
+        for (final target in entrypoints.keys.toList()..sort()) ...<String>[
+          '  $target:',
+          for (final flavor in entrypoints[target]!.keys.toList()..sort())
+            '    $flavor: ${_yamlQuote(entrypoints[target]![flavor]!)}',
+        ],
+      ],
       '',
       'signing:',
       '  public_key: $publicKeyPath',
@@ -123,6 +227,56 @@ final class ToolConfig {
     if (exclude.any((pattern) => globMatches(pattern, normalized)))
       return false;
     return include.any((pattern) => globMatches(pattern, normalized));
+  }
+
+  /// Resolve an explicit entrypoint or a target/flavor mapping. A flavor with
+  /// no mapping is rejected instead of silently falling back to lib/main.dart.
+  EntrypointSelection resolveEntrypoint({
+    required String target,
+    String? flavor,
+    String? entrypointPath,
+  }) {
+    if (target != 'android' && target != 'ios') {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.usage,
+        code: 'T1006',
+        summary: 'Unsupported release target',
+        detail: target,
+        action: 'Use android or ios.',
+      );
+    }
+    final normalizedFlavor = flavor == null
+        ? null
+        : normalizeFlavorName(flavor);
+    final configured = entrypoints[target];
+    final mappedPath = entrypointPath == null
+        ? configured == null
+              ? null
+              : configured[normalizedFlavor ?? 'default']
+        : entrypointPath;
+    if (normalizedFlavor != null &&
+        entrypointPath == null &&
+        mappedPath == null) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.usage,
+        code: 'T1208',
+        summary: 'Flavor entrypoint is not configured',
+        detail: '$target/$normalizedFlavor',
+        action:
+            'Pass --entrypoint lib/path/to/main.dart or add entrypoints.$target.$normalizedFlavor to tool.yaml.',
+      );
+    }
+    return EntrypointSelection(
+      target: target,
+      entrypointPath: normalizeEntrypointPath(mappedPath ?? 'lib/main.dart'),
+      flavor: normalizedFlavor,
+    );
+  }
+
+  String? applicationIdFor(String target, {String? flavor}) {
+    final configured = applicationIds[target];
+    final mapped = configured == null ? null : configured[flavor ?? 'default'];
+    return mapped ?? applicationId;
   }
 }
 
@@ -372,6 +526,105 @@ List<String> _yamlList(String label, List<String> values) => <String>[
   '$label${values.isEmpty ? ' []' : ''}',
   for (final value in values) '    - $value',
 ];
+
+String _yamlQuote(String value) => "'${value.replaceAll("'", "''")}'";
+
+Map<String, Map<String, String>> _entrypointMappings(Object? value) {
+  if (value == null) return const <String, Map<String, String>>{};
+  final targets = _map(value, 'entrypoints');
+  final result = <String, Map<String, String>>{};
+  for (final entry in targets.entries) {
+    final target = entry.key;
+    if (target is! String || (target != 'android' && target != 'ios')) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'T1203',
+        summary: 'Invalid tool.yaml entrypoints target',
+        detail: '$target',
+        action: 'Use android or ios as entrypoint mapping targets.',
+      );
+    }
+    final flavors = _map(entry.value, 'entrypoints.$target');
+    final targetEntries = <String, String>{};
+    for (final flavorEntry in flavors.entries) {
+      final flavor = flavorEntry.key;
+      if (flavor is! String ||
+          (flavor != 'default' &&
+              !RegExp(r'^[A-Za-z][A-Za-z0-9_-]{0,63}$').hasMatch(flavor))) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.environment,
+          code: 'T1203',
+          summary: 'Invalid tool.yaml flavor name',
+          detail: '$target/$flavor',
+          action:
+              'Use default or a native flavor identifier as the mapping key.',
+        );
+      }
+      if (flavorEntry.value is! String) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.environment,
+          code: 'T1203',
+          summary: 'Invalid tool.yaml entrypoint mapping',
+          detail: '$target/$flavor',
+          action: 'Map each flavor to one Dart entrypoint path.',
+        );
+      }
+      targetEntries[flavor] = normalizeEntrypointPath(
+        flavorEntry.value as String,
+      );
+    }
+    result[target] = Map.unmodifiable(targetEntries);
+  }
+  return Map.unmodifiable(result);
+}
+
+Map<String, Map<String, String>> _applicationIdMappings(Object? value) {
+  if (value == null) return const <String, Map<String, String>>{};
+  final targets = _map(value, 'application_ids');
+  final result = <String, Map<String, String>>{};
+  for (final entry in targets.entries) {
+    final target = entry.key;
+    if (target is! String || (target != 'android' && target != 'ios')) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'T1203',
+        summary: 'Invalid tool.yaml application_ids target',
+        detail: '$target',
+        action: 'Use android or ios as application ID mapping targets.',
+      );
+    }
+    final flavors = _map(entry.value, 'application_ids.$target');
+    final targetIds = <String, String>{};
+    for (final flavorEntry in flavors.entries) {
+      final flavor = flavorEntry.key;
+      if (flavor is! String ||
+          (flavor != 'default' &&
+              !RegExp(r'^[A-Za-z][A-Za-z0-9_-]{0,63}$').hasMatch(flavor))) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.environment,
+          code: 'T1203',
+          summary: 'Invalid tool.yaml application ID flavor',
+          detail: '$target/$flavor',
+          action:
+              'Use default or a native flavor identifier as the mapping key.',
+        );
+      }
+      final id = flavorEntry.value;
+      if (id is! String || id.isEmpty || id.contains(RegExp(r'[\u0000\r\n]'))) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.environment,
+          code: 'T1203',
+          summary: 'Invalid tool.yaml application ID mapping',
+          detail: '$target/$flavor',
+          action: 'Map each flavor to one non-empty application identifier.',
+        );
+      }
+      targetIds[flavor] = id;
+    }
+    result[target] = Map.unmodifiable(targetIds);
+  }
+  return Map.unmodifiable(result);
+}
 
 int _hyfensInt(Object? value, String field) {
   if (value is int) return value;

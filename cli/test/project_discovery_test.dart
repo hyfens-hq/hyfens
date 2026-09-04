@@ -104,6 +104,60 @@ void main() {
     expect(project.root.path, root.absolute.path);
   });
 
+  test('discovers a Dart workspace package config and lockfile', () async {
+    final workspace = await Directory.systemTemp.createTemp(
+      'hyfens-workspace-',
+    );
+    final root = Directory('${workspace.path}/apps/sample_app');
+    addTearDown(() => workspace.delete(recursive: true));
+    await Directory('${root.path}/lib').create(recursive: true);
+    await Directory('${workspace.path}/.dart_tool').create(recursive: true);
+    await File('${root.path}/pubspec.yaml').writeAsString('''
+name: sample_app
+version: 1.0.0+1
+environment:
+  sdk: ^3.13.0
+flutter: {}
+''');
+    await File('${workspace.path}/pubspec.lock').writeAsString('''
+packages: {}
+sdks:
+  dart: ">=3.13.0 <4.0.0"
+''');
+    await File('${root.path}/lib/main.dart').writeAsString('void main() {}\n');
+    final packageConfig = File(
+      '${workspace.path}/.dart_tool/package_config.json',
+    );
+    await packageConfig.writeAsString(
+      jsonEncode(<String, Object?>{
+        'configVersion': 2,
+        'packages': <Object?>[
+          <String, Object?>{
+            'name': 'sample_app',
+            'rootUri': '../apps/sample_app',
+            'packageUri': 'lib/',
+            'languageVersion': '3.13',
+          },
+        ],
+      }),
+    );
+
+    final project = const ProjectDiscovery().discover(projectPath: root.path);
+    final graph = const ProjectGraphLoader().load(project);
+    final sources = const SourceDiscoverer().discover(
+      project,
+      graph,
+      const ToolConfig(),
+    );
+
+    expect(project.packageConfigFile?.path, packageConfig.path);
+    expect(project.pubspecLockFile.path, '${workspace.path}/pubspec.lock');
+    expect(
+      sources.selected.map((item) => item.libraryUri),
+      contains('package:sample_app/main.dart'),
+    );
+  });
+
   test('graph identity excludes checkout-specific absolute paths', () async {
     final first = await createProject();
     final second = await createProject();

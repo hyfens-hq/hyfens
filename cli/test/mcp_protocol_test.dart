@@ -110,7 +110,7 @@ void main() {
       final serverInfo = (initializeResult['serverInfo']! as Map)
           .cast<String, Object?>();
       expect(serverInfo['name'], 'hyfens');
-      expect(serverInfo['version'], '0.1.1');
+      expect(serverInfo['version'], hyfensToolVersion);
       expect(
         ((initializeResult['capabilities']! as Map)['tools'] as Map)
             .containsKey('listChanged'),

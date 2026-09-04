@@ -42,4 +42,23 @@ void main() {
       expect(result.source, isNot(contains('{prefix}')));
     },
   );
+
+  test('facade instruments an expression-bodied async main', () {
+    final result = HyfensInstrumenter().transform(
+      const SourceInstrumentationRequest(
+        source:
+            'Future<void> start() async {}\n'
+            'Future<void> main() => start();',
+        packageName: 'instrumenter_fixture',
+        logicalLibraryPath: 'lib/main.dart',
+        appId: 'app',
+        releaseId: 'release',
+        buildFingerprint: 'build',
+      ),
+    );
+
+    expect(result.source, contains('Future<void> main() => (() {'));
+    expect(result.source, contains('return start();'));
+    expect(result.source, contains('E0PatchRuntime.installFromArguments'));
+  });
 }

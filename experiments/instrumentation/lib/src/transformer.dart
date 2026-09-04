@@ -205,12 +205,12 @@ final class E0SourceTransformer {
     }
     if (requireMain &&
         (mainDeclaration == null ||
-            mainDeclaration.functionExpression.body is! BlockFunctionBody)) {
-      throw const FormatException('E0 requires a block-bodied main function');
+            !_isSupportedMainBody(mainDeclaration.functionExpression.body))) {
+      throw const FormatException('E0 requires a supported main function body');
     }
     if (installRuntime && mainDeclaration == null) {
       throw const FormatException(
-        'Runtime installation requires a block-bodied main function',
+        'Runtime installation requires a main function',
       );
     }
     candidates.sort((left, right) => left.id.compareTo(right.id));
@@ -313,8 +313,7 @@ final class E0SourceTransformer {
       edits.add(_Edit(body.block.leftBracket.end, 'callee-guard', guard));
     }
     if (installRuntime) {
-      final mainBody =
-          mainDeclaration!.functionExpression.body as BlockFunctionBody;
+      final mainBody = mainDeclaration!.functionExpression.body;
       final runtimeFunctions = releaseFunctions ?? functions;
       final functionMap = <String, int>{
         for (final function in runtimeFunctions) function.id: function.slot,
@@ -352,13 +351,40 @@ final class E0SourceTransformer {
         runtimeInit.write('\n  ');
         runtimeInit.write(bootstrapInvocation);
       }
-      edits.add(
-        _Edit(
-          mainBody.block.leftBracket.end,
-          'runtime-init',
-          runtimeInit.toString(),
-        ),
-      );
+      if (mainBody is BlockFunctionBody) {
+        edits.add(
+          _Edit(
+            mainBody.block.leftBracket.end,
+            'runtime-init',
+            runtimeInit.toString(),
+          ),
+        );
+      } else if (mainBody is ExpressionFunctionBody) {
+        final returnsValue = mainDeclaration.returnType?.toSource() != 'void';
+        edits.add(
+          _Edit(
+            mainBody.expression.offset,
+            'runtime-init',
+            '(()' +
+                (mainBody.keyword == null ? '' : ' async') +
+                ' {' +
+                runtimeInit.toString() +
+                '\n  ' +
+                (returnsValue ? 'return ' : ''),
+          ),
+        );
+        edits.add(
+          _Edit(
+            mainBody.expression.end,
+            'runtime-init-tail',
+            '; })()',
+          ),
+        );
+      } else {
+        throw const FormatException(
+          'E0 requires a supported main function body',
+        );
+      }
       if (bootstrapImport != null) {
         edits.add(
           _Edit(
@@ -498,6 +524,9 @@ final class E0SourceTransformer {
     }
     return null;
   }
+
+  static bool _isSupportedMainBody(FunctionBody body) =>
+      body is BlockFunctionBody || body is ExpressionFunctionBody;
 
   static bool _extendsStatelessWidget(ClassDeclaration declaration) =>
       declaration.extendsClause?.superclass.toSource() == 'StatelessWidget';

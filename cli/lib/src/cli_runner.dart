@@ -532,7 +532,16 @@ final class InitCommand extends _ToolCommand {
 
 final class AnalyzeCommand extends _ToolCommand {
   AnalyzeCommand(super.runner) {
-    argParser.addOption('release', help: 'Exact release baseline ID.');
+    argParser
+      ..addOption('release', help: 'Exact release baseline ID.')
+      ..addOption(
+        'flavor',
+        help: 'Native flavor used by the selected release baseline.',
+      )
+      ..addOption(
+        'entrypoint',
+        help: 'Project-relative Dart entrypoint used by the selected baseline.',
+      );
   }
 
   @override
@@ -547,6 +556,8 @@ final class AnalyzeCommand extends _ToolCommand {
     final result = runner.toolchain.analyze(
       projectPath: projectPath,
       releaseId: argResults!['release'] as String?,
+      flavor: argResults!['flavor'] as String?,
+      entrypointPath: argResults!['entrypoint'] as String?,
     );
     if (jsonMode) {
       runner.writeJson(result.toJson());
@@ -613,7 +624,15 @@ final class ReleaseCommand extends _ToolCommand {
         help: 'Create a baseline without running Flutter build.',
       )
       ..addOption('architecture', defaultsTo: 'arm64')
-      ..addOption('mode', defaultsTo: 'release');
+      ..addOption('mode', defaultsTo: 'release')
+      ..addOption(
+        'flavor',
+        help: 'Native flavor to build, for example local or staging.',
+      )
+      ..addOption(
+        'entrypoint',
+        help: 'Project-relative Dart entrypoint containing main().',
+      );
   }
 
   @override
@@ -634,12 +653,16 @@ final class ReleaseCommand extends _ToolCommand {
       architecture: argResults!['architecture'] as String,
       buildMode: argResults!['mode'] as String,
       metadataOnly: argResults!['metadata-only'] as bool,
+      flavor: argResults!['flavor'] as String?,
+      entrypointPath: argResults!['entrypoint'] as String?,
     );
     final data = <String, Object?>{
       'releaseId': record.releaseId,
       'applicationId': record.applicationId,
       'target': record.target,
       'architecture': record.architecture,
+      'entrypoint': record.entrypointPath,
+      'flavor': record.flavor,
       'buildFingerprint': record.buildFingerprint,
       'functions': record.functions.length,
       'sourceUnits': record.sources.length,
@@ -663,6 +686,9 @@ final class ReleaseCommand extends _ToolCommand {
     runner.write(
       '  Target:        ${record.target}-${record.architecture}-${record.buildMode}',
     );
+    runner.write('  Entrypoint:    ${record.entrypointPath}');
+    if (record.flavor != null)
+      runner.write('  Flavor:        ${record.flavor}');
     runner.write('  Functions:     ${record.functions.length}');
     runner.write('  Source units:  ${record.sources.length}');
     runner.write('  Build:         ${record.build['status']}');
@@ -705,7 +731,16 @@ final class ReleaseCommand extends _ToolCommand {
 
 final class PatchCommand extends _ToolCommand {
   PatchCommand(super.runner) {
-    argParser.addOption('release', help: 'Exact release baseline ID.');
+    argParser
+      ..addOption('release', help: 'Exact release baseline ID.')
+      ..addOption(
+        'flavor',
+        help: 'Native flavor used by the selected release baseline.',
+      )
+      ..addOption(
+        'entrypoint',
+        help: 'Project-relative Dart entrypoint used by the selected baseline.',
+      );
   }
 
   @override
@@ -723,6 +758,14 @@ final class PatchCommand extends _ToolCommand {
       throw UsageException('patch accepts only android or ios', usage);
     }
     var releaseId = argResults!['release'] as String?;
+    final requestedFlavor = argResults!['flavor'] as String?;
+    final normalizedFlavor = requestedFlavor == null
+        ? null
+        : normalizeFlavorName(requestedFlavor);
+    final requestedEntrypoint = argResults!['entrypoint'] as String?;
+    final normalizedEntrypoint = requestedEntrypoint == null
+        ? null
+        : normalizeEntrypointPath(requestedEntrypoint);
     if (targets.isNotEmpty) {
       final target = targets.single;
       final project = runner.toolchain.project(projectPath: projectPath);
@@ -742,7 +785,14 @@ final class PatchCommand extends _ToolCommand {
       } else {
         final matches = store
             .listReleases()
-            .where((release) => release.target == target)
+            .where(
+              (release) =>
+                  release.target == target &&
+                  (normalizedFlavor == null ||
+                      release.flavor == normalizedFlavor) &&
+                  (normalizedEntrypoint == null ||
+                      release.entrypointPath == normalizedEntrypoint),
+            )
             .toList(growable: false);
         if (matches.isEmpty) {
           throw ToolFailure.single(
@@ -769,6 +819,8 @@ final class PatchCommand extends _ToolCommand {
     final result = await runner.toolchain.patch(
       projectPath: projectPath,
       releaseId: releaseId,
+      flavor: requestedFlavor,
+      entrypointPath: requestedEntrypoint,
     );
     final data = <String, Object?>{
       'output': result.output.path,

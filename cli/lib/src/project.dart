@@ -91,19 +91,16 @@ final class ProjectDiscovery {
     final androidId = _androidApplicationId(root);
     final iosId = _iosApplicationId(root);
     final applicationId = androidId ?? iosId ?? packageName;
-    final packageConfigFile = File(
-      p.join(root.path, '.dart_tool', 'package_config.json'),
-    );
+    final packageConfigFile = _findPackageConfig(root, packageName);
+    final pubspecLockFile = _findPubspecLock(root, packageConfigFile);
     return FlutterProject(
       root: root,
       packageName: packageName,
       version: pubspec['version'] as String?,
       pubspec: pubspec,
       pubspecFile: pubspecFile,
-      pubspecLockFile: File(p.join(root.path, 'pubspec.lock')),
-      packageConfigFile: packageConfigFile.existsSync()
-          ? packageConfigFile
-          : null,
+      pubspecLockFile: pubspecLockFile,
+      packageConfigFile: packageConfigFile,
       applicationId: applicationId,
       androidApplicationId: androidId,
       iosApplicationId: iosId,
@@ -145,6 +142,73 @@ final class ProjectDiscovery {
       action: 'Run from a project or pass --project <directory>.',
     );
   }
+}
+
+File? _findPackageConfig(Directory projectRoot, String packageName) {
+  final local = File(
+    p.join(projectRoot.path, '.dart_tool', 'package_config.json'),
+  );
+  if (local.existsSync()) return local;
+
+  var directory = projectRoot.parent;
+  for (var depth = 0; depth < 64; depth++) {
+    final candidate = File(
+      p.join(directory.path, '.dart_tool', 'package_config.json'),
+    );
+    if (candidate.existsSync() &&
+        _packageConfigContainsProject(candidate, packageName, projectRoot)) {
+      return candidate;
+    }
+    final parent = directory.parent;
+    if (parent.path == directory.path) break;
+    directory = parent;
+  }
+  return null;
+}
+
+File _findPubspecLock(Directory projectRoot, File? packageConfigFile) {
+  final local = File(p.join(projectRoot.path, 'pubspec.lock'));
+  if (local.existsSync()) return local;
+  if (packageConfigFile != null) {
+    final workspace = File(
+      p.join(packageConfigFile.parent.parent.path, 'pubspec.lock'),
+    );
+    if (workspace.existsSync()) return workspace;
+  }
+  return local;
+}
+
+bool _packageConfigContainsProject(
+  File packageConfigFile,
+  String packageName,
+  Directory projectRoot,
+) {
+  try {
+    final decoded = jsonDecode(packageConfigFile.readAsStringSync());
+    if (decoded is! Map<String, Object?> || decoded['packages'] is! List) {
+      return false;
+    }
+    for (final raw in decoded['packages']! as List<Object?>) {
+      if (raw is! Map<String, Object?> || raw['name'] != packageName) {
+        continue;
+      }
+      final rootUriValue = raw['rootUri'];
+      if (rootUriValue is! String) return false;
+      final rootUri = Uri.tryParse(rootUriValue);
+      if (rootUri == null) return false;
+      final resolved = rootUri.isAbsolute
+          ? rootUri
+          : packageConfigFile.parent.uri.resolveUri(rootUri);
+      if (resolved.scheme != 'file') return false;
+      final resolvedPath = p.normalize(
+        Directory.fromUri(resolved).absolute.path,
+      );
+      return resolvedPath == p.normalize(projectRoot.absolute.path);
+    }
+  } on Object {
+    return false;
+  }
+  return false;
 }
 
 Map<String, Object?> _toDart(YamlMap map) => <String, Object?>{
