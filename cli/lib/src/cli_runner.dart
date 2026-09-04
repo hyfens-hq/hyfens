@@ -16,6 +16,7 @@ import 'control_plane_delivery.dart';
 import 'diagnostics.dart';
 import 'mcp/mcp_server.dart';
 import 'profile.dart';
+import 'project.dart';
 import 'project_initialization.dart';
 import 'server.dart';
 import 'signing.dart';
@@ -201,6 +202,138 @@ abstract base class _ToolCommand extends Command<void> {
       argResults?['project'] as String? ?? globalResults?['project'] as String?;
 }
 
+bool _nonInteractive(ArgResults? results) =>
+    results?['non-interactive'] == true || !stdin.hasTerminal;
+
+void _writeDiscoveryChoices(
+  HyfensCommandRunner runner,
+  ProjectDiscoveryReport report,
+) {
+  if (report.candidates.isEmpty) {
+    runner.write('! ${report.issueSummary ?? 'No Flutter application found'}');
+    if (report.issueDetail != null) runner.write('  ${report.issueDetail}');
+    if (report.issueAction != null)
+      runner.write('  Action: ${report.issueAction}');
+    return;
+  }
+  runner.write('! ${report.issueSummary ?? 'Selection required'}');
+  runner.write('');
+  for (var index = 0; index < report.candidates.length; index++) {
+    final candidate = report.candidates[index];
+    runner.write(
+      '  ${index + 1}. ${candidate.relativePath} (${candidate.packageName})',
+    );
+  }
+  runner.write('');
+  runner.write(report.issueAction ?? 'Run hyfens init to choose one.');
+}
+
+FlutterProjectCandidate _promptForProject(
+  HyfensCommandRunner runner,
+  ProjectDiscoveryReport report,
+) {
+  _writeDiscoveryChoices(runner, report);
+  while (true) {
+    runner.write(
+      'Choose a Flutter application [1-${report.candidates.length}]:',
+    );
+    final input = stdin.readLineSync()?.trim();
+    final choice = input == null ? null : int.tryParse(input);
+    if (choice != null && choice >= 1 && choice <= report.candidates.length) {
+      return report.candidates[choice - 1];
+    }
+    runner.write(
+      'Please enter a number from 1 to ${report.candidates.length}.',
+    );
+  }
+}
+
+_TargetChoice _promptForTarget(
+  HyfensCommandRunner runner,
+  FlutterProject project,
+  String target,
+) {
+  final flavors = project.flavorsFor(target);
+  if (flavors.length > 1) {
+    runner.write('Hyfens found ${flavors.length} Flutter flavors for $target:');
+    runner.write('');
+    for (var index = 0; index < flavors.length; index++) {
+      final flavor = flavors[index];
+      final candidates = project.entrypointsForFlavor(target, flavor);
+      runner.write('  ${index + 1}. $flavor');
+      if (candidates.isNotEmpty)
+        runner.write('     Entry point: ${candidates.first.path}');
+    }
+    while (true) {
+      runner.write(
+        'Which flavor should this Hyfens project use [1-${flavors.length}]:',
+      );
+      final input = stdin.readLineSync()?.trim();
+      final choice = input == null ? null : int.tryParse(input);
+      if (choice != null && choice >= 1 && choice <= flavors.length) {
+        final flavor = flavors[choice - 1];
+        final entrypoints = project.entrypointsForFlavor(target, flavor);
+        return _TargetChoice(
+          flavor: flavor,
+          entrypointPath: entrypoints.isEmpty ? null : entrypoints.first.path,
+        );
+      }
+      runner.write('Please enter a number from 1 to ${flavors.length}.');
+    }
+  }
+  if (project.entrypointCandidates.length > 1) {
+    runner.write('Hyfens found multiple Dart entrypoints for $target:');
+    for (var index = 0; index < project.entrypointCandidates.length; index++) {
+      runner.write(
+        '  ${index + 1}. ${project.entrypointCandidates[index].path}',
+      );
+    }
+    while (true) {
+      runner.write('Which entrypoint should this Hyfens project use:');
+      final input = stdin.readLineSync()?.trim();
+      final choice = input == null ? null : int.tryParse(input);
+      if (choice != null &&
+          choice >= 1 &&
+          choice <= project.entrypointCandidates.length) {
+        return _TargetChoice(
+          entrypointPath: project.entrypointCandidates[choice - 1].path,
+        );
+      }
+      runner.write(
+        'Please enter a number from 1 to ${project.entrypointCandidates.length}.',
+      );
+    }
+  }
+  throw ToolFailure.single(
+    exitCode: ToolExitCode.environment,
+    code: 'T1304',
+    summary: 'Flutter target selection is ambiguous',
+    detail: project.root.path,
+    action: 'Pass --flavor or --entrypoint explicitly.',
+  );
+}
+
+final class _TargetChoice {
+  const _TargetChoice({this.flavor, this.entrypointPath});
+
+  final String? flavor;
+  final String? entrypointPath;
+}
+
+final class _InitSelection {
+  const _InitSelection({
+    required this.projectPath,
+    this.flavor,
+    this.entrypointPath,
+    this.targetSelections = const <String, HyfensTargetBinding>{},
+  });
+
+  final String projectPath;
+  final String? flavor;
+  final String? entrypointPath;
+  final Map<String, HyfensTargetBinding> targetSelections;
+}
+
 final class VersionCommand extends Command<void> {
   VersionCommand(this.runner);
 
@@ -285,9 +418,27 @@ final class DoctorCommand extends _ToolCommand {
 
   @override
   Future<void> run() async {
+    final discovery = runner.toolchain.projectReport(projectPath: projectPath);
+    if (!discovery.isResolved) {
+      if (jsonMode) {
+        runner.writeJson(<String, Object?>{
+          'result': 'NEEDS_SELECTION',
+          'discovery': discovery.toJson(),
+        });
+      } else {
+        _writeDiscoveryChoices(runner, discovery);
+      }
+      return;
+    }
     final project = runner.toolchain.project(projectPath: projectPath);
-    final environment = await runner.toolchain.doctor(projectPath: projectPath);
-    final binding = HyfensProjectBinding.load(project.hyfensConfigFile);
+    final environment = await runner.toolchain.doctor(
+      projectPath: project.root.path,
+    );
+    final binding =
+        HyfensProjectBinding.load(project.hyfensConfigFile) ??
+        (project.workspaceHyfensConfigFile.existsSync()
+            ? HyfensProjectBinding.load(project.workspaceHyfensConfigFile)
+            : null);
     if (binding?.runtimeApplicationId != null &&
         binding!.runtimeApplicationId != project.applicationId) {
       throw ToolFailure.single(
@@ -298,8 +449,50 @@ final class DoctorCommand extends _ToolCommand {
         action: 'Run hyfens init --force after reviewing the exact identity.',
       );
     }
+    final targetSelections = <String, Object?>{};
+    var targetSelectionNeedsChoice = false;
+    for (final target in const <String>['android', 'ios']) {
+      if (!Directory(p.join(project.root.path, target)).existsSync()) {
+        continue;
+      }
+      try {
+        final selection = runner.toolchain.resolveTarget(
+          target: target,
+          projectPath: project.root.path,
+        );
+        targetSelections[target] = <String, Object?>{
+          'status': 'RESOLVED',
+          ...selection.toJson(),
+        };
+      } on ToolFailure catch (failure) {
+        final diagnostic = failure.diagnostics.single;
+        if (diagnostic.code != 'T1304' &&
+            diagnostic.code != 'T1305' &&
+            diagnostic.code != 'T1306' &&
+            diagnostic.code != 'T1307' &&
+            diagnostic.code != 'T1308') {
+          rethrow;
+        }
+        targetSelectionNeedsChoice = true;
+        targetSelections[target] = <String, Object?>{
+          'status': 'NEEDS_SELECTION',
+          'diagnostic': diagnostic.toJson(),
+        };
+      }
+    }
     final data = <String, Object?>{
       'projectRoot': project.root.path,
+      'repositoryRoot': project.repositoryRoot.path,
+      'workspaceRoot': project.workspaceRoot.path,
+      'workspaceType': project.workspaceType.name,
+      'projectPath': project.relativeProjectPath,
+      'discovery': discovery.toJson(),
+      'flavors': project.flavors,
+      'entrypoints': project.entrypointCandidates
+          .map((item) => item.toJson())
+          .toList(),
+      'targetSelections': targetSelections,
+      'toolchainHint': project.toolchainHint,
       'applicationId': project.applicationId,
       'pubspec': 'SUPPORTED',
       'pubspecLock': project.pubspecLockFile.existsSync()
@@ -316,10 +509,11 @@ final class DoctorCommand extends _ToolCommand {
           : 'NOT AVAILABLE',
       'hyfensBinding': binding == null ? 'NOT_INITIALIZED' : 'SUPPORTED',
       ...environment.toJson(),
-      'result':
-          environment.flutterStatus == 'SUPPORTED' &&
-              environment.dartStatus == 'SUPPORTED' &&
-              environment.runtimeStatus == 'SUPPORTED'
+      'result': targetSelectionNeedsChoice
+          ? 'NEEDS_SELECTION'
+          : environment.flutterStatus == 'SUPPORTED' &&
+                environment.dartStatus == 'SUPPORTED' &&
+                environment.runtimeStatus == 'SUPPORTED'
           ? 'READY'
           : 'WARNING',
     };
@@ -328,6 +522,33 @@ final class DoctorCommand extends _ToolCommand {
       return;
     }
     runner.write('Flutter OTA Doctor');
+    runner.write('');
+    runner.write('✓ Flutter project detected');
+    runner.write('  Package:      ${project.packageName}');
+    runner.write('  Workspace:    ${project.workspaceType.name}');
+    runner.write('  App path:     ${project.relativeProjectPath}');
+    if (project.flavors.isNotEmpty) {
+      runner.write('  Flavors:      ${project.flavors.join(', ')}');
+    }
+    if (project.entrypointCandidates.isNotEmpty) {
+      runner.write(
+        '  Entrypoints:  ${project.entrypointCandidates.map((item) => item.path).join(', ')}',
+      );
+    }
+    for (final entry in targetSelections.entries) {
+      final selection = entry.value as Map<String, Object?>;
+      if (selection['status'] == 'RESOLVED') {
+        runner.write(
+          '  ${entry.key.padRight(13)} ${selection['flavor'] ?? 'default'} → ${selection['entrypoint']}',
+        );
+      } else {
+        runner.write(
+          '  ${entry.key.padRight(13)} selection required; run hyfens init',
+        );
+      }
+    }
+    if (project.toolchainHint != null)
+      runner.write('  ${project.toolchainHint}');
     runner.write('');
     runner.write(
       'Flutter       ${environment.flutterVersion.padRight(12)} ${environment.flutterStatus}',
@@ -472,7 +693,15 @@ final class InitCommand extends _ToolCommand {
   InitCommand(super.runner) {
     argParser
       ..addFlag('dry-run', help: 'Show changes without modifying the project.')
-      ..addFlag('force', help: 'Replace the tool-owned metadata after review.');
+      ..addFlag('force', help: 'Replace the tool-owned metadata after review.')
+      ..addOption(
+        'flavor',
+        help: 'Override the automatically selected Flutter flavor.',
+      )
+      ..addOption(
+        'entrypoint',
+        help: 'Override the automatically selected Dart entrypoint under lib/.',
+      );
   }
 
   @override
@@ -484,12 +713,16 @@ final class InitCommand extends _ToolCommand {
 
   @override
   Future<void> run() async {
+    final selection = await _selectInitProject();
     final initialization =
         await ProjectInitializationService(
           toolchain: runner.toolchain,
           authStorage: runner.authClient.storage,
         ).initialize(
-          projectPath: projectPath,
+          projectPath: selection.projectPath,
+          flavor: selection.flavor,
+          entrypointPath: selection.entrypointPath,
+          targetSelections: selection.targetSelections,
           dryRun: argResults!['dry-run'] as bool,
           force: argResults!['force'] as bool,
         );
@@ -499,6 +732,7 @@ final class InitCommand extends _ToolCommand {
     final actions = initialization.actions;
     final data = <String, Object?>{
       'projectRoot': result.project.root.path,
+      'projectPath': result.project.relativeProjectPath,
       'dryRun': result.dryRun,
       'flutterVersion': result.environment.flutterVersion,
       'dartVersion': result.environment.dartVersion,
@@ -527,6 +761,76 @@ final class InitCommand extends _ToolCommand {
     runner.write('No private signing key was generated.');
     runner.write('Next: hyfens keys generate');
     runner.write('Next: hyfens release android --metadata-only');
+  }
+
+  Future<_InitSelection> _selectInitProject() async {
+    final discovery = runner.toolchain.projectReport(projectPath: projectPath);
+    var selected = discovery.selected;
+    if (selected == null) {
+      if (_nonInteractive(globalResults)) {
+        throw discovery.toFailure();
+      }
+      selected = _promptForProject(runner, discovery);
+    }
+    final effectiveProjectPath = selected.root.path;
+    final project = runner.toolchain.project(projectPath: effectiveProjectPath);
+    final existing =
+        HyfensProjectBinding.load(project.hyfensConfigFile) ??
+        (project.workspaceHyfensConfigFile.path == project.hyfensConfigFile.path
+            ? null
+            : HyfensProjectBinding.load(project.workspaceHyfensConfigFile));
+    final selectedFlavor = argResults!['flavor'] as String?;
+    final selectedEntrypoint = argResults!['entrypoint'] as String?;
+    final targetSelections = <String, HyfensTargetBinding>{};
+    final targets = <String>[
+      if (Directory(p.join(project.root.path, 'android')).existsSync())
+        'android',
+      if (Directory(p.join(project.root.path, 'ios')).existsSync()) 'ios',
+    ];
+    for (final targetName in targets) {
+      final persisted = existing?.selectionFor(targetName);
+      final targetFlavor = selectedFlavor ?? persisted?.flavor;
+      final targetEntrypoint = selectedEntrypoint ?? persisted?.entrypointPath;
+      try {
+        final resolved = runner.toolchain.resolveTarget(
+          target: targetName,
+          projectPath: effectiveProjectPath,
+          flavor: targetFlavor,
+          entrypointPath: targetEntrypoint,
+        );
+        targetSelections[targetName] = HyfensTargetBinding(
+          target: targetName,
+          flavor: resolved.flavor,
+          entrypointPath: resolved.entrypointPath,
+        );
+      } on ToolFailure catch (failure) {
+        final code = failure.diagnostics.single.code;
+        final canPrompt =
+            (code == 'T1304' || code == 'T1305' || code == 'T1307') &&
+            selectedFlavor == null &&
+            selectedEntrypoint == null &&
+            !_nonInteractive(globalResults);
+        if (!canPrompt) rethrow;
+        final choice = _promptForTarget(runner, project, targetName);
+        final resolved = runner.toolchain.resolveTarget(
+          target: targetName,
+          projectPath: effectiveProjectPath,
+          flavor: choice.flavor,
+          entrypointPath: choice.entrypointPath,
+        );
+        targetSelections[targetName] = HyfensTargetBinding(
+          target: targetName,
+          flavor: resolved.flavor,
+          entrypointPath: resolved.entrypointPath,
+        );
+      }
+    }
+    return _InitSelection(
+      projectPath: effectiveProjectPath,
+      flavor: selectedFlavor,
+      entrypointPath: selectedEntrypoint,
+      targetSelections: targetSelections,
+    );
   }
 }
 
@@ -759,13 +1063,7 @@ final class PatchCommand extends _ToolCommand {
     }
     var releaseId = argResults!['release'] as String?;
     final requestedFlavor = argResults!['flavor'] as String?;
-    final normalizedFlavor = requestedFlavor == null
-        ? null
-        : normalizeFlavorName(requestedFlavor);
     final requestedEntrypoint = argResults!['entrypoint'] as String?;
-    final normalizedEntrypoint = requestedEntrypoint == null
-        ? null
-        : normalizeEntrypointPath(requestedEntrypoint);
     if (targets.isNotEmpty) {
       final target = targets.single;
       final project = runner.toolchain.project(projectPath: projectPath);
@@ -783,15 +1081,19 @@ final class PatchCommand extends _ToolCommand {
           );
         }
       } else {
+        final automaticSelection = runner.toolchain.resolveTarget(
+          target: target,
+          projectPath: projectPath,
+          flavor: requestedFlavor,
+          entrypointPath: requestedEntrypoint,
+        );
         final matches = store
             .listReleases()
             .where(
               (release) =>
                   release.target == target &&
-                  (normalizedFlavor == null ||
-                      release.flavor == normalizedFlavor) &&
-                  (normalizedEntrypoint == null ||
-                      release.entrypointPath == normalizedEntrypoint),
+                  release.flavor == automaticSelection.flavor &&
+                  release.entrypointPath == automaticSelection.entrypointPath,
             )
             .toList(growable: false);
         if (matches.isEmpty) {

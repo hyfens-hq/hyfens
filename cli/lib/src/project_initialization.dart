@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'auth_storage.dart';
 import 'configuration.dart';
 import 'diagnostics.dart';
@@ -34,12 +36,34 @@ final class ProjectInitializationService {
 
   Future<ProjectInitialization> initialize({
     String? projectPath,
+    String? flavor,
+    String? entrypointPath,
+    Map<String, HyfensTargetBinding>? targetSelections,
     bool dryRun = false,
     bool force = false,
   }) async {
     final plannedProject = toolchain.project(projectPath: projectPath);
     final bindingFile = plannedProject.hyfensConfigFile;
-    final existingBinding = HyfensProjectBinding.load(bindingFile);
+    final existingBinding =
+        HyfensProjectBinding.load(bindingFile) ??
+        (plannedProject.workspaceHyfensConfigFile.path == bindingFile.path
+            ? null
+            : HyfensProjectBinding.load(
+                plannedProject.workspaceHyfensConfigFile,
+              ));
+    if (existingBinding?.projectPath != null &&
+        existingBinding!.projectPath != plannedProject.relativeProjectPath &&
+        !force) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.compatibility,
+        code: 'H1209',
+        summary: 'Persisted Flutter project selection is stale',
+        detail:
+            '${existingBinding.projectPath} != ${plannedProject.relativeProjectPath}',
+        path: bindingFile.path,
+        action: 'Run hyfens init --force after confirming the selected application.',
+      );
+    }
     if (existingBinding != null &&
         existingBinding.runtimeApplicationId != null &&
         existingBinding.runtimeApplicationId != plannedProject.applicationId &&
@@ -52,6 +76,31 @@ final class ProjectInitializationService {
             '${plannedProject.applicationId} != ${existingBinding.runtimeApplicationId}',
         path: bindingFile.path,
         action: 'Review the existing binding and pass --force only after confirming the exact application identity.',
+      );
+    }
+
+    final targets = <String>[
+      if (Directory('${plannedProject.root.path}/android').existsSync())
+        'android',
+      if (Directory('${plannedProject.root.path}/ios').existsSync()) 'ios',
+    ];
+    final resolvedSelections = <String, HyfensTargetBinding>{};
+    for (final target in targets) {
+      final requested = targetSelections?[target];
+      final persisted = existingBinding?.selectionFor(target);
+      final selected = toolchain.resolveTarget(
+        target: target,
+        projectPath: plannedProject.root.path,
+        flavor: requested?.flavor ?? flavor ?? persisted?.flavor,
+        entrypointPath:
+            requested?.entrypointPath ??
+            entrypointPath ??
+            persisted?.entrypointPath,
+      );
+      resolvedSelections[target] = HyfensTargetBinding(
+        target: target,
+        flavor: selected.flavor,
+        entrypointPath: selected.entrypointPath,
       );
     }
 
@@ -72,15 +121,31 @@ final class ProjectInitializationService {
         action: 'Run hyfens_profile_list and select an available profile.',
       );
     }
+    final sharedSelection = _sharedTargetSelection(resolvedSelections);
     final binding = HyfensProjectBinding(
       profile: activeProfile.name,
       organizationId: activeProfile.organizationId,
       applicationId: activeProfile.applicationId,
       environmentId: activeProfile.environmentId,
       runtimeApplicationId: result.project.applicationId,
+      projectPath: result.project.relativeProjectPath,
+      flavor: sharedSelection?.flavor ?? flavor,
+      entrypointPath: sharedSelection?.entrypointPath ?? entrypointPath,
+      targetSelections: sharedSelection == null
+          ? resolvedSelections
+          : const <String, HyfensTargetBinding>{},
     );
     final actions = <String>[...result.actions];
-    if (existingBinding == null || force) {
+    final selectionChanged =
+        existingBinding == null ||
+        existingBinding.projectPath != binding.projectPath ||
+        existingBinding.flavor != binding.flavor ||
+        existingBinding.entrypointPath != binding.entrypointPath ||
+        !_sameTargetSelections(
+          existingBinding.targetSelections,
+          binding.targetSelections,
+        );
+    if (selectionChanged || force) {
       actions.add(
         '${existingBinding == null ? 'create' : 'replace'} ${result.project.relative(bindingFile)}',
       );
@@ -96,4 +161,34 @@ final class ProjectInitializationService {
       actions: List.unmodifiable(actions),
     );
   }
+}
+
+HyfensTargetBinding? _sharedTargetSelection(
+  Map<String, HyfensTargetBinding> selections,
+) {
+  if (selections.isEmpty) return null;
+  final first = selections.values.first;
+  return selections.values.every(
+        (selection) =>
+            selection.flavor == first.flavor &&
+            selection.entrypointPath == first.entrypointPath,
+      )
+      ? first
+      : null;
+}
+
+bool _sameTargetSelections(
+  Map<String, HyfensTargetBinding> left,
+  Map<String, HyfensTargetBinding> right,
+) {
+  if (left.length != right.length) return false;
+  for (final entry in left.entries) {
+    final other = right[entry.key];
+    if (other == null ||
+        other.flavor != entry.value.flavor ||
+        other.entrypointPath != entry.value.entrypointPath) {
+      return false;
+    }
+  }
+  return true;
 }

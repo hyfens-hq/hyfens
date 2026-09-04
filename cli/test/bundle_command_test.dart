@@ -261,6 +261,7 @@ Future<_CommandResult> _runTool(List<String> arguments) async {
 Future<Directory> _createProject() async {
   final project = await Directory.systemTemp.createTemp('hyfens-cli-bundle-');
   await Directory('${project.path}/lib').create(recursive: true);
+  await File('${project.path}/lib/main.dart').writeAsString('void main() {}\n');
   await File('${project.path}/pubspec.yaml').writeAsString('''
 name: bundle_cli_test
 version: 1.0.0

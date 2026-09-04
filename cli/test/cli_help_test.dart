@@ -115,6 +115,7 @@ void main() {
   test('release and patch help expose flavor entrypoint options', () async {
     final release = await _runCli(const <String>['release', '--help']);
     final patch = await _runCli(const <String>['patch', '--help']);
+    final init = await _runCli(const <String>['init', '--help']);
 
     expect(release.exitCode, 0, reason: release.stderr);
     expect(release.stdout, contains('--flavor'));
@@ -122,6 +123,9 @@ void main() {
     expect(patch.exitCode, 0, reason: patch.stderr);
     expect(patch.stdout, contains('--flavor'));
     expect(patch.stdout, contains('--entrypoint'));
+    expect(init.exitCode, 0, reason: init.stderr);
+    expect(init.stdout, contains('--flavor'));
+    expect(init.stdout, contains('--entrypoint'));
   });
 
   test(

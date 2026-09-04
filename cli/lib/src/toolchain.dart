@@ -1567,8 +1567,66 @@ final class HyfensToolchain {
   FlutterProject project({String? projectPath}) =>
       _discovery.discover(projectPath: projectPath);
 
+  ProjectDiscoveryReport projectReport({String? projectPath}) =>
+      _discovery.inspect(projectPath: projectPath);
+
+  FlutterTargetSelection resolveTarget({
+    required String target,
+    String? projectPath,
+    String? flavor,
+    String? entrypointPath,
+  }) {
+    final current = project(projectPath: projectPath);
+    final config = this.config(current);
+    final binding = _bindingFor(current);
+    _validatePersistedProject(current, binding);
+    final persistedTarget = binding?.selectionFor(target);
+    return current.resolveTarget(
+      target: target,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+      persistedFlavor: binding?.targetSelections.isEmpty == true
+          ? binding?.flavor
+          : null,
+      persistedEntrypoint: binding?.targetSelections.isEmpty == true
+          ? binding?.entrypointPath
+          : null,
+      persistedTarget: persistedTarget,
+      configuredEntrypoints: config.entrypoints[target],
+    );
+  }
+
   ToolConfig config(FlutterProject project) =>
       ToolConfig.load(project.configFile);
+
+  HyfensProjectBinding? _bindingFor(FlutterProject project) {
+    final local = HyfensProjectBinding.load(project.hyfensConfigFile);
+    if (local != null) return local;
+    if (p.normalize(project.workspaceHyfensConfigFile.path) ==
+        p.normalize(project.hyfensConfigFile.path)) {
+      return null;
+    }
+    return HyfensProjectBinding.load(project.workspaceHyfensConfigFile);
+  }
+
+  void _validatePersistedProject(
+    FlutterProject project,
+    HyfensProjectBinding? binding,
+  ) {
+    if (binding?.projectPath == null ||
+        binding!.projectPath == project.relativeProjectPath) {
+      return;
+    }
+    throw ToolFailure.single(
+      exitCode: ToolExitCode.compatibility,
+      code: 'H1209',
+      summary: 'Persisted Flutter project selection is stale',
+      detail: '${binding.projectPath} != ${project.relativeProjectPath}',
+      path: project.hyfensConfigFile.path,
+      action:
+          'Run hyfens init --force after confirming the selected application.',
+    );
+  }
 
   EntrypointSelection _resolveEntrypoint({
     required FlutterProject project,
@@ -1577,27 +1635,27 @@ final class HyfensToolchain {
     String? flavor,
     String? entrypointPath,
   }) {
-    final selection = config.resolveEntrypoint(
+    final binding = _bindingFor(project);
+    _validatePersistedProject(project, binding);
+    final persistedTarget = binding?.selectionFor(target);
+    final selected = project.resolveTarget(
       target: target,
       flavor: flavor,
       entrypointPath: entrypointPath,
+      persistedFlavor: binding?.targetSelections.isEmpty == true
+          ? binding?.flavor
+          : null,
+      persistedEntrypoint: binding?.targetSelections.isEmpty == true
+          ? binding?.entrypointPath
+          : null,
+      persistedTarget: persistedTarget,
+      configuredEntrypoints: config.entrypoints[target],
     );
-    final entrypoint = File(
-      p.join(project.root.path, selection.entrypointPath),
+    return EntrypointSelection(
+      target: selected.target,
+      entrypointPath: selected.entrypointPath,
+      flavor: selected.flavor,
     );
-    if (!isWithin(project.root, entrypoint) ||
-        FileSystemEntity.typeSync(entrypoint.path, followLinks: false) !=
-            FileSystemEntityType.file) {
-      throw ToolFailure.single(
-        exitCode: ToolExitCode.environment,
-        code: 'T1402',
-        summary: 'Flutter entrypoint was not found',
-        detail: selection.entrypointPath,
-        path: project.relative(entrypoint),
-        action: 'Create the entrypoint under lib/ or pass --entrypoint with the Dart file used by this flavor.',
-      );
-    }
-    return selection;
   }
 
   EntrypointSelection _resolveReleaseEntrypoint({
@@ -1606,6 +1664,18 @@ final class HyfensToolchain {
     String? flavor,
     String? entrypointPath,
   }) {
+    final recordedProjectPath = release.build['projectPath'];
+    if (recordedProjectPath is String &&
+        recordedProjectPath != project.relativeProjectPath) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.compatibility,
+        code: 'R5007',
+        summary: 'Release baseline belongs to a different Flutter project',
+        detail: '$recordedProjectPath != ${project.relativeProjectPath}',
+        action:
+            'Run hyfens release for the selected application before patching.',
+      );
+    }
     final requestedFlavor = flavor == null ? null : normalizeFlavorName(flavor);
     final requestedEntrypoint = entrypointPath == null
         ? null
@@ -2218,6 +2288,8 @@ final class HyfensToolchain {
       'updateUrl': config.updateUrl,
       'entrypoint': selection.entrypointPath,
       'flavor': selection.flavor,
+      'projectPath': current.relativeProjectPath,
+      'workspaceType': current.workspaceType.name,
     });
     final applicationId =
         config.applicationIdFor(target, flavor: selection.flavor) ??
@@ -2241,6 +2313,8 @@ final class HyfensToolchain {
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
       'entrypoint': selection.entrypointPath,
       'flavor': selection.flavor,
+      'projectPath': current.relativeProjectPath,
+      'workspaceType': current.workspaceType.name,
     });
     final plan = _instrumentationPlanner.build(
       project: current,
@@ -2289,6 +2363,8 @@ final class HyfensToolchain {
       ...buildResult,
       'entrypoint': selection.entrypointPath,
       if (selection.flavor != null) 'flavor': selection.flavor,
+      'projectPath': current.relativeProjectPath,
+      'workspaceType': current.workspaceType.name,
     };
     final stagedArtifactPath = build.remove('artifactPath');
     if (stagedArtifactPath is String) stagedArtifact = File(stagedArtifactPath);

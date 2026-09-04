@@ -23,6 +23,8 @@ outside the public documentation tree.
 
 - [CLI reference](cli.md) — command surface, profiles, authentication, and
   project workflow.
+- [Flutter project discovery](cli/project-discovery.md) — automatic app,
+  flavor, entrypoint, Melos, Pub Workspace, and CI selection.
 - [MCP](mcp.md) — the built-in stdio server for compatible AI coding agents.
 - [Diagnostics](diagnostics.md) — stable diagnostic codes and remediation.
 

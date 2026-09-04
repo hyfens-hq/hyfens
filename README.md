@@ -1,294 +1,233 @@
-# Hyfens
+<p align="center">
+  <img src="dashboard/brand-mark.svg" alt="Hyfens logo" width="96">
+</p>
 
-Hyfens is an open-source Flutter live-update foundation for signed over-the-air
-patches to supported ordinary Dart and Flutter code. The current OSS boundary
-is a local and single-node self-hosted developer workflow. It is not a
-production SaaS, high-availability service, or store-policy approval.
+<h1 align="center">Hyfens</h1>
 
-The public command name is `hyfens`:
+<p align="center">
+  Ship supported Dart fixes to your Flutter app without rebuilding and
+  reinstalling the whole app.
+</p>
 
-```text
-hyfens login → profile → hyfens init → release → patch → deploy
-```
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache License 2.0"></a>
+  <a href="https://github.com/hyfens-hq/hyfens/releases"><img src="https://img.shields.io/github/v/release/hyfens-hq/hyfens" alt="Latest release"></a>
+</p>
 
-## Repository boundary
+## What is Hyfens?
 
-This public OSS repository contains the reusable runtime, CLI, self-hosted
-control plane, and client dashboard under `dashboard/`. Managed marketing,
-editorial, and hosted operations are outside this source tree and its release
-archives. See the
-[OSS/Cloud source boundary](docs/OSS_CLOUD_SOURCE_BOUNDARY.md) for the
-deployment topology and the
-[Cloud commercial boundary](docs/HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md) for the
-managed-service model.
+Hyfens lets a Flutter team create a native release once, then deliver signed
+updates to supported Dart and Flutter code.
 
-The [developer platform contract](docs/HYFENS_DEVELOPER_PLATFORM_CONTRACT.md)
-is the source of truth for this command surface and its security boundaries.
+The public project includes the Hyfens CLI, runtime, MCP server, control plane,
+and Customer/Instance Workspace for self-hosted installations. The private
+Hyfens Cloud Platform Console is not part of the public dashboard image.
 
-## License and editions
+## Install
 
-The Hyfens OSS software is licensed under the [Apache License 2.0](LICENSE)
-(SPDX: `Apache-2.0`). It is self-hostable and includes the complete baseline
-CLI, runtime, protocol, control-plane, dashboard, and single-node deployment
-path. Third-party components retain their own licenses; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and
-[docs/ASSET_PROVENANCE.md](docs/ASSET_PROVENANCE.md).
+On macOS or Linux, install the latest native CLI:
 
-[Hyfens Cloud](docs/HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md) is the managed
-commercial service. Its value is hosted infrastructure, upgrades, monitoring,
-backups, availability, security maintenance, team collaboration, advanced
-rollout controls, enterprise governance, and support. The OSS and Cloud
-products use the same CLI and core protocol; Cloud does not hide baseline
-self-host functionality. Hyfens names and brand assets are governed separately
-by [TRADEMARKS.md](TRADEMARKS.md).
-
-## Dashboard surface
-
-The public dashboard is the **Customer/Instance Workspace**. It is the
-tenant-scoped developer and self-host administration surface for an
-organization’s applications, environments, delivery records, audit, team,
-credentials, support contract, and settings. It ships in `dashboard/` and in
-the `hyfens-dashboard` image so a self-hosted installation remains complete
-without a private Cloud repository.
-
-The managed Cloud product composes the customer experience at
-`app.hyfens.com`. Hyfens's global **Platform Console**—at
-`platform.hyfens.com`—is a private Cloud web product for cross-tenant
-organizations, commercial operations, Cloud support, staff, managed
-operations, and platform audit. Its frontend is not shipped in the public OSS
-dashboard image. The public repository retains only the shared auth/API
-audience contract needed by the control plane and Cloud web client.
-
-Self-hosted instances use their own origin and discovered/configured API
-endpoint; they do not use `app.hyfens.com` or require `hyfens-cloud-web`. See
-the [dashboard and web product separation](docs/architecture/dashboard-separation.md)
-and [approved boundary audit](docs/architecture/web-product-boundary-audit.md)
-for the ownership and authorization contract.
-
-## Install the CLI
-
-The canonical executable is `hyfens`. The packaged `tool` executable is
-only a deprecated compatibility shim.
-
-### macOS / Linux
-
-Install the latest published release without Dart or Flutter:
-
-```bash
+~~~bash
 curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
-```
+~~~
 
-Pin an explicit release with `--version v<version>`. The installer detects
-macOS/Linux and x64/arm64, verifies `SHA256SUMS` before extraction, and
-prints PATH guidance without modifying project files or `~/.hyfens`.
+Or use Homebrew:
 
-### Homebrew
-
-Install directly from the published Homebrew tap with one command:
-
-```bash
+~~~bash
 brew install hyfens-hq/tap/hyfens
-```
+~~~
 
-Homebrew adds the tap automatically and trusts only the requested formula.
-If you have already added the tap manually and want to keep using the short
-`brew install hyfens` form, trust only this formula once:
+On Windows with Scoop:
 
-```bash
-brew trust --formula hyfens-hq/tap/hyfens
-```
-
-Do not disable Homebrew tap trust globally.
-
-### Windows
-
-The published Scoop bucket provides the same release archives:
-
-```powershell
+~~~powershell
 scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket
 scoop install hyfens
-```
+~~~
 
-WinGet publication is an external Microsoft submission gate. Until it is
-available, use the direct Windows archive from the GitHub Release.
+## Check the installation
 
-### Direct release archive
+~~~bash
+hyfens --version
+hyfens doctor
+~~~
 
-Download the matching archive and verify its `SHA256SUMS` entry before
-running `bin/hyfens`. See [CLI distribution](docs/cli-distribution.md) for
-archive names, Windows PowerShell instructions, upgrade, and uninstall
-guidance.
+## Your first Hyfens project
 
-## Quick start
+Sign in, then run Hyfens from your Flutter project:
 
-After installation, run these commands from the Flutter project you want to
-operate on. See [Getting started](docs/getting-started.md) for the complete
-local and self-hosted flow.
+~~~bash
+hyfens login
 
-```bash
+cd my_flutter_app
 hyfens doctor
 hyfens init
 hyfens keys generate
-hyfens status
+~~~
+
+Hyfens reads the project automatically. It can find normal Flutter apps,
+flavors, custom Dart entrypoints, Melos workspaces, Pub Workspaces, and
+multiple apps. It asks only when it cannot choose safely. The saved
+hyfens.yaml file contains project and release selection metadata, not
+credentials or signing keys.
+
+## Create your first release
+
+A release is the native application baseline that can later receive patches.
+
+~~~bash
 hyfens release android
+~~~
 
-# Edit supported ordinary Dart/Flutter code, then:
+For iOS, run:
+
+~~~bash
+hyfens release ios
+~~~
+
+## Ship your first patch
+
+Change supported Dart or Flutter code, then create and verify a signed patch:
+
+~~~bash
 hyfens patch android
+hyfens verify <patch-file>
 hyfens deploy
-```
+~~~
 
-The currently tested toolchain family is Flutter `3.47.x` with Dart `3.13.x`.
-Other versions are outside the declared evidence boundary until separately
-validated.
+Use ios instead of android for an iOS patch. The patch command prints the
+artifact path to verify. Deployment uses the active Hyfens profile.
 
-## Managed and self-hosted control planes
+## Flavors and monorepos
 
-With no host override, the managed profile uses the canonical Cloud API base:
+Automatic discovery is the normal path:
 
-```text
-https://api.hyfens.com/
-```
+~~~bash
+cd my_flutter_app
+hyfens init
+hyfens release android
+~~~
 
-The older `https://api.hyfens.com/p2/` deployment alias remains accepted for
-existing profiles and self-hosted compatibility; it is not an API version.
-The public API version is negotiated through discovery (`v1`). This endpoint
-and its health/readiness evidence are not a promise of public signup,
-production availability, or a hosted release download.
+If a project has several apps or flavors, Hyfens shows the candidates and
+persists your choice. It never silently chooses a production flavor.
 
-For a self-hosted instance, select the endpoint once at login and keep it in a
-named profile:
+For a Melos or Pub Workspace, run from the workspace root:
 
-```bash
-hyfens login --host https://hyfens.example.com --profile acme
-hyfens profile current
-hyfens profile use acme
-```
+~~~text
+my_workspace/
+  apps/
+    mobile/
+  packages/
+    design_system/
+    api/
+~~~
 
-Profiles contain endpoint and organization/application/environment metadata,
-never passwords, JWTs, session secrets, bearer tokens, signing keys, or other
-private material. Credentials are bound to the normalized endpoint origin and
-API base path; a session from one host is not sent to another. Remote
-credential-bearing requests require HTTPS. HTTP is permitted only for an
-explicit loopback development endpoint such as `127.0.0.1`.
+~~~bash
+cd my_workspace
+hyfens init
+hyfens release android
+~~~
 
-## Authentication and CI
+Pure Dart packages, Flutter plugins, and shared packages are not release
+targets. You can also run Hyfens from the selected app directory.
 
-Human sessions are separate from project configuration. The preferred storage
-is the native OS credential store. The portable fallback is a `~/.hyfens/`
-directory with mode `0700` and credential files with mode `0600`. Logout
-revokes the server session and removes local session material. Access JWTs are
-short-lived at the proven 15-minute (`15m`) value; server sessions are
-revocable and last 30 days (`30d`) by default. Authentication signing material
-is separate from Patch Format signing material.
+### Advanced overrides
 
-The contract defines browser Authorization Code + PKCE and device-code login
-interfaces. The static approval pages live under `dashboard/cli/authorize/`
-and `dashboard/device/`; a deployment must advertise their URLs and allow the
-dashboard origin explicitly. Use them only when the instance's
-`/.well-known/hyfens` discovery response advertises the method. The
-[self-hosted deployment guide](deploy/self-hosted/README.md) documents the
-operator authentication seam.
+Use overrides for CI, temporary alternate builds, or an ambiguous repository:
 
-For responsible vulnerability disclosure, see the
-[security policy](SECURITY.md).
+~~~bash
+hyfens init --project apps/mobile
+hyfens release android --flavor dev
+hyfens patch android --flavor dev
+hyfens release android --entrypoint lib/src/flavors/dev.dart
+~~~
 
-CI must use a scoped, expirable, revocable service/API key through
-`HYFENS_TOKEN`; do not put a human session or a token value in source control:
+The project selector is relative to the repository. The flavor and entrypoint
+must describe the same application configuration used by the release.
 
-```yaml
-steps:
-  - name: Deploy Hyfens patch
-    env:
-      HYFENS_TOKEN: ${{ secrets.HYFENS_TOKEN }}
-    run: hyfens deploy
-```
+Read the complete [project discovery guide](docs/cli/project-discovery.md) for
+workspace selection, CI behavior, toolchain managers, and diagnostics.
 
-SSH is an infrastructure/operator mechanism, never a developer
-authentication path.
+## Hyfens Cloud and self-hosted
 
-## AI agents / MCP
+Hyfens Cloud is the managed service:
 
-The v0.1.1 CLI can serve the bounded Hyfens workflow to compatible coding
-agents over local MCP stdio. Authenticate outside the client, then launch the
-server:
-
-```bash
+~~~bash
 hyfens login
+~~~
+
+For a self-hosted control plane, provide its HTTPS host:
+
+~~~bash
+hyfens login --host https://your-hyfens.example.com
+~~~
+
+Self-hosted deployments include the Customer/Instance Workspace. See the
+[self-hosting guide](deploy/self-hosted/README.md).
+
+## MCP and AI agents
+
+Run the built-in MCP server for a compatible coding agent:
+
+~~~bash
 hyfens mcp
-```
+~~~
 
-The server reuses the selected Hyfens profile/session and exposes structured
-project, release, patch, verification, deploy, rollback, and profile tools; it
-does not pass raw credentials to the agent. The generic client process mapping
-is `command: hyfens` with `args: [mcp]`. See the [MCP documentation](docs/mcp.md)
-for self-hosted profiles, isolation details, the exact tool catalog, and
-troubleshooting.
+See the [MCP guide](docs/mcp.md) for setup and tool details.
 
-## What the workflow proves
+## What can be patched?
 
-Within the declared local evidence boundary, Hyfens can build an exact release
-baseline, classify changes, create and verify a signed bounded patch, register
-and promote it through a local/single-node control plane, and retain the
-runtime's release/signature/sequence checks and base rollback behavior. The
-runtime remains the authority for downloaded bytes; a server or object store
-cannot make an invalid patch valid.
+| Change | Patch |
+| --- | :---: |
+| Dart business logic | Yes |
+| Flutter widgets and state | Yes |
+| Supported async Dart code | Yes |
+| Native Kotlin or Swift | No |
+| AndroidManifest or Info.plist | No |
+| New native plugin or dependency | No |
 
-The supported patch subset is bounded. Native code, manifests, permissions,
-entitlements, dependency changes, and unsupported Dart/Flutter semantics
-require a normal store release or separate review. Hyfens makes no claim of
-arbitrary-Dart patching, zero risk, App Store or Google Play approval, or
-compliance certification.
+Native changes need a new native release. See the [support matrix](docs/dart-support-matrix.md)
+for the current boundary.
 
-## Self-hosted release
+## Common fixes
 
-For a single-node installation from published versioned images, use the
-[self-hosted release package](deploy/self-hosted/README.md). It includes
-PostgreSQL, MinIO, the control plane, the dashboard, first-owner bootstrap
-steps, and the required host-level TLS reverse-proxy boundary. It binds the
-application ports to loopback by default and does not claim HA or managed
-backups.
+**Hyfens found multiple apps**
 
-## Migration from `tool`
+Run hyfens init and choose the app, or use
+hyfens release android --project apps/mobile.
 
-`tool` is a deprecated compatibility name, not a second CLI. For an existing
-checkout:
+**Hyfens found multiple flavors**
 
-1. Replace new command examples and scripts with `hyfens`.
-2. Run `hyfens doctor` and `hyfens status` before changing project metadata.
-3. Run `hyfens init` and review the generated `hyfens.yaml` binding. It must
-   contain only safe organization/application/environment identifiers.
-4. Keep any legacy `tool.yaml` and `.tool/` evidence until the new binding and
-   a fresh release have been checked. Do not manually rename or copy these
-   files to force a migration.
-5. Keep signing keys and existing local release/patch evidence in their
-   protected locations. Never copy session material into project files or
-   profiles.
-6. Re-authenticate per host and verify `hyfens profile current`; do not
-   manually move credentials between endpoints.
+Run hyfens init to save one, or pass --flavor explicitly for a temporary
+build.
 
-Do not maintain independent `tool` and `hyfens` workflows. A checkout that
-still exposes the compatibility entry point may emit a deprecation notice;
-follow that notice and use the canonical name for new automation.
+**No valid Dart entrypoint**
 
-## External gates and backlog
+Check the project with hyfens doctor and pass --entrypoint only when the
+entrypoint is a real executable Dart file.
 
-The following remain explicit external gates or limitations:
+**A native change was detected**
 
-- browser-PKCE or device-code auth as a generally deployed service feature;
-- AWS/provider acceptance, public ingress hardening, durable object retention,
-  production key recovery/rotation, or HA/DR;
-- independent customer-application and physical-device acceptance beyond the
-  recorded fixtures;
-- App Store/Google Play, legal, or compliance approval;
-- arbitrary Dart/native/dependency patching;
-- WinGet submission, platform code signing/notarization, and any additional
-  package-manager channels while their external repositories are being
-  provisioned.
+Create a new native release. Hyfens fails closed instead of producing an
+unsafe patch.
 
-The CLI distribution workflow publishes direct GitHub Release archives. A
-source checkout remains available for contributors and environments where a
-native archive is not yet available.
+**Not logged in**
 
-See [CLI reference](docs/cli.md), [Getting started](docs/getting-started.md),
-the [self-hosted deployment guide](deploy/self-hosted/README.md), and the
-[support matrix](docs/dart-support-matrix.md) for public usage and limitations.
+Run hyfens login and check the selected profile with hyfens profile current.
+
+## Learn more
+
+- [Getting started](docs/getting-started.md)
+- [CLI reference](docs/cli.md)
+- [Project discovery](docs/cli/project-discovery.md)
+- [Flutter support matrix](docs/dart-support-matrix.md)
+- [Self-hosted deployment](deploy/self-hosted/README.md)
+- [Architecture](docs/architecture/dashboard-separation.md)
+
+## Contributing
+
+Read the [contributing guide](CONTRIBUTING.md), [security policy](SECURITY.md),
+and [developer documentation](docs/README.md).
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

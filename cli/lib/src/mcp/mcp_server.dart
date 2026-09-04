@@ -172,11 +172,15 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
         'project_path': _pathSchema(),
         'dry_run': Schema.bool(description: 'Preview local initialization.'),
         'force': Schema.bool(description: 'Replace existing tool.yaml.'),
+        'flavor': _flavorSchema(),
+        'entrypoint': _entrypointSchema(),
       }),
       (args) => adapter.projectInit(
         projectPath: _optionalPath(args, 'project_path'),
         dryRun: _optionalBool(args, 'dry_run') ?? false,
         force: _optionalBool(args, 'force') ?? false,
+        flavor: _optionalString(args, 'flavor'),
+        entrypointPath: _optionalString(args, 'entrypoint'),
       ),
       mutation: true,
     );
@@ -191,6 +195,8 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
           'architecture': Schema.string(maxLength: 32),
           'build_mode': Schema.string(maxLength: 32),
           'metadata_only': Schema.bool(),
+          'flavor': _flavorSchema(),
+          'entrypoint': _entrypointSchema(),
         },
         required: const ['target'],
       ),
@@ -200,6 +206,8 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
         architecture: _optionalString(args, 'architecture') ?? 'arm64',
         buildMode: _optionalString(args, 'build_mode') ?? 'release',
         metadataOnly: _optionalBool(args, 'metadata_only') ?? false,
+        flavor: _optionalString(args, 'flavor'),
+        entrypointPath: _optionalString(args, 'entrypoint'),
       ),
       mutation: true,
     );
@@ -217,10 +225,17 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
       'hyfens_patch_create',
       'MUTATION: analyzes changed supported Dart functions, signs a patch with '
           'the configured local key, and advances the local sequence.',
-      _schema({'project_path': _pathSchema(), 'release_id': _releaseSchema()}),
+      _schema({
+        'project_path': _pathSchema(),
+        'release_id': _releaseSchema(),
+        'flavor': _flavorSchema(),
+        'entrypoint': _entrypointSchema(),
+      }),
       (args) => adapter.patchCreate(
         projectPath: _optionalPath(args, 'project_path'),
         releaseId: _optionalRelease(args, 'release_id'),
+        flavor: _optionalString(args, 'flavor'),
+        entrypointPath: _optionalString(args, 'entrypoint'),
       ),
       mutation: true,
     );
@@ -479,10 +494,19 @@ final class HyfensMcpAdapter {
       (await toolchain.status(projectPath: projectPath)).toJson();
 
   Future<Map<String, Object?>> doctor({String? projectPath}) async {
+    final report = toolchain.projectReport(projectPath: projectPath);
+    if (!report.isResolved) {
+      return <String, Object?>{
+        'result': 'NEEDS_SELECTION',
+        'discovery': report.toJson(),
+      };
+    }
     final project = toolchain.project(projectPath: projectPath);
     final environment = await toolchain.doctor(projectPath: project.root.path);
     return <String, Object?>{
+      'result': 'READY',
       'project': _projectJson(project),
+      'targetSelections': _targetSelections(toolchain, project),
       'environment': environment.toJson(),
     };
   }
@@ -540,11 +564,15 @@ final class HyfensMcpAdapter {
 
   Future<Map<String, Object?>> projectInit({
     String? projectPath,
+    String? flavor,
+    String? entrypointPath,
     bool dryRun = false,
     bool force = false,
   }) async {
     final initialization = await this.initialization.initialize(
       projectPath: projectPath,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
       dryRun: dryRun,
       force: force,
     );
@@ -564,6 +592,8 @@ final class HyfensMcpAdapter {
     String architecture = 'arm64',
     String buildMode = 'release',
     bool metadataOnly = false,
+    String? flavor,
+    String? entrypointPath,
   }) async => _releaseJson(
     await toolchain.release(
       target: target,
@@ -571,6 +601,8 @@ final class HyfensMcpAdapter {
       architecture: architecture,
       buildMode: buildMode,
       metadataOnly: metadataOnly,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
     ),
   );
 
@@ -585,10 +617,14 @@ final class HyfensMcpAdapter {
   Future<Map<String, Object?>> patchCreate({
     String? projectPath,
     String? releaseId,
+    String? flavor,
+    String? entrypointPath,
   }) async {
     final result = await toolchain.patch(
       projectPath: projectPath,
       releaseId: releaseId,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
     );
     final project = toolchain.project(projectPath: projectPath);
     return <String, Object?>{
@@ -834,6 +870,20 @@ StringSchema _profileSchema() => Schema.string(
   pattern: r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$',
 );
 
+StringSchema _flavorSchema() => Schema.string(
+  minLength: 1,
+  maxLength: 64,
+  pattern: r'^[A-Za-z][A-Za-z0-9_-]{0,63}$',
+  description: 'Flutter native flavor override.',
+);
+
+StringSchema _entrypointSchema() => Schema.string(
+  minLength: 1,
+  maxLength: 4096,
+  pattern: r'^lib/[^\x00\r\n]+\.dart$',
+  description: 'Project-relative Dart entrypoint under lib/.',
+);
+
 StringSchema _identifierSchema() => Schema.string(
   minLength: 1,
   maxLength: 256,
@@ -1017,9 +1067,52 @@ String _safeText(String value, {int maxLength = 2048}) {
 Map<String, Object?> _projectJson(FlutterProject project) => <String, Object?>{
   'package': project.packageName,
   'applicationId': project.applicationId,
+  'projectPath': project.relativeProjectPath,
+  'workspaceType': project.workspaceType.name,
+  'flavors': project.flavors,
+  'entrypoints': project.entrypointCandidates
+      .map((item) => item.toJson())
+      .toList(),
+  'toolchainHint': project.toolchainHint,
   if (project.version != null) 'version': _safeText(project.version!),
   'root': '<project>',
 };
+
+Map<String, Object?> _targetSelections(
+  HyfensToolchain toolchain,
+  FlutterProject project,
+) {
+  final result = <String, Object?>{};
+  for (final target in const <String>['android', 'ios']) {
+    if (!Directory(p.join(project.root.path, target)).existsSync()) continue;
+    try {
+      final selection = toolchain.resolveTarget(
+        target: target,
+        projectPath: project.root.path,
+      );
+      result[target] = <String, Object?>{
+        'status': 'RESOLVED',
+        ...selection.toJson(),
+      };
+    } on ToolFailure catch (failure) {
+      final diagnostic = failure.diagnostics.single;
+      if (!<String>{
+        'T1304',
+        'T1305',
+        'T1306',
+        'T1307',
+        'T1308',
+      }.contains(diagnostic.code)) {
+        rethrow;
+      }
+      result[target] = <String, Object?>{
+        'status': 'NEEDS_SELECTION',
+        'diagnostic': diagnostic.toJson(),
+      };
+    }
+  }
+  return result;
+}
 
 Map<String, Object?> _releaseJson(ReleaseRecord release) => <String, Object?>{
   'releaseId': release.releaseId,
