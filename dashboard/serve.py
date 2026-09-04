@@ -2,8 +2,8 @@
 """Serve the local dashboard and proxy its bounded control-plane routes.
 
 The proxy keeps the static page same-origin with a local control plane. It
-    forwards only the shared discovery, human-session, public onboarding, and
-    bounded customer/platform routes. It never logs request headers, follows
+forwards only the shared discovery, human-session, public onboarding, and
+bounded customer routes. It never logs request headers, follows
 upstream redirects, or exposes the control-plane origin to arbitrary browser
 requests.
 """
@@ -26,9 +26,6 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
 DISCOVERY_PATH = "/.well-known/hyfens"
 OVERVIEW_PATH = re.compile(r"^/v1/organizations/[a-z][a-z0-9_]{1,63}/overview$")
-PLATFORM_ORGANIZATIONS_PATH = re.compile(
-    r"^/v1/platform/organizations(?:/[^/]+)?$"
-)
 ORGANIZATION_METADATA_PATH = re.compile(
     r"^/v1/organizations/[^/]+/(?:members|credentials)$"
 )
@@ -80,40 +77,11 @@ CUSTOMER_SUPPORT_CASE_PATH = re.compile(
 CUSTOMER_SUPPORT_MESSAGE_PATH = re.compile(
     r"^/v1/organizations/[^/]+/support/cases/[^/]+/messages$"
 )
-PLATFORM_SUPPORT_CASE_PATH = re.compile(
-    r"^/v1/platform/support/cases/[^/]+$"
-)
-PLATFORM_SUPPORT_MESSAGE_PATH = re.compile(
-    r"^/v1/platform/support/cases/[^/]+/messages$"
-)
-PUBLIC_INVITATION_PATH = re.compile(
-    r"^/v1/(?:organization-invitations|platform-staff-invitations)/[^/]+$"
-)
+PUBLIC_INVITATION_PATH = re.compile(r"^/v1/organization-invitations/[^/]+$")
 OWNERSHIP_TRANSFER_PATH = re.compile(
     r"^/v1/organizations/[^/]+/ownership-transfer$"
 )
-PLATFORM_STAFF_UPDATE_PATH = re.compile(r"^/v1/platform/staff/[^/]+$")
-PLATFORM_STAFF_SESSIONS_PATH = re.compile(
-    r"^/v1/platform/staff/[^/]+/sessions/revoke$"
-)
-PLATFORM_STAFF_INVITATION_REVOKE_PATH = re.compile(
-    r"^/v1/platform/staff/invitations/[^/]+/revoke$"
-)
-PLATFORM_VIEW_PATH = re.compile(r"^/platform/organizations/[^/]+$")
-PLATFORM_HOST_ORGANIZATION_PATH = re.compile(r"^/organizations/[^/]+$")
-INVITATION_VIEW_PATH = re.compile(r"^/(?:invite|staff-invite)/[^/]+$")
-PLATFORM_HOSTNAMES = {"platform.hyfens.com"}
-PLATFORM_HOST_VIEW_PATHS = {
-    "/",
-    "/organizations",
-    "/audit",
-    "/operations",
-    "/users",
-    "/entitlements",
-    "/commercial",
-    "/support",
-    "/settings",
-}
+INVITATION_VIEW_PATH = re.compile(r"^/invite/[^/]+$")
 DASHBOARD_VIEW_PATHS = {
     "/",
     "/overview",
@@ -126,15 +94,6 @@ DASHBOARD_VIEW_PATHS = {
     "/audit",
     "/support",
     "/settings",
-    "/platform",
-    "/platform/organizations",
-    "/platform/audit",
-    "/platform/operations",
-    "/platform/users",
-    "/platform/entitlements",
-    "/platform/commercial",
-    "/platform/support",
-    "/platform/settings",
 }
 
 
@@ -153,16 +112,6 @@ _PROXY_ROUTES = {
     ("POST", "/v1/public/waitlist"): "public-waitlist",
     ("POST", "/v1/public/newsletter"): "public-newsletter",
     ("GET", "/auth/me"): "auth-me",
-    ("GET", "/v1/platform/metrics"): "platform-metrics",
-    ("GET", "/v1/platform/organizations"): "platform-organizations",
-    ("GET", "/v1/platform/audit"): "platform-audit",
-    ("GET", "/v1/platform/users"): "platform-users",
-    ("GET", "/v1/platform/entitlements"): "platform-entitlements",
-    ("GET", "/v1/platform/commercial"): "platform-commercial",
-    ("GET", "/v1/platform/commercial/history"): "platform-commercial-history",
-    ("GET", "/v1/platform/staff/invitations"): "platform-staff-invitations",
-    ("POST", "/v1/platform/staff/invitations"): "platform-staff-invite",
-    ("GET", "/v1/platform/support/cases"): "platform-support-cases",
 }
 
 _AUTHORIZATION_QUERY_KEYS = {
@@ -227,27 +176,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._proxy_request()
             return
         path = urllib.parse.urlparse(self.path).path
-        if (
-            path in DASHBOARD_VIEW_PATHS
-            or PLATFORM_VIEW_PATH.fullmatch(path)
-            or INVITATION_VIEW_PATH.fullmatch(path)
-            or self._is_platform_host_view(path)
-        ):
+        if path in DASHBOARD_VIEW_PATHS or INVITATION_VIEW_PATH.fullmatch(path):
             self.path = "/"
         super().do_GET()
-
-    def _is_platform_host_view(self, path: str) -> bool:
-        try:
-            hostname = urllib.parse.urlsplit(
-                f"//{self.headers.get('Host', '')}"
-            ).hostname
-        except ValueError:
-            return False
-        if hostname is None or hostname.lower() not in PLATFORM_HOSTNAMES:
-            return False
-        return path in PLATFORM_HOST_VIEW_PATHS or bool(
-            PLATFORM_HOST_ORGANIZATION_PATH.fullmatch(path)
-        )
 
     def do_POST(self) -> None:
         if self._proxy_route() is not None:
@@ -274,14 +205,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return direct
         if self.command == "GET" and OVERVIEW_PATH.fullmatch(parsed.path):
             return "overview"
-        if self.command == "GET" and PLATFORM_ORGANIZATIONS_PATH.fullmatch(parsed.path):
-            return (
-                "platform-organizations"
-                if parsed.path.endswith("/organizations")
-                else "platform-organization"
-            )
-        if self.command == "GET" and parsed.path == "/v1/platform/audit":
-            return "platform-audit"
         if self.command == "GET" and ORGANIZATION_METADATA_PATH.fullmatch(parsed.path):
             return "organization-metadata"
         if self.command == "GET" and ORGANIZATION_INVITATIONS_PATH.fullmatch(
@@ -326,12 +249,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return "invitation-revoke"
         if self.command == "POST" and OWNERSHIP_TRANSFER_PATH.fullmatch(parsed.path):
             return "ownership-transfer"
-        if self.command == "PATCH" and PLATFORM_STAFF_UPDATE_PATH.fullmatch(parsed.path):
-            return "platform-staff-update"
-        if self.command == "POST" and PLATFORM_STAFF_SESSIONS_PATH.fullmatch(parsed.path):
-            return "platform-staff-sessions-revoke"
-        if self.command == "POST" and PLATFORM_STAFF_INVITATION_REVOKE_PATH.fullmatch(parsed.path):
-            return "platform-staff-invitation-revoke"
         if self.command == "GET" and CUSTOMER_SUPPORT_CASES_PATH.fullmatch(parsed.path):
             return "support-cases"
         if self.command == "POST" and CUSTOMER_SUPPORT_CASES_PATH.fullmatch(parsed.path):
@@ -340,12 +257,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return "support-case"
         if self.command == "POST" and CUSTOMER_SUPPORT_MESSAGE_PATH.fullmatch(parsed.path):
             return "support-message"
-        if self.command == "GET" and PLATFORM_SUPPORT_CASE_PATH.fullmatch(parsed.path):
-            return "platform-support-case"
-        if self.command == "PATCH" and PLATFORM_SUPPORT_CASE_PATH.fullmatch(parsed.path):
-            return "platform-support-update"
-        if self.command == "POST" and PLATFORM_SUPPORT_MESSAGE_PATH.fullmatch(parsed.path):
-            return "platform-support-message"
         return None
 
     def _proxy_request(self) -> None:
@@ -360,26 +271,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 route == "auth-authorize-get"
                 and self._authorization_query_is_safe(parsed.query)
             )
-            or route in {
-                "platform-metrics",
-                "platform-commercial",
-                "platform-commercial-history",
-                "platform-organizations",
-                "platform-organization",
-                "platform-audit",
-                "platform-users",
-                "platform-entitlements",
-                "platform-support-cases",
-                "platform-support-case",
-                "platform-support-update",
-                "platform-support-message",
-                "platform-staff-invitations",
-                "platform-staff-invite",
-                "platform-staff-update",
-                "platform-staff-sessions-revoke",
-                "platform-staff-invitation-revoke",
-                "support-cases",
-            }
+            or route == "support-cases"
             and self._query_is_safe(route, parsed.query)
         ):
             self._json_error(400, "Query parameters are not supported on this route")
@@ -388,16 +280,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if route in {
             "auth-me",
             "overview",
-            "platform-metrics",
-            "platform-commercial",
-            "platform-commercial-history",
-            "platform-organizations",
-            "platform-organization",
-            "platform-audit",
-            "platform-support-cases",
-            "platform-support-case",
-            "platform-support-update",
-            "platform-support-message",
             "support-cases",
             "support-case-create",
             "support-case",
@@ -418,11 +300,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "member-remove",
             "invitation-revoke",
             "ownership-transfer",
-            "platform-staff-invitations",
-            "platform-staff-invite",
-            "platform-staff-update",
-            "platform-staff-sessions-revoke",
-            "platform-staff-invitation-revoke",
             "auth-authorize-post",
             "auth-device-approve",
         }:
@@ -439,23 +316,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         target = f"{self.server.api_origin}{parsed.path}"
         if parsed.query and route in {
             "auth-authorize-get",
-            "platform-metrics",
-            "platform-commercial",
-            "platform-commercial-history",
-            "platform-organizations",
-            "platform-organization",
-            "platform-audit",
-            "platform-users",
-            "platform-entitlements",
-            "platform-support-cases",
-            "platform-support-case",
-            "platform-support-update",
-            "platform-support-message",
-            "platform-staff-invitations",
-            "platform-staff-invite",
-            "platform-staff-update",
-            "platform-staff-sessions-revoke",
-            "platform-staff-invitation-revoke",
             "support-cases",
             "support-case",
             "support-message",
@@ -466,22 +326,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if authorization and route in {
             "auth-me",
             "overview",
-            "platform-metrics",
-            "platform-commercial",
-            "platform-commercial-history",
-            "platform-organizations",
-            "platform-organization",
-            "platform-audit",
             "organization-metadata",
             "application-create",
             "application-update",
             "application-archive",
-            "platform-users",
-            "platform-entitlements",
-            "platform-support-cases",
-            "platform-support-case",
-            "platform-support-update",
-            "platform-support-message",
             "support-cases",
             "support-case-create",
             "support-case",
@@ -500,11 +348,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "ownership-transfer",
             "invitation-preview",
             "invitation-accept",
-            "platform-staff-invitations",
-            "platform-staff-invite",
-            "platform-staff-update",
-            "platform-staff-sessions-revoke",
-            "platform-staff-invitation-revoke",
             "auth-authorize-post",
             "auth-device-approve",
         }:
@@ -577,30 +420,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         except ValueError:
             return False
         allowed = {
-            "platform-metrics": {"profile"},
-            "platform-commercial": {"profile"},
-            "platform-commercial-history": {"profile", "limit", "offset"},
-            "platform-organizations": {"profile", "q", "limit", "offset"},
-            "platform-organization": {"profile"},
-            "platform-audit": {"profile", "organization_id", "limit", "offset"},
-            "platform-users": {"profile", "q", "limit", "offset"},
-            "platform-entitlements": {"profile"},
-            "platform-staff-invitations": {"profile"},
-            "platform-staff-invite": {"profile"},
-            "platform-staff-update": {"profile"},
-            "platform-staff-sessions-revoke": {"profile"},
-            "platform-staff-invitation-revoke": {"profile"},
-            "platform-support-cases": {
-                "profile",
-                "status",
-                "q",
-                "organization_id",
-                "limit",
-                "offset",
-            },
-            "platform-support-case": {"profile"},
-            "platform-support-update": {"profile"},
-            "platform-support-message": {"profile"},
             "support-cases": {"status", "q", "limit", "offset"},
         }.get(route, set())
         if not set(values).issubset(allowed):
@@ -641,12 +460,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         # Never log request headers: they may contain the control credential.
         message = format % args
         message = re.sub(
-            r"(/(?:invite|staff-invite)/)[^?\s/]+",
+            r"(/invite/)[^?\s/]+",
             r"\1:redacted",
             message,
         )
         message = re.sub(
-            r"(/v1/(?:organization-invitations|platform-staff-invitations)/)[^?\s/]+",
+            r"(/v1/organization-invitations/)[^?\s/]+",
             r"\1:redacted",
             message,
         )

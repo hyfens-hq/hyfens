@@ -1,61 +1,102 @@
 # OSS / Cloud source boundary
 
-Status: FROZEN — implemented as an OSS source boundary with separately
-maintained Cloud services.
+Status: AUTHORITATIVE — current repository ownership
 
-The public Hyfens repository contains the reusable developer product and the
-self-hosted reference path. It does not contain the marketing website or the
-editorial CMS.
+Hyfens is an open-source core plus a private managed Cloud product. The
+source boundary is intentionally product-oriented: public self-hosting stays
+complete, while global Hyfens business and operator tooling is not shipped in
+the public dashboard image.
 
-## Public OSS repository
+## Public `hyfens` repository
 
-The OSS repository owns:
+The public repository owns:
 
 - the Flutter runtime, verifier, patch format, compiler, and instrumenter;
-- the `hyfens` CLI and its compatibility shim;
-- the self-hosted control plane and deployment definition;
-- the dependency-free client dashboard in `dashboard/`; and
-- the dashboard's browser-auth and discovery surfaces.
+- the `hyfens` CLI and compatibility shim;
+- the control plane, shared auth/discovery/device contracts, and customer API;
+- self-hosted PostgreSQL/object-storage/Compose deployment; and
+- the dependency-free Customer/Instance Workspace in `dashboard/`.
 
-The dashboard is read-only wherever the control plane does not expose a safe,
-authoritative mutation contract. It is usable against both managed and
-self-hosted control planes through the same endpoint/profile model.
-
-## Separately maintained Cloud services
-
-The separately maintained Cloud web surface owns:
-
-- the `hyfens.com` marketing website;
-- the editorial CMS and its content-management UI;
-- Cloud-only marketing/content integrations; and
-- the managed web deployment and edge configuration for those surfaces.
-
-It is not a dependency of the OSS build and must not be copied into an OSS
-release or source archive.
-
-## Runtime seam
-
-The OSS dashboard and the private Cloud web surfaces communicate through the
-existing control-plane interface. They do not share a database, session store,
-CMS implementation, or source tree at runtime. Auth/session authority remains
-in the control plane; the dashboard and CMS use the appropriate scoped browser
-surface.
-
-The deployment topology is therefore:
+The OSS workspace provides the customer lifecycle required by a self-hosted
+installation:
 
 ```text
-hyfens.com         → Cloud marketing web
-managed dashboard → OSS dashboard build
-api.hyfens.com     → managed control plane
-self-hosted        → OSS control plane + OSS dashboard
+organization → application → environment
 ```
 
-This split keeps one client dashboard implementation available to self-hosted
-operators while allowing the hosted marketing and editorial product to evolve
-privately.
+including customer applications, environments, releases, patches, artifacts,
+deployments, promotion/status, members/invitations, credentials, support
+contract, audit, settings, browser auth, CLI authorization, and device
+approval. Source-dependent release/patch operations remain CLI-driven where
+the local Flutter project and signing boundary are required.
 
-The commercial packaging rule is documented in
-[`HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md`](HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md):
-OSS provides the core workflow, while Cloud monetizes managed operation and
-service convenience. The private website and CMS are not treated as the
-commercial moat, and no unimplemented Cloud entitlement is advertised.
+The published `hyfens-dashboard` image is retained as a compatibility name
+for this Customer/Instance Workspace only. The current OSS artifact does not
+contain the global Platform Console, commercial UI, Cloud support queue,
+internal notes, staff administration, managed-fleet operations, or platform
+audit UI.
+
+## Private `hyfens-cloud-web` repository
+
+The private Cloud repository owns:
+
+- Hyfens marketing and CMS;
+- Cloud billing and subscription composition;
+- Cloud Customer Workspace extensions around the public customer contract;
+- the global Platform Console at `platform.hyfens.com`;
+- global organizations, commercial projections, entitlements, support
+  backoffice, internal notes, staff administration, managed operations, and
+  platform audit.
+
+The Cloud repository must not copy the entire OSS customer application. It
+should consume compatible auth/API contracts and add Cloud-only composition or
+extensions where needed. Platform navigation and business logic remain
+Cloud-owned rather than becoming conditional OSS components.
+
+## Shared contracts
+
+The repositories integrate through documented/versioned contracts, not
+filesystem-relative imports or a shared database. The reusable boundary
+includes:
+
+- human auth, refresh, logout, PKCE, device authorization, and discovery;
+- `customer` and `platform` authorization audiences and capability semantics;
+- structured API errors, endpoint/profile normalization, and customer API
+  models; and
+- stable design tokens, formatters, redaction helpers, and small UI
+  primitives where reuse is proven.
+
+The control plane currently retains bounded `/v1/platform/...` projections as
+public/shared API contracts consumed by the private Cloud Console. Their
+continued presence is not evidence that the OSS frontend should ship platform
+code. A future Cloud-private backend extraction is a separate migration with
+its own compatibility, authorization, and security review.
+
+## Deployment topology
+
+```text
+hyfens.com                 → Cloud marketing/CMS
+app.hyfens.com             → Cloud Customer Workspace composition
+platform.hyfens.com        → Cloud Platform Console
+api.hyfens.com             → managed control plane
+self-hosted instance       → OSS control plane + OSS Customer/Instance Workspace
+```
+
+Self-hosted deployments use their own origin and discovered/configured API
+endpoint. They do not require `hyfens-cloud-web`, Cloud credentials, Cloud
+billing, global support, or Hyfens staff identities. Local instance health and
+operator configuration remain OSS concerns only when they genuinely describe
+that installation.
+
+## Licensing and commercial boundary
+
+The public repository is Apache-2.0. Previously published combined artifacts
+remain public and immutable; this source split does not rewrite history or
+retroactively remove rights. Future private Cloud source is not a substitute
+for a complete self-hosted baseline. The managed value is operated
+infrastructure, Cloud support, commercial services, and global operations,
+not withholding the core customer workflow from OSS.
+
+See [dashboard and web product separation](architecture/dashboard-separation.md),
+[Customer Workspace](product/customer-workspace.md), [Platform Console](product/platform-console.md), and the
+[approved boundary audit](architecture/web-product-boundary-audit.md).

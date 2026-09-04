@@ -1,75 +1,78 @@
 # Hyfens Cloud commercial boundary
 
-Status: ADOPTED — 2026-08-31
+Status: AUTHORITATIVE — adopted 2026-09-04
 
-Hyfens uses an open-source core plus a managed Cloud service. The commercial
-boundary is operational: customers may run the core themselves, while Cloud
-customers pay Hyfens to operate the control-plane and delivery infrastructure
-for them.
+Hyfens combines an Apache-2.0 open-source core with a private managed Cloud
+service. Customers may operate the core themselves; Cloud customers pay
+Hyfens to operate managed infrastructure and provide Cloud-only services.
 
-## What remains in OSS
+## What remains public OSS
 
-The public repository remains useful for a complete self-hosted workflow:
+The public repository provides a complete self-hosted baseline:
 
 - Flutter runtime, verifier, patch format, compiler, and instrumenter;
-- `hyfens` CLI and the deprecated `tool` compatibility shim;
-- control plane and self-hosted deployment definition;
-- client dashboard and browser-auth/discovery surfaces; and
-- the documented release, patch, deploy, verify, promote, and rollback
-  protocol.
+- `hyfens` CLI and compatibility shim;
+- control plane, shared identity/API contracts, and self-host deployment;
+- Customer/Instance Workspace for organization, application, environment,
+  delivery, team, credentials, support contract, audit, and settings; and
+- documented release, patch, deploy, verify, promote, and rollback protocols.
 
-The dashboard is intentionally OSS. It is the reusable client surface for
-both self-hosted installations and the hosted product. Cloud access must not
-depend on a hidden or privately modified dashboard fork.
+Self-hosting must not require a private Cloud repository, Cloud credentials,
+global staff identity, or managed-service account. The OSS
+`hyfens-dashboard` image is the customer/instance web image only.
 
-## What Cloud customers pay for
+## What belongs to private Cloud
 
-Hyfens Cloud packages the operational work around the same product contract:
+The private `hyfens-cloud-web` project owns the managed product composition:
 
-- hosted control-plane and artifact-delivery infrastructure;
-- managed authentication, storage, TLS, upgrades, and routine operations;
-- reduced setup and maintenance burden for teams that do not want to operate
-  PostgreSQL, R2-compatible storage, ingress, and recovery procedures; and
-- Cloud account, billing, support, retention, and service commitments when
-  those capabilities and terms are actually implemented and published.
+- marketing, CMS, and Cloud account onboarding;
+- billing, subscriptions, commercial projections, and plan/entitlement
+  administration;
+- Cloud Customer Workspace extensions for managed-service context;
+- the global Platform Console at `platform.hyfens.com`;
+- global customer/organization inspection;
+- Cloud support queue, staff-only notes, and staff administration; and
+- managed fleet/provider operations and platform audit.
 
-The current repository and single-node deployment evidence prove a bounded
-managed shape. They do not yet prove high availability, an SLA, managed
-backups, usage billing, or enterprise controls. Those must not be advertised
-as live entitlements until separately implemented and validated.
+These surfaces operate Hyfens's managed business/platform. They are not
+required for an ordinary self-hosted installation and are not included in the
+public dashboard artifact.
 
-## Packaging direction
+## Shared product contract
+
+Cloud and OSS use compatible identity, session, discovery, customer API, and
+authorization contracts. The Cloud Customer Workspace should reuse the public
+customer lifecycle through a documented/versioned contract rather than
+maintaining a copied implementation. Shared contracts do not make private
+commercial or Platform Console code part of OSS.
+
+The control plane currently retains bounded platform projections as a public
+API/security contract. If commercial, support, staff, or managed-operation
+backend logic is later privatized, that is a separate compatibility and
+authorization migration; the frontend source boundary does not silently
+remove public APIs.
+
+## Editions
 
 | Offering | Value | Status |
 | --- | --- | --- |
-| OSS / self-hosted | Run the core workflow on infrastructure you operate | Available as source/reference path |
-| Hyfens Cloud | Use the workflow without operating the control plane and storage | Managed service direction; public plans not yet announced |
-| Enterprise self-hosted | Paid support, operational assistance, and additional controls | Future; do not claim as available |
+| OSS / self-hosted | Run the core workflow on infrastructure you operate | Available as public source and deployment reference |
+| Hyfens Cloud | Use the workflow without operating the control plane and storage | Managed service direction; only implemented capabilities are advertised |
+| Enterprise self-hosted | Paid support, operational assistance, and additional controls | Future; not a current entitlement |
 
-Self-hosting is not a failed Cloud conversion. It is the adoption and
-control path for teams with infrastructure, data-residency, or operational
-requirements. Cloud is the convenience and service path.
+Cloud convenience includes hosted control-plane and artifact-delivery
+infrastructure, managed authentication/storage/TLS/upgrades, and Cloud support
+where those capabilities and terms are actually implemented and published.
+The repository does not claim HA, SLA, managed backups, usage billing, or
+enterprise controls without separate evidence.
 
-## Source and implementation rule
+## Licensing
 
-The public/private source seam is documented in
-[`OSS_CLOUD_SOURCE_BOUNDARY.md`](OSS_CLOUD_SOURCE_BOUNDARY.md):
+The public OSS repository is licensed under the Apache License 2.0. Previously
+published OSS dashboard artifacts remain public and immutable; moving future
+Platform Console source to the private Cloud repository does not rewrite
+history or retroactively revoke Apache rights. The commercial boundary relies
+on managed service and operations, not on making the core customer workflow
+unavailable to self-hosters.
 
-- public OSS contains the reusable dashboard and self-hosted implementation;
-- private Cloud contains marketing, CMS, and Cloud web operations; and
-- future Cloud-only account, billing, entitlement, support, or hosted
-  operations capabilities must sit behind an explicit control-plane/service
-  interface rather than being scattered through the OSS runtime or CLI.
-
-The current public repository is licensed under Apache 2.0. That license gives
-third parties broad rights to use and commercially operate the public code.
-This plan therefore does not rely on source secrecy as the business moat. Any
-future license change or dual-licensing decision requires a separate legal and
-maintainer review before public launch.
-
-## Non-goals
-
-This document does not add billing, quotas, payment processing, plan
-entitlements, telemetry, SLA commitments, or enterprise feature gates. It
-freezes the packaging seam so those additions can be made later without
-weakening the OSS workflow or creating a second dashboard implementation.
+See [OSS/Cloud source boundary](OSS_CLOUD_SOURCE_BOUNDARY.md) and [dashboard and web product separation](architecture/dashboard-separation.md).

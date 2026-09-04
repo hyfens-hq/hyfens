@@ -446,60 +446,6 @@
         </div>
       </aside>
 
-      <aside id="platform-sidebar" class="sidebar platform-sidebar" aria-label="Platform Console navigation" hidden>
-        <div class="sidebar-header">
-          <a id="platform-sidebar-brand" class="brand-lockup" href="/platform" data-view-link="platform" aria-label="Hyfens Platform Console overview">
-            <img class="brand-mark" src="brand-mark.svg" alt="" aria-hidden="true">
-            <span class="brand-name">hyfens</span>
-            <span class="brand-product">platform console</span>
-          </a>
-          <button id="platform-sidebar-close" class="icon-button sidebar-close" type="button" aria-label="Close platform navigation">
-            <img src="icons/close_circle_outline.svg" width="18" height="18" alt="" aria-hidden="true">
-          </button>
-        </div>
-
-        <div class="platform-context" aria-label="Current platform scope">
-          <span class="context-label">Platform scope</span>
-          <div class="workspace-line">
-            <span class="workspace-glyph" aria-hidden="true">
-              <img src="icons/activity_outline.svg" width="18" height="18" alt="" aria-hidden="true">
-            </span>
-            <div>
-              <strong>Hyfens Platform</strong>
-              <span>Authorized operator view</span>
-            </div>
-          </div>
-          <p class="platform-context-note">Customer memberships and tenant switching stay in the Customer Workspace.</p>
-        </div>
-
-        <nav class="nav-groups" aria-label="Platform Console sections">
-          <div class="nav-group">
-            <p class="nav-label">Platform</p>
-            <a href="/platform" data-view-link="platform"><span class="nav-icon" aria-hidden="true"><img src="icons/home_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Overview</span></a>
-            <a href="/platform/organizations" data-view-link="platform-organizations"><span class="nav-icon" aria-hidden="true"><img src="icons/category_2_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Organizations</span></a>
-            <a href="/platform/audit" data-view-link="platform-audit"><span class="nav-icon" aria-hidden="true"><img src="icons/clipboard_text_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Security &amp; audit</span></a>
-            <a href="/platform/operations" data-view-link="platform-operations"><span class="nav-icon" aria-hidden="true"><img src="icons/activity_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Operations</span></a>
-          </div>
-          <div class="nav-group">
-            <p class="nav-label">Administration</p>
-            <a href="/platform/users" data-view-link="platform-users"><span class="nav-icon" aria-hidden="true"><img src="icons/profile_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Platform users</span></a>
-            <a href="/platform/entitlements" data-view-link="platform-entitlements"><span class="nav-icon" aria-hidden="true"><img src="icons/document_text_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Plans &amp; entitlements</span></a>
-            <a href="/platform/commercial" data-view-link="platform-commercial"><span class="nav-icon" aria-hidden="true"><img src="icons/document_text_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Commercial</span></a>
-            <a href="/platform/support" data-view-link="platform-support"><span class="nav-icon" aria-hidden="true"><img src="icons/message_text_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Support</span></a>
-            <a href="/platform/settings" data-view-link="platform-settings"><span class="nav-icon" aria-hidden="true"><img src="icons/setting_outline.svg" width="18" height="18" alt="" aria-hidden="true"></span><span>Platform settings</span></a>
-          </div>
-        </nav>
-
-        <div class="sidebar-footer platform-sidebar-footer">
-          <div class="sidebar-note">
-            <span class="status-marker status-marker-muted" aria-hidden="true"></span>
-            <span>Privileged operator surface</span>
-          </div>
-          <p>Platform APIs enforce audience and capability checks independently of this navigation.</p>
-          <button id="platform-logout-button" class="button button-quiet" type="button">Sign out</button>
-        </div>
-      </aside>
-
       <div class="app-main">
         <header class="topbar">
           <div class="topbar-leading">
@@ -612,21 +558,6 @@
                   <img class="select-arrow" src="icons/arrow_down_outline.svg" width="14" height="14" alt="" aria-hidden="true">
                 </span>
               </label>
-            </div>
-          </section>
-
-          <section id="platform-context-bar" class="context-bar platform-context-bar" aria-labelledby="platform-context-heading" hidden>
-            <div class="context-bar-heading">
-              <div class="context-heading-row">
-                <span class="context-label" id="platform-context-heading">Active context</span>
-                <span class="context-scope-note">Platform audience</span>
-              </div>
-              <strong>Hyfens Platform Console</strong>
-              <code>Cross-tenant metadata is bounded and read-only</code>
-            </div>
-            <div class="platform-context-summary">
-              <span class="metadata-label">Operator boundary</span>
-              <span>Platform capabilities are enforced by the control plane. Customer organization membership is not used as a directory.</span>
             </div>
           </section>
 

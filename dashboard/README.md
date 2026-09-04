@@ -1,19 +1,23 @@
-# Hyfens developer dashboard
+# Hyfens Customer/Instance Workspace
 
-This directory contains the dependency-free dashboard shell for a configured
-Hyfens dashboard host. The browser uses the control plane's human-session
-authentication routes and keeps the access and session tokens only in live
-memory. It does not use `localStorage`, `sessionStorage`, cookies, or token
-URLs.
+This directory contains the dependency-free customer web surface shipped by
+the public Hyfens repository. It is the self-hosted Customer/Instance
+Workspace, not the Hyfens Cloud Platform Console. The same customer concepts
+can be used by a managed Cloud composition, but the global platform operator
+surface is owned by the private `hyfens-cloud-web` project.
 
-The dashboard contains two explicit authenticated shells: Customer Workspace
-for one organization and Platform Console for authorized Hyfens operators.
-It renders authoritative projections and capability-driven unavailable states;
-it does not synthesize releases, patches, deployment records, revenue, or
-health from client-side guesses. Safe customer mutations include application
-and environment metadata, invitations/member administration, credentials,
-support cases, and promotion of an already admitted release. Source-dependent
-release/patch/rollback work remains CLI-driven.
+The workspace operates inside:
+
+```text
+Organization → Application → Environment
+```
+
+It provides tenant-scoped applications, environments, delivery records,
+members/invitations, credentials, support, audit, settings, and the browser
+authorization/device-approval surfaces required by the CLI. Release and patch
+creation remain CLI-driven because they depend on the local Flutter source
+tree and signing boundary. The browser only calls explicit control-plane
+operations for supported metadata and promotion actions.
 
 ## Run it locally
 
@@ -29,9 +33,9 @@ dart run bin/control_plane.dart \
   --port 18081
 ```
 
-For human sign-in, the control plane must also be started with its explicit
-human-auth signing configuration and an owner must exist. The dashboard does
-not accept the legacy control credential in the browser.
+For human sign-in, start the control plane with its explicit human-auth
+signing configuration and ensure an owner exists. The workspace does not
+accept the legacy control credential in the browser.
 
 In a second terminal, from the repository root, serve the page through the
 stdlib-only same-origin local proxy:
@@ -43,90 +47,76 @@ python3 dashboard/serve.py \
   --port 8080
 ```
 
-Open `http://127.0.0.1:8080/`. Dashboard sections use clean paths such as
-`/applications` and `/settings`; legacy hash fragments and temporary query
-parameters are removed when the page loads. The proxy forwards only these
-known routes:
+Open `http://127.0.0.1:8080/`. Customer sections use clean paths such as
+`/applications` and `/settings`; deep-link refresh is handled by the static
+customer fallback. The proxy forwards only reviewed auth, discovery, CLI
+authorization, device-approval, public onboarding, and customer/organization
+routes. It is not a generic browser proxy.
+
+The supported browser API surface includes:
 
 ```text
-GET  /.well-known/hyfens
-GET  /auth/authorize?{validated OAuth request}
-POST /auth/login
-POST /auth/refresh
-POST /auth/logout
-POST /auth/authorize
-POST /auth/token
-POST /auth/device/code
-POST /auth/device/token
-POST /auth/device/approve
-GET  /auth/me
-POST /v1/public/register
-POST /v1/public/waitlist
-POST /v1/public/newsletter
-GET  /v1/organizations/{organization_id}/overview
-GET  /v1/organizations/{organization_id}/support/cases
-POST /v1/organizations/{organization_id}/support/cases
-POST /v1/organizations/{organization_id}/support/cases/{case_id}/messages
-GET/PATCH /v1/platform/support/cases/{case_id}
-POST /v1/platform/support/cases/{case_id}/messages
-GET  /v1/platform/commercial
-GET  /v1/platform/commercial/history
-GET/POST /v1/platform/staff/invitations
-PATCH /v1/platform/staff/{user_id}
-POST /v1/platform/staff/{user_id}/sessions/revoke
-POST /v1/platform/staff/invitations/{invitation_id}/revoke
-GET/POST /v1/organization-invitations/{token}
-GET/POST /v1/platform-staff-invitations/{token}
-POST /v1/organizations/{organization_id}/ownership-transfer
+GET/POST  Auth v1, OAuth/PKCE, and device authorization routes
+GET       /.well-known/hyfens
+GET       /v1/organizations/{organization_id}/overview
+GET/PATCH /v1/organizations/{organization_id}/applications/{application_id}
+POST      /v1/organizations/{organization_id}/applications
+POST      /v1/organizations/{organization_id}/applications/{application_id}/archive
+POST      /v1/organizations/{organization_id}/applications/{application_id}/environments
+PATCH     /v1/organizations/{organization_id}/environments/{environment_id}
+POST      /v1/organizations/{organization_id}/environments/{environment_id}/archive
+GET/POST  organization members, invitations, credentials, and support cases
+POST      /v1/organizations/{organization_id}/ownership-transfer
+POST      /v1/organizations/{organization_id}/environments/{environment_id}/release-promotions
+GET/POST  public invitation preview and redemption routes
 ```
 
-The proxy also forwards the bounded application, environment, member,
-invitation, credential, and promotion routes used by the two shells. It does
-not become a generic browser proxy; every route, method, query parameter, and
-request body is validated before forwarding.
+Exact method, query, and body validation remains in `dashboard/serve.py` and
+the control plane. Customer mutations are tenant-scoped, capability-checked,
+validated, idempotent where required, and audited server-side.
 
-Public registration accepts exactly `{"email":"...","password":"..."}`
-and returns the same immediate `HumanLoginResult` JSON as password login. It
-is enabled only when `HYFENS_PUBLIC_REGISTRATION_ORGANIZATION_ID` names an
-existing server-side organization; the caller cannot select an organization,
-role, or capability. The waitlist and newsletter routes accept `email` plus
-optional bounded `name` and `source` fields and return
-`{"status":"accepted"}` for both new and duplicate submissions.
+The customer organization selector contains only organizations represented by
+the authenticated user's customer memberships. It is never a platform-wide
+directory. Platform organizations, commercial projections, staff
+administration, global support queues, managed operations, and platform audit
+are deliberately absent from this source and image.
 
-Invitation preview and acceptance routes are intentionally public so a
-recipient can redeem a link before signing in. The link bearer is not written
-to proxy logs, and the response contains only the organization/staff context,
-offered role, expiry, and lifecycle status. Authorized administrators retrieve
-new local invitation links once through the authenticated invitation-creation
-response; the browser does not display raw tokens outside that one-time link.
+## Authentication and secrets
+
+The browser uses the control plane's human-session authentication routes. Access
+and session tokens are kept in tab-scoped `sessionStorage` for the current
+static workspace; they are not persisted in `localStorage`, cookies, or token
+URLs. A browser context that cannot provide session storage remains usable only
+for the unauthenticated surface. Passwords, bearer credentials, signing keys,
+and provider secrets are never written to source, logs, documentation, or image
+build inputs.
+
 The CLI approval page is `/cli/authorize/` and the device approval page is
-`/device/`. Both keep password and session material in memory, call the
-shared human-auth routes, and never put a session credential in a URL. The
-control plane must allow the dashboard origin through its explicit
-`HYFENS_WEB_ORIGINS` setting when the page is hosted on a different origin.
-
-The dashboard does not fall back to a machine credential or request the
-current audit export because that response is not a browser-safe redacted
-projection. Audit records are rendered only when they arrive through the safe
-overview response.
+`/device/`. Both use the shared human-auth contract and must be advertised by
+the instance discovery response before use. A deployment must explicitly allow
+its workspace origin through `HYFENS_WEB_ORIGINS`.
 
 ## Container deployment
 
-For the supported PostgreSQL, MinIO, control-plane, and dashboard Compose
-installation, follow the public [self-hosted deployment guide](../deploy/self-hosted/README.md).
-The dashboard image receives its API base at container startup through
-`HYFENS_API_BASE`; it never bakes an endpoint or credential into the image.
+For the supported PostgreSQL, MinIO, control-plane, and customer workspace
+Compose installation, follow the public
+[self-hosted deployment guide](../deploy/self-hosted/README.md). The published
+`hyfens-dashboard` image contains only this Customer/Instance Workspace and
+its shared auth/discovery/device surfaces. It does not contain the Cloud
+Platform Console.
 
-## Backend boundaries
+## Product boundary
 
-The dashboard can display organization, application, environment, release,
-patch, rollout, artifact, redacted audit, support, subscription, and bounded
-platform records only when they are returned by the corresponding
-authoritative projection. Commercial metrics are unavailable when billing
-source data is unavailable or mixes currencies; payment history is never
-invented. Customer support responses exclude platform-internal notes.
+```text
+hyfens OSS             → Customer/Instance Workspace + self-host deployment
+hyfens-cloud-web       → Cloud composition + Platform Console
+platform.hyfens.com    → Cloud Platform Console
+api.hyfens.com         → managed control plane
+```
 
-Credential plaintext is shown once after issuance and is not stored by the
-dashboard. Customer and platform contexts use separate navigation and
-server-side authorization audiences. The platform organization directory is
-not implemented with customer membership switching.
+Self-hosted installations use their own origin and discovered/configured API
+endpoint; they do not require `hyfens-cloud-web`, Cloud credentials, or a
+global platform staff identity. See
+[`docs/architecture/dashboard-separation.md`](../docs/architecture/dashboard-separation.md)
+and [`docs/OSS_CLOUD_SOURCE_BOUNDARY.md`](../docs/OSS_CLOUD_SOURCE_BOUNDARY.md)
+for the complete ownership and contract boundary.

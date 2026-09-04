@@ -1,13 +1,14 @@
 # Platform Console
 
-Status: AUTHORITATIVE current product guide.
+Status: AUTHORITATIVE product contract; implementation owned by private Cloud.
 
 The Platform Console is the privileged operator surface for Hyfens itself. It
 is intended for authorized Hyfens owners, administrators, support, operations,
 security, and commercial operators where the corresponding capability exists.
-The canonical managed host is `platform.hyfens.com`; its DNS record, TLS
-certificate, edge route, and API-origin allow-list are active. Local
-development uses the `/platform` route root.
+The source owner is the private `hyfens-cloud-web` project. The canonical
+managed host is `platform.hyfens.com`; its DNS record, TLS certificate, edge
+route, and API-origin allow-list are active. Local Cloud development uses the
+`/platform` route root.
 
 ## Audience and boundary
 
@@ -117,5 +118,7 @@ flag requires the deployment's approved MFA integration. Support inspection
 is performed through platform APIs, not customer-session impersonation.
 
 See [dashboard separation architecture](../architecture/dashboard-separation.md)
-for routes and the [security architecture](../architecture/security.md) for
-the broader trust boundary.
+for routes and ownership, and the [security architecture](../architecture/security.md)
+for the broader trust boundary. The public OSS dashboard retains only the
+shared API/auth contract and the Customer/Instance Workspace required for
+self-hosting; it does not ship this console.

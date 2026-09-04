@@ -24,25 +24,27 @@ this milestone does not require a remote deployment.
 
 ## Dashboard audience and route contract
 
-The authenticated web product has separate product shells over shared auth,
-API transport, design tokens, and UI primitives:
+The public OSS web product is the Customer/Instance Workspace. It is served
+from a self-hosted instance origin and can be composed into the managed Cloud
+customer surface at `app.hyfens.com`. The private Cloud web product owns the
+global Platform Console at `platform.hyfens.com`.
 
 ```text
-app.hyfens.com or self-hosted instance origin
-  Customer Workspace
+OSS hyfens dashboard
+  Customer/Instance Workspace
 
-platform.hyfens.com
-  Hyfens Platform Console
+hyfens-cloud-web
+  Cloud Customer Workspace composition/extensions
+  Hyfens Cloud Platform Console
 
 api.hyfens.com or self-hosted control-plane origin
-  shared control-plane API
+  shared control-plane API and auth contracts
 ```
 
-Local development maps the same topology to `/` for the Customer Workspace
-and `/platform` for the Platform Console. A platform host maps `/`,
-`/organizations`, `/audit`, `/operations`, and `/settings` to the Platform
-Console. The customer organization selector is membership-scoped; it must
-never be used as a platform-wide organization directory.
+Local OSS development serves the Customer/Instance Workspace at `/`. Local
+Cloud development serves the Platform Console from its own `/platform` route
+root. The customer organization selector is membership-scoped; it must never
+be used as a platform-wide organization directory.
 
 Customer routes remain tenant-scoped under the selected organization:
 
@@ -58,7 +60,8 @@ Customer routes remain tenant-scoped under the selected organization:
 /settings                 Customer/account settings
 ```
 
-Platform routes are a separate audience and context:
+The shared API contract also defines the separate platform audience and
+platform projections consumed by the private Cloud Console:
 
 ```text
 /platform                  Platform overview
@@ -77,7 +80,9 @@ plus explicit capabilities such as `platform:overview`,
 `platform:organizations:read`, `platform:organizations:inspect`, and
 `platform:audit:read`. A platform token is not accepted by customer routes
 merely because the same human account exists, and a customer session cannot
-call `/v1/platform/*`.
+call `/v1/platform/*`. The public OSS dashboard does not ship the platform
+route/rendering code; retaining the protocol/API contract is not the same as
+shipping the private Platform Console.
 
 The current platform projection is intentionally read-only and bounded. It
 returns organization metadata, counts, safe application/environment metadata,

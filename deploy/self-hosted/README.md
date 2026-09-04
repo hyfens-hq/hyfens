@@ -5,7 +5,7 @@ published Hyfens images:
 
 - `hyfens-control-plane` for accounts, organization scope, metadata, auth, and
   release/patch records;
-- `hyfens-dashboard` for the browser UI;
+- `hyfens-dashboard` for the Customer/Instance Workspace browser UI;
 - PostgreSQL for metadata; and
 - MinIO as the bundled S3-compatible artifact store.
 
@@ -13,6 +13,11 @@ It is an operator starting point, not a high-availability or production
 readiness claim. Back up PostgreSQL and the object-store volume together,
 protect the auth signing seed, and put a TLS reverse proxy in front of the two
 loopback-bound application ports.
+
+The public dashboard image is customer/instance scoped. It does not contain
+Hyfens's global Platform Console, Cloud commercial operations, staff
+administration, global support queue, or managed-fleet operations. Those are
+private Cloud surfaces and are not required to run this self-hosted package.
 
 ## Install
 

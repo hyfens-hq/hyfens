@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const MANAGED_DASHBOARD_HOSTNAMES = new Set(['app.hyfens.com', 'platform.hyfens.com']);
+  const MANAGED_DASHBOARD_HOSTNAMES = new Set(['app.hyfens.com']);
 
   function isLoopback(hostname) {
     return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';

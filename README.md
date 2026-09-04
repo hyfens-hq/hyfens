@@ -42,29 +42,28 @@ products use the same CLI and core protocol; Cloud does not hide baseline
 self-host functionality. Hyfens names and brand assets are governed separately
 by [TRADEMARKS.md](TRADEMARKS.md).
 
-## Dashboard surfaces
+## Dashboard surface
 
-The authenticated web product has two explicit surfaces over the same
-authentication, API transport, and UI system:
+The public dashboard is the **Customer/Instance Workspace**. It is the
+tenant-scoped developer and self-host administration surface for an
+organization’s applications, environments, delivery records, audit, team,
+credentials, support contract, and settings. It ships in `dashboard/` and in
+the `hyfens-dashboard` image so a self-hosted installation remains complete
+without a private Cloud repository.
 
-- **Customer Workspace** — the tenant-scoped developer workspace for an
-  organization’s applications, environments, delivery records, audit, team,
-  credentials, and settings.
-- **Platform Console** — the privileged Hyfens operator surface for platform
-  metrics, the bounded organization directory, organization inspection, and
-  platform-audience audit/operations views.
+The managed Cloud product composes the customer experience at
+`app.hyfens.com`. Hyfens's global **Platform Console**—at
+`platform.hyfens.com`—is a private Cloud web product for cross-tenant
+organizations, commercial operations, Cloud support, staff, managed
+operations, and platform audit. Its frontend is not shipped in the public OSS
+dashboard image. The public repository retains only the shared auth/API
+audience contract needed by the control plane and Cloud web client.
 
-The intended managed hosts are `app.hyfens.com` for the Customer Workspace and
-`platform.hyfens.com` for the Platform Console. Local development exposes the
-same split as `/` and `/platform`; a self-hosted instance exposes the Customer
-Workspace on its own instance origin. DNS and production routing remain
-deployment configuration, not a requirement for the shared static bundle.
-
-The customer organization selector contains only organizations the signed-in
-user belongs to. It is not a platform-wide directory. Platform routes use an
-explicit platform audience and server-side capability checks. See the
-[dashboard separation architecture](docs/architecture/dashboard-separation.md)
-for the route and authorization contract.
+Self-hosted instances use their own origin and discovered/configured API
+endpoint; they do not use `app.hyfens.com` or require `hyfens-cloud-web`. See
+the [dashboard and web product separation](docs/architecture/dashboard-separation.md)
+and [approved boundary audit](docs/architecture/web-product-boundary-audit.md)
+for the ownership and authorization contract.
 
 ## Install the CLI
 

@@ -20,16 +20,6 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
             self._json(200, {"product": "hyfens", "apiVersion": "v1"})
             return
         parsed_path = urllib.parse.urlparse(self.path).path
-        if parsed_path in {"/v1/platform/metrics", "/v1/platform/commercial"}:
-            self._json(200, {"readOnly": True, "scope": "platform"})
-            return
-        if parsed_path.startswith(
-            "/v1/platform/organizations"
-        ) or parsed_path == "/v1/platform/audit" or parsed_path.startswith(
-            "/v1/platform/support/cases"
-        ):
-            self._json(200, {"readOnly": True, "scope": "platform"})
-            return
         if self.path.startswith("/v1/organizations/"):
             self._json(200, {"readOnly": True, "source": "upstream"})
             return
@@ -59,9 +49,6 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         ):
             self._json(200, {"readOnly": False, "scope": "customer"})
             return
-        if parsed_path.startswith("/v1/platform/support/cases/"):
-            self._json(200, {"readOnly": False, "scope": "platform"})
-            return
         if self.path in {"/auth/token", "/auth/device/code", "/auth/device/token", "/auth/device/approve"}:
             self._json(200, {"status": "accepted"})
             return
@@ -73,9 +60,6 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         self.__class__.calls.append(
             (self.command, self.path, self.headers.get("Authorization"), body)
         )
-        if urllib.parse.urlparse(self.path).path.startswith("/v1/platform/support/cases/"):
-            self._json(200, {"readOnly": False, "scope": "platform"})
-            return
         self._json(404, {"error": {"code": "NOT_FOUND"}})
 
     def _json(self, status, value):
@@ -210,63 +194,6 @@ class ProxyRouteTest(unittest.TestCase):
         self.assertEqual(_UpstreamHandler.calls[2][2], "Bearer memory-access")
         self.assertNotIn(b"not-in-url", body)
 
-    def test_platform_metrics_proxy_requires_auth_and_allows_only_profile_query(self):
-        status, _ = self.request("GET", "/v1/platform/metrics")
-        self.assertEqual(status, 401)
-        self.assertEqual(_UpstreamHandler.calls, [])
-
-        status, body = self.request(
-            "GET",
-            "/v1/platform/metrics",
-            headers={"Authorization": "Bearer memory-access"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["scope"], "platform")
-
-        status, _ = self.request(
-            "GET",
-            "/v1/platform/metrics?profile=super-admin",
-            headers={"Authorization": "Bearer memory-access"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(
-            _UpstreamHandler.calls[-1][0:3],
-            ("GET", "/v1/platform/metrics?profile=super-admin", "Bearer memory-access"),
-        )
-
-        status, _ = self.request(
-            "GET",
-            "/v1/platform/metrics?organization_id=secret",
-            headers={"Authorization": "Bearer memory-access"},
-        )
-        self.assertEqual(status, 400)
-        self.assertEqual(len(_UpstreamHandler.calls), 2)
-
-    def test_platform_projection_proxy_forwards_bounded_queries(self):
-        headers = {"Authorization": "Bearer memory-access"}
-        requests = (
-            "/v1/platform/organizations?profile=super-admin&q=acme",
-            "/v1/platform/organizations/org_demo?profile=super-admin",
-            "/v1/platform/audit?profile=super-admin&organization_id=org_demo",
-        )
-        for path in requests:
-            with self.subTest(path=path):
-                status, body = self.request("GET", path, headers=headers)
-                self.assertEqual(status, 200)
-                self.assertEqual(json.loads(body)["scope"], "platform")
-
-        self.assertEqual(
-            [call[1] for call in _UpstreamHandler.calls],
-            list(requests),
-        )
-        status, _ = self.request(
-            "GET",
-            "/v1/platform/organizations?profile=super-admin&token=secret",
-            headers=headers,
-        )
-        self.assertEqual(status, 400)
-        self.assertEqual(len(_UpstreamHandler.calls), len(requests))
-
     def test_proxy_forwards_browser_and_device_auth_routes_without_query_secrets(self):
         query = urllib.parse.urlencode(
             {
@@ -337,17 +264,13 @@ class ProxyRouteTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn(b"HyfensAuthFlow", body)
 
-    def test_proxy_forwards_support_and_commercial_routes_with_bounded_queries(self):
+    def test_proxy_forwards_customer_support_and_invitation_routes(self):
         headers = {"Authorization": "Bearer memory-access"}
         requests = (
-            ("GET", "/v1/platform/commercial?profile=super-admin"),
-            ("GET", "/v1/platform/support/cases?profile=super-admin&status=OPEN"),
             ("GET", "/v1/organizations/org_demo/support/cases"),
             ("GET", "/v1/organizations/org_demo/invitations"),
             ("POST", "/v1/organizations/org_demo/invitations"),
             ("POST", "/v1/organizations/org_demo/support/cases"),
-            ("PATCH", "/v1/platform/support/cases/case_demo?profile=super-admin"),
-            ("POST", "/v1/platform/support/cases/case_demo/messages?profile=super-admin"),
         )
         for method, path in requests:
             with self.subTest(method=method, path=path):
@@ -365,15 +288,6 @@ class ProxyRouteTest(unittest.TestCase):
             [(call[0], call[1]) for call in _UpstreamHandler.calls],
             list(requests),
         )
-
-        status, _ = self.request(
-            "PATCH",
-            "/v1/platform/support/cases/case_demo?profile=super-admin&token=secret",
-            {"status": "OPEN"},
-            headers=headers,
-        )
-        self.assertEqual(status, 400)
-        self.assertEqual(len(_UpstreamHandler.calls), len(requests))
 
     def test_auth_pages_load_runtime_config_before_auth_flow(self):
         pages = (
@@ -403,14 +317,6 @@ class ProxyRouteTest(unittest.TestCase):
             "/",
             "/overview",
             "/applications",
-            "/platform",
-            "/platform/organizations",
-            "/platform/organizations/org_demo",
-            "/platform/audit",
-            "/platform/operations",
-            "/platform/commercial",
-            "/platform/support",
-            "/platform/settings",
             "/support",
             "/settings",
         ):
@@ -420,23 +326,31 @@ class ProxyRouteTest(unittest.TestCase):
                 self.assertIn(b"Hyfens | Developer control plane", body)
         self.assertEqual(_UpstreamHandler.calls, [])
 
-    def test_platform_host_routes_serve_the_platform_shell_index(self):
+    def test_platform_routes_are_rejected_and_never_forwarded(self):
         for path in (
-            "/",
+            "/platform",
+            "/platform/organizations",
+            "/platform/organizations/org_demo",
+            "/platform/audit",
+            "/platform/operations",
             "/organizations",
             "/organizations/org_demo",
-            "/audit",
-            "/commercial",
-            "/support",
         ):
             with self.subTest(path=path):
-                status, body = self.request(
+                status, _ = self.request("GET", path)
+                self.assertEqual(status, 404)
+        for path in (
+            "/v1/platform/metrics",
+            "/v1/platform/organizations/org_demo",
+            "/v1/platform/audit",
+        ):
+            with self.subTest(path=path):
+                status, _ = self.request(
                     "GET",
                     path,
-                    headers={"Host": "platform.hyfens.com"},
+                    headers={"Authorization": "Bearer memory-access"},
                 )
-                self.assertEqual(status, 200)
-                self.assertIn(b"Platform Console", body)
+                self.assertEqual(status, 404)
         self.assertEqual(_UpstreamHandler.calls, [])
 
     def test_protected_routes_require_bearer_and_query_data_is_rejected(self):
@@ -672,27 +586,36 @@ class DashboardContractTest(unittest.TestCase):
         self.assertIn("data-page-transition", app_source)
         self.assertIn("requestAnimationFrame", app_source)
 
-    def test_dashboard_has_explicit_customer_and_platform_shell_contracts(self):
+    def test_dashboard_ships_customer_workspace_only(self):
         root = Path(__file__).resolve().parent
         markup = (root / "index.html").read_text(encoding="utf-8")
         app_source = (root / "app.js").read_text(encoding="utf-8")
+        proxy_source = (root / "serve.py").read_text(encoding="utf-8")
+        nginx_source = (root / "nginx.conf").read_text(encoding="utf-8")
 
         self.assertIn('id="app-view" class="app-view" data-shell="customer"', markup)
-        self.assertIn('id="platform-sidebar"', markup)
         self.assertIn('id="customer-context-bar"', markup)
-        self.assertIn('id="platform-context-bar"', markup)
         self.assertIn('href="/applications"', markup)
-        self.assertIn('href="/platform/organizations"', markup)
         self.assertIn('displayApiBase', (root / "auth-flow.js").read_text(encoding="utf-8"))
-        self.assertIn("const PLATFORM_HOSTNAMES = new Set", app_source)
-        self.assertIn("const PLATFORM_AUTHORIZATION_AUDIENCE = 'platform'", app_source)
         self.assertIn("function requestedLoginAudience", app_source)
         self.assertIn("authorizationAudience", app_source)
         self.assertIn("function applyShellMode()", app_source)
         self.assertIn("function customerProfileList()", app_source)
-        self.assertIn("function platformCapabilityForView", app_source)
-        self.assertIn("function renderPlatformOrganizationsPage", app_source)
         self.assertIn("function renderSettingsPage", app_source)
+        for source in (markup, app_source, proxy_source):
+            for marker in (
+                "Platform Console",
+                "platform.hyfens.com",
+                "/v1/platform",
+                "platform-sidebar",
+                "platform-context",
+                "platform-staff",
+                "staff-invite",
+            ):
+                with self.subTest(marker=marker):
+                    self.assertNotIn(marker, source)
+        self.assertIn("location = /platform", nginx_source)
+        self.assertIn("location ^~ /platform/", nginx_source)
 
     def test_dashboard_navigation_motion_is_fast_transform_only_and_reduced_safe(self):
         root = Path(__file__).resolve().parent

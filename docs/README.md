@@ -30,15 +30,17 @@ outside the public documentation tree.
 
 - [Customer Workspace](product/customer-workspace.md) — the tenant-scoped
   developer workspace at `app.hyfens.com` or a self-hosted origin.
-- [Platform Console](product/platform-console.md) — the privileged Hyfens
-  operator surface at `platform.hyfens.com`.
+- [Platform Console](product/platform-console.md) — the private Cloud-owned
+  privileged Hyfens operator contract at `platform.hyfens.com`.
 - [Cloud and self-hosted boundary](HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md) — what
   is provided by the managed service versus the Apache-licensed foundation.
 
 ## Architecture
 
-- [Architecture overview](architecture/dashboard-separation.md) — the two
-  dashboard shells, shared infrastructure, routes, APIs, and authorization.
+- [Architecture overview](architecture/dashboard-separation.md) — OSS/Cloud
+  web ownership, shared contracts, routes, APIs, and authorization.
+- [Web product boundary audit](architecture/web-product-boundary-audit.md) —
+  the approved repository and build ownership decision.
 - [Control plane](architecture/control-plane.md)
 - [Runtime](architecture/runtime.md)
 - [Patch lifecycle](architecture/patch-lifecycle.md)

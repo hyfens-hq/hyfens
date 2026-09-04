@@ -18,8 +18,10 @@ repository has been created and its Actions permissions are enabled:
 5. The workflow also attaches `SHA256SUMS` and `artifact-inventory.json`.
 
 The separate `release-images.yml` workflow publishes matching multi-architecture
-`hyfens-control-plane` and `hyfens-dashboard` images to GHCR. Both workflows
-fail if the tag does not match `cli/pubspec.yaml`.
+`hyfens-control-plane` and `hyfens-dashboard` images to GHCR. The public
+`hyfens-dashboard` image is the Customer/Instance Workspace only; the private
+Cloud Platform Console is not published as an OSS image. Both workflows fail
+if the tag does not match `cli/pubspec.yaml`.
 
 The workflows do not contain signing keys, package-manager tokens, or user
 credentials. Code signing and package-manager publication are separate release

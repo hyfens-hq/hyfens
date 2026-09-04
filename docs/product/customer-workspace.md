@@ -2,9 +2,11 @@
 
 Status: AUTHORITATIVE current product guide.
 
-The Customer Workspace is the tenant-scoped Hyfens developer surface. It is
-served from `app.hyfens.com` for managed deployments and from the selected
-instance origin for self-hosted deployments.
+The Customer/Instance Workspace is the tenant-scoped Hyfens developer
+surface. Its public source and self-hosted build live in the `hyfens` OSS
+repository. A managed Cloud composition may serve the same customer concepts
+from `app.hyfens.com`; it must consume compatible contracts rather than make
+self-hosting depend on the private Cloud repository.
 
 ## Audience and scope
 
@@ -111,11 +113,16 @@ other organizations’ cases are excluded by the server projection.
 
 ## Managed and self-hosted behavior
 
-The Customer Workspace is the same product surface for Hyfens Cloud and
-self-hosted instances. The selected profile supplies the endpoint and
-capabilities. Managed infrastructure, billing, and hosted operations are not
-invented in a self-hosted workspace; unavailable capabilities are stated as
+The Customer/Instance Workspace uses the same customer concepts for Hyfens
+Cloud and self-hosted instances. The selected profile supplies the endpoint
+and capabilities. Managed infrastructure, billing, and hosted operations are
+not invented in an OSS self-hosted workspace; Cloud-only extensions are
+composed by `hyfens-cloud-web` and unavailable capabilities are stated as
 such.
+
+The global Platform Console, Cloud commercial views, global support queue,
+Hyfens staff administration, and managed-fleet operations are not part of this
+workspace. The public `hyfens-dashboard` image contains this workspace only.
 
 See [dashboard separation architecture](../architecture/dashboard-separation.md),
 the [CLI guide](../cli.md), and the
