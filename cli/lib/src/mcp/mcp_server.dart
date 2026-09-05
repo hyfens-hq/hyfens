@@ -1093,6 +1093,11 @@ Map<String, Object?> _targetSelections(
       result[target] = <String, Object?>{
         'status': 'RESOLVED',
         ...selection.toJson(),
+        'applicationId': toolchain.resolveApplicationId(
+          project: project,
+          target: target,
+          flavor: selection.flavor,
+        ),
       };
     } on ToolFailure catch (failure) {
       final diagnostic = failure.diagnostics.single;

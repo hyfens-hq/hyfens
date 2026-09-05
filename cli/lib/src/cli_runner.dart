@@ -439,16 +439,6 @@ final class DoctorCommand extends _ToolCommand {
         (project.workspaceHyfensConfigFile.existsSync()
             ? HyfensProjectBinding.load(project.workspaceHyfensConfigFile)
             : null);
-    if (binding?.runtimeApplicationId != null &&
-        binding!.runtimeApplicationId != project.applicationId) {
-      throw ToolFailure.single(
-        exitCode: ToolExitCode.compatibility,
-        code: 'H1205',
-        summary: 'Project application identity does not match hyfens.yaml',
-        detail: '${project.applicationId} != ${binding.runtimeApplicationId}',
-        action: 'Run hyfens init --force after reviewing the exact identity.',
-      );
-    }
     final targetSelections = <String, Object?>{};
     var targetSelectionNeedsChoice = false;
     for (final target in const <String>['android', 'ios']) {
@@ -463,6 +453,11 @@ final class DoctorCommand extends _ToolCommand {
         targetSelections[target] = <String, Object?>{
           'status': 'RESOLVED',
           ...selection.toJson(),
+          'applicationId': runner.toolchain.resolveApplicationId(
+            project: project,
+            target: target,
+            flavor: selection.flavor,
+          ),
         };
       } on ToolFailure catch (failure) {
         final diagnostic = failure.diagnostics.single;
@@ -493,7 +488,7 @@ final class DoctorCommand extends _ToolCommand {
           .toList(),
       'targetSelections': targetSelections,
       'toolchainHint': project.toolchainHint,
-      'applicationId': project.applicationId,
+      'applicationId': binding?.runtimeApplicationId ?? project.applicationId,
       'pubspec': 'SUPPORTED',
       'pubspecLock': project.pubspecLockFile.existsSync()
           ? 'SUPPORTED'

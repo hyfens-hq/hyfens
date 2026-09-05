@@ -1622,6 +1622,42 @@ final class HyfensToolchain {
   ToolConfig config(FlutterProject project) =>
       ToolConfig.load(project.configFile);
 
+  /// Resolve the runtime's native identity for this exact build selection.
+  /// A legacy unflavored ID must not conceal a discovered flavor suffix.
+  String resolveApplicationId({
+    required FlutterProject project,
+    required String target,
+    String? flavor,
+    bool validateBinding = true,
+  }) {
+    final config = this.config(project);
+    final nativeIds = target == 'ios'
+        ? project.iosApplicationIds
+        : project.androidApplicationIds;
+    final nativeId = nativeIds[flavor ?? 'default'];
+    final configured = config.applicationIdFor(target, flavor: flavor);
+    final resolved =
+        configured ?? project.applicationIdFor(target, flavor: flavor);
+    final binding = validateBinding ? _bindingFor(project) : null;
+    final persisted = binding?.selectionFor(target);
+    final sameSelection = persisted?.flavor == flavor;
+    if ((nativeId != null && resolved != nativeId) ||
+        (sameSelection &&
+            binding?.runtimeApplicationId != null &&
+            binding!.runtimeApplicationId != resolved)) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.compatibility,
+        code: 'H1205',
+        summary: 'Selected native application identity conflicts with Hyfens configuration',
+        detail:
+            'The $target/${flavor ?? 'default'} identity does not match its persisted binding.',
+        action: 'Review tool.yaml and hyfens.yaml, then run hyfens init --force for the intended target. Create a new base release; do not retarget an existing release.',
+        storeReleaseRequired: true,
+      );
+    }
+    return resolved;
+  }
+
   HyfensProjectBinding? _bindingFor(FlutterProject project) {
     final local = HyfensProjectBinding.load(project.hyfensConfigFile);
     if (local != null) return local;
@@ -1867,6 +1903,7 @@ final class HyfensToolchain {
 
   Future<InitResult> init({
     String? projectPath,
+    String? applicationId,
     bool dryRun = false,
     bool force = false,
   }) async {
@@ -1895,8 +1932,15 @@ final class HyfensToolchain {
         action: 'Review it or pass --force to replace only the tool-owned configuration.',
       );
     }
-    final configText = ToolConfig(applicationId: current.applicationId)
-        .encode();
+    final configText = ToolConfig(
+      applicationId: applicationId ?? current.applicationId,
+      applicationIds: <String, Map<String, String>>{
+        if (current.androidApplicationIds.isNotEmpty)
+          'android': current.androidApplicationIds,
+        if (current.iosApplicationIds.isNotEmpty)
+          'ios': current.iosApplicationIds,
+      },
+    ).encode();
     final actions = <String>[
       '${existingConfig ? 'replace' : 'create'} ${current.relative(current.configFile)}',
       'create ${current.relative(store.root)}',
@@ -2275,6 +2319,11 @@ final class HyfensToolchain {
       flavor: flavor,
       entrypointPath: entrypointPath,
     );
+    final applicationId = resolveApplicationId(
+      project: current,
+      target: target,
+      flavor: selection.flavor,
+    );
     final store = ToolStore(current);
     final configuredPublicKey = store.resolveConfiguredPath(
       config.publicKeyPath,
@@ -2339,9 +2388,6 @@ final class HyfensToolchain {
       'projectPath': current.relativeProjectPath,
       'workspaceType': current.workspaceType.name,
     });
-    final applicationId =
-        config.applicationIdFor(target, flavor: selection.flavor) ??
-        current.applicationIdFor(target);
     final releaseId = releaseIdFor(
       applicationId: applicationId,
       sourceFingerprint: source.fingerprint,
@@ -2520,6 +2566,39 @@ final class HyfensToolchain {
     final paths = <String>{...baselineSources.keys, ...currentSources.keys};
     final items = <AnalysisItem>[];
     final diagnostics = <ToolDiagnostic>[...plan.diagnostics];
+    ToolDiagnostic? identityDiagnostic;
+    try {
+      final resolvedId = resolveApplicationId(
+        project: current,
+        target: release.target,
+        flavor: release.flavor,
+        validateBinding: false,
+      );
+      if (resolvedId != release.applicationId) {
+        identityDiagnostic = const ToolDiagnostic(
+          code: 'H1205',
+          severity: DiagnosticSeverity.error,
+          summary: 'Application identity differs from the release baseline',
+          detail: 'The selected native/configured identity cannot retarget an existing release.',
+          action: 'Create a new base release for the intended native identity.',
+          storeReleaseRequired: true,
+        );
+      }
+    } on ToolFailure catch (failure) {
+      identityDiagnostic = failure.diagnostics.single;
+    }
+    if (identityDiagnostic != null) {
+      diagnostics.add(identityDiagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: '<application identity>',
+          detail: identityDiagnostic.detail,
+          functionIds: const <String>[],
+          diagnostic: identityDiagnostic,
+        ),
+      );
+    }
     final environment = _environment.inspectVersionsSync();
     ResourceSnapshot? currentResourceSnapshot;
     try {

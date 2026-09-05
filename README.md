@@ -179,7 +179,7 @@ See the [MCP guide](docs/mcp.md) for setup and tool details.
 | Change | Patch |
 | --- | :---: |
 | Dart business logic | Verified subset |
-| Flutter widgets, state and async code | Verified subset |
+| Flutter widgets, state and async code | Real-app CLI acceptance not yet proven |
 | Changed, added or removed assets/fonts | New base release |
 | New tree-shaken icon glyph | New base release |
 | Native code, plugins or configuration | New base release |

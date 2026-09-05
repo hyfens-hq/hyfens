@@ -130,6 +130,18 @@ stated platform. `NEW_BASE_RELEASE_REQUIRED` is an intentional packaging
 boundary, not an OTA capability. `NOT_YET_PROVEN` means this campaign has
 not established support; it does not erase the narrower historical evidence.
 
+The public CLI's normal instrumentation path does not currently supply the
+widget factories/build-class selection used by the lower-level widget tests.
+Those fixture results therefore do not establish general Flutter UI patching
+through `hyfens release` / `hyfens patch`. The independent app baseline contains
+only ten narrow helper entries, no widget factories, and no registered async
+capabilities. Its workspace UI package is fingerprinted but not selected because
+the package graph classifies members absent from the lockfile as unknown rather
+than local path packages. These are product integration gaps, not device or
+signing failures. Installing that baseline cannot prove the requested widget,
+state, layout and routing matrix; no application rewrite or manual fixture
+registry is used to conceal the gap.
+
 | Change type | Android | iOS | Result |
 | --- | --- | --- | --- |
 | Dart text | Not run | Not run | NOT_YET_PROVEN |

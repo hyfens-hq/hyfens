@@ -102,6 +102,18 @@ shared schemes are inspected for bundle identifiers and Flutter targets.
 Android and iOS selections are resolved independently because their native
 configuration can differ.
 
+Initialization records discovered native identities in tool.yaml's
+`application_ids` target/flavor mappings. Doctor reports the identity for each
+selected target; release uses that same identity, including native flavor
+suffixes. Different Android/iOS identities do not share a single runtime
+binding and require separate control-plane application records.
+
+A stale unflavored `application_id` must not override a known flavored native
+identity. H1205 requires reviewing the binding and running `hyfens init --force`;
+this repairs tool-owned selection metadata, not Android/iOS configuration.
+Existing release records are immutable: a corrected identity requires a new
+base release, never a patch against the old identity.
+
 A native flavor does not require a separate Dart file. Conversely, a custom
 Dart target can be used without a native flavor. Filename conventions are
 evidence, not proof; the file must still be an executable entrypoint.
@@ -153,6 +165,7 @@ Discovery uses these stable diagnostics:
 | T1307 | The flavor is not defined for the selected target |
 | T1308 | The flavor name is invalid |
 | H1209 | The persisted project selection is stale |
+| H1205 | Native, configured, or release application identities conflict |
 | H1210 | The persisted target selection is invalid |
 
 Use doctor to inspect what Hyfens understood before changing configuration.

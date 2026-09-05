@@ -64,21 +64,6 @@ final class ProjectInitializationService {
         action: 'Run hyfens init --force after confirming the selected application.',
       );
     }
-    if (existingBinding != null &&
-        existingBinding.runtimeApplicationId != null &&
-        existingBinding.runtimeApplicationId != plannedProject.applicationId &&
-        !force) {
-      throw ToolFailure.single(
-        exitCode: ToolExitCode.compatibility,
-        code: 'H1205',
-        summary: 'Project application identity does not match hyfens.yaml',
-        detail:
-            '${plannedProject.applicationId} != ${existingBinding.runtimeApplicationId}',
-        path: bindingFile.path,
-        action: 'Review the existing binding and pass --force only after confirming the exact application identity.',
-      );
-    }
-
     final targets = <String>[
       if (Directory('${plannedProject.root.path}/android').existsSync())
         'android',
@@ -104,8 +89,36 @@ final class ProjectInitializationService {
       );
     }
 
+    final identities = <String>{
+      for (final selection in resolvedSelections.values)
+        plannedProject.applicationIdFor(
+          selection.target,
+          flavor: selection.flavor,
+        ),
+      if (resolvedSelections.isEmpty) plannedProject.applicationId,
+    };
+    // Different native platform identities cannot share one runtime binding.
+    // Their exact identities remain pinned in tool.yaml's per-target maps.
+    final runtimeApplicationId = identities.length == 1
+        ? identities.single
+        : null;
+    if (existingBinding?.runtimeApplicationId != null &&
+        existingBinding!.runtimeApplicationId != runtimeApplicationId &&
+        !force) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.compatibility,
+        code: 'H1205',
+        summary:
+            'Selected native application identity does not match hyfens.yaml',
+        detail: 'The selected target identities differ from the existing runtime binding.',
+        path: bindingFile.path,
+        action: 'Review the exact application and run hyfens init --force. Existing releases must not be retargeted.',
+      );
+    }
+
     final result = await toolchain.init(
       projectPath: projectPath,
+      applicationId: runtimeApplicationId,
       dryRun: dryRun,
       force: force,
     );
@@ -127,7 +140,7 @@ final class ProjectInitializationService {
       organizationId: activeProfile.organizationId,
       applicationId: activeProfile.applicationId,
       environmentId: activeProfile.environmentId,
-      runtimeApplicationId: result.project.applicationId,
+      runtimeApplicationId: runtimeApplicationId,
       projectPath: result.project.relativeProjectPath,
       flavor: sharedSelection?.flavor ?? flavor,
       entrypointPath: sharedSelection?.entrypointPath ?? entrypointPath,
@@ -139,6 +152,7 @@ final class ProjectInitializationService {
     final selectionChanged =
         existingBinding == null ||
         existingBinding.projectPath != binding.projectPath ||
+        existingBinding.runtimeApplicationId != binding.runtimeApplicationId ||
         existingBinding.flavor != binding.flavor ||
         existingBinding.entrypointPath != binding.entrypointPath ||
         !_sameTargetSelections(
