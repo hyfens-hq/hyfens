@@ -31,7 +31,7 @@ approved.
 ## Install a GitHub Release directly
 
 The bounded macOS/Linux installer resolves `latest` by querying the fixed
-GitHub repository, or accepts an explicit published release such as `v0.1.1`:
+GitHub repository, or accepts an explicit published release such as `v0.1.3`:
 
 ```sh
 # Install the latest published release.
@@ -44,13 +44,13 @@ curl --fail --silent --show-error --location \
 curl --fail --silent --show-error --location \
   --proto '=https' --proto-redir '=https' --tlsv1.2 \
   https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh \
-  | bash -s -- --version v0.1.1
+  | bash -s -- --version v0.1.3
 ```
 
 The installer supports macOS and Linux on x64 and arm64. It downloads the
 matching GitHub Release archive and `SHA256SUMS`, verifies the archive before
 extracting or installing it, rejects unsafe archive paths and special files,
-and keeps the archive's `bin/` and `lib/` directories together. It uses a
+and keeps the archive's `bin/`, `lib/` and `runtime/` directories together. It uses a
 writable `/usr/local` prefix when available and otherwise falls back to
 `~/.local`; `--prefix PATH` selects an explicit absolute prefix without using
 `sudo`. Versions are kept under `PREFIX/opt/hyfens-VERSION`, with launchers in
@@ -65,7 +65,7 @@ below when a native release archive is unavailable.
 On Windows PowerShell:
 
 ```powershell
-$version = "0.1.1"
+$version = "0.1.3"
 $architecture = "arm64"
 $archive = "hyfens-$version-windows-$architecture.zip"
 $base = "https://github.com/hyfens-hq/hyfens/releases/download/v$version"
@@ -89,13 +89,13 @@ corresponding line in `SHA256SUMS` before using the extracted executable. Use
 
 ## Package-manager metadata
 
-The CLI release under preparation is `v0.1.3`. Homebrew and Scoop distribution
-remain separate external gates and must use the published release inventory:
+The current CLI release is [`v0.1.3`](https://github.com/hyfens-hq/hyfens/releases/tag/v0.1.3).
+Package metadata uses its immutable archives and release-generated checksums:
 
-- Homebrew: `hyfens-hq/homebrew-tap`, after the approved formula is updated
-  from the published `v0.1.3` inventory;
-- Scoop: `hyfens-hq/scoop-bucket`, after the approved manifest is updated from
-  the published `v0.1.3` inventory; and
+- Homebrew: `hyfens-hq/homebrew-tap`, formula `0.1.3_1`. Revision 1 retains
+  the complete runtime bundle alongside the executable;
+- Scoop: `hyfens-hq/scoop-bucket`, manifest `0.1.3`. Published Windows archive
+  checksums are verified; native Scoop installation must be checked on Windows; and
 - WinGet remains an external Microsoft submission gate.
 
 If the Homebrew tap was already added manually, trust only the formula once to
@@ -108,7 +108,7 @@ brew install hyfens
 
 Do not disable Homebrew tap trust globally.
 
-After `v0.1.3` is published, package metadata must point to immutable GitHub
+For each subsequent release, package metadata must point to immutable GitHub
 Release archives and the release-generated SHA-256 values. Use
 `artifact-inventory.json` to update the approved tap or bucket, and fill the
 approved WinGet publisher identity separately. The templates under

@@ -118,7 +118,7 @@ general Dart support:
 Phase 1A deliberately leaves the earlier async-closure exclusions intact: an
 unsupported construct is rejected rather than silently lowered.
 
-## Independent real-application acceptance — current candidate
+## Independent real-application acceptance — CLI/runtime 0.1.3
 
 The historical fixture/device evidence above is not independent-application
 acceptance. The receipt/resource-boundary changes do not themselves establish
@@ -156,7 +156,7 @@ not established support; it does not erase the narrower historical evidence.
 | Flutter engine change | Engine identity boundary | Engine identity boundary | NEW_BASE_RELEASE_REQUIRED |
 
 Patch Format v1 has no signed resource payload or atomic code/resource rollback.
-The CLI candidate snapshots declared asset/font bytes and native build inputs;
+CLI 0.1.3 snapshots declared asset/font bytes and native build inputs;
 changed, added, removed, unsafe or unreadable inputs fail closed. A new Material
 icon reference is conservatively rejected without exact base-glyph evidence.
 Unchanged bundled resources remain part of the native base and are not removed
