@@ -38,6 +38,12 @@ Future<void> main(List<String> arguments) async {
           keyPrefix: config.artifactKeyPrefix,
           region: config.artifactRegion,
         );
+  final artifactDeliveryAdmission = config.artifactAdmissionUrl == null
+      ? null
+      : RemoteArtifactDeliveryAdmission(
+          endpoint: config.artifactAdmissionUrl!,
+          serviceToken: config.artifactAdmissionServiceToken!,
+        );
   final store = config.databaseUrl == null
       ? FileControlPlaneStore(config.fileRoot)
       : PostgresControlPlaneStore(
@@ -47,7 +53,12 @@ Future<void> main(List<String> arguments) async {
   final auth = config.auth == null
       ? null
       : HumanAuthService(store: store, config: config.auth!);
-  final configuredService = ControlPlaneService(store: store, humanAuth: auth);
+  final configuredService = ControlPlaneService(
+    store: store,
+    humanAuth: auth,
+    artifactDeliveryAdmission: artifactDeliveryAdmission,
+    artifactDeliveryAdmissionRequired: config.artifactAdmissionRequired,
+  );
   await configuredService.initialize();
   if (options.containsKey('seed-demo')) {
     if (options.containsKey('bootstrap') ||

@@ -14,6 +14,7 @@ export 'src/mcp/mcp_server.dart';
 export 'src/profile.dart';
 export 'src/project.dart';
 export 'src/project_initialization.dart';
+export 'src/resource_snapshot.dart';
 export 'src/server.dart';
 export 'src/signing.dart';
 export 'src/toolchain.dart';

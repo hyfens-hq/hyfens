@@ -579,19 +579,14 @@ void main() {
         );
         final schedules = FileP3e5ScheduleStore(
           Directory('${root.path}/schedules'),
+          clock: () => now,
         );
         await control.initialize();
         final admin = CredentialService(random: Random(66)).issue(
           id: 'credential_admin',
           organizationId: 'org_1',
           kind: CredentialKind.control,
-          scopes: const <String>{
-            'health:schedule',
-            'credential:issue',
-            'credential:revoke',
-            'rollout:read',
-            'audit:read',
-          },
+          scopes: controlScopes,
         );
         await control.createJson(
           'credentials',

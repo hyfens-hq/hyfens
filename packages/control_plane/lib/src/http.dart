@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'artifact_delivery_admission.dart';
 import 'config.dart';
 import 'domain.dart';
 import 'encoding.dart';
@@ -3416,6 +3417,16 @@ final class ControlPlaneHttpServer {
       artifactId: artifactId,
       applicationId: applicationId,
       environmentId: environmentId,
+      admissionId: _optionalArtifactHeader(
+        request,
+        artifactAdmissionIdHeader,
+        maxLength: 256,
+      ),
+      downloadProof: _optionalArtifactHeader(
+        request,
+        artifactDownloadProofHeader,
+        maxLength: 4096,
+      ),
     );
     request.response
       ..statusCode = 200
@@ -4091,6 +4102,31 @@ final class ControlPlaneHttpServer {
       );
     }
     return token;
+  }
+
+  String? _optionalArtifactHeader(
+    HttpRequest request,
+    String name, {
+    required int maxLength,
+  }) {
+    final values = request.headers[name] ?? const <String>[];
+    if (values.isEmpty) return null;
+    if (values.length != 1) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Artifact admission headers are invalid',
+      );
+    }
+    final value = values.single;
+    if (value.isEmpty ||
+        value.length > maxLength ||
+        value.contains(RegExp(r'[\u0000\r\n]'))) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Artifact admission headers are invalid',
+      );
+    }
+    return value;
   }
 
   String? _optionalBearer(HttpRequest request) {

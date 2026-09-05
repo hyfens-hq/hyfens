@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:hyfens_patch_format/patch_format.dart';
@@ -59,6 +60,8 @@ void main() {
       );
       expect(release.functions, isNotEmpty);
       expect(release.manifest.patchFormatVersion, patchFormatV1);
+      expect(release.resourceSnapshot, isNotNull);
+      expect(release.flutterEngineRevision, isNotNull);
       expect(
         release.functions.map((function) => function.slot).toSet(),
         hasLength(release.functions.length),
@@ -346,6 +349,184 @@ class UnsupportedSurface {
       ),
     );
   });
+
+  test('asset-only changes are store-release-required', () async {
+    final root = await createPatchProject();
+    addTearDown(() => root.delete(recursive: true));
+    await Directory('${root.path}/assets/data').create(recursive: true);
+    await File('${root.path}/assets/data/value.json').writeAsString('{"v":1}');
+    await File('${root.path}/pubspec.yaml').writeAsString('''
+name: patch_app
+version: 1.0.0+1
+environment:
+  sdk: ^3.13.0
+flutter:
+  assets:
+    - assets/data/
+dependencies: {}
+''');
+    final tool = HyfensToolchain();
+    await tool.init(projectPath: root.path);
+    final release = await tool.release(
+      target: 'android',
+      projectPath: root.path,
+      metadataOnly: true,
+    );
+    await File('${root.path}/assets/data/value.json').writeAsString('{"v":2}');
+
+    final analysis = tool.analyze(
+      projectPath: root.path,
+      releaseId: release.releaseId,
+    );
+
+    expect(analysis.canPatch, isFalse);
+    expect(
+      analysis.diagnostics.any(
+        (diagnostic) =>
+            diagnostic.code == 'A3010' && diagnostic.storeReleaseRequired,
+      ),
+      isTrue,
+    );
+    expect(
+      analysis.items.any(
+        (item) =>
+            item.classification == ChangeClassification.storeReleaseRequired &&
+            item.path == '<packaged assets>',
+      ),
+      isTrue,
+    );
+  });
+
+  test(
+    'mixed Dart and asset changes cannot generate a code-only patch',
+    () async {
+      final root = await createPatchProject();
+      addTearDown(() => root.delete(recursive: true));
+      await Directory('${root.path}/assets/data').create(recursive: true);
+      await File('${root.path}/assets/data/value.json')
+          .writeAsString('{"v":1}');
+      await File('${root.path}/pubspec.yaml').writeAsString('''
+name: patch_app
+version: 1.0.0+1
+environment:
+  sdk: ^3.13.0
+flutter:
+  assets:
+    - assets/data/
+dependencies: {}
+''');
+      final tool = HyfensToolchain();
+      await tool.init(projectPath: root.path);
+      final release = await tool.release(
+        target: 'android',
+        projectPath: root.path,
+        metadataOnly: true,
+      );
+      await File('${root.path}/lib/main.dart').writeAsString('''
+void main() {}
+
+int calculate(int left, int right) {
+  return left - right;
+}
+class UnsupportedSurface {
+  int get value => 1;
+}
+''');
+      await File('${root.path}/assets/data/value.json')
+          .writeAsString('{"v":2}');
+
+      final analysis = tool.analyze(
+        projectPath: root.path,
+        releaseId: release.releaseId,
+      );
+
+      expect(analysis.canPatch, isFalse);
+      expect(
+        analysis.items.any(
+          (item) => item.classification == ChangeClassification.patchable,
+        ),
+        isTrue,
+      );
+      expect(
+        analysis.diagnostics.any((diagnostic) => diagnostic.code == 'A3010'),
+        isTrue,
+      );
+      expect(
+        () => tool.patch(projectPath: root.path, releaseId: release.releaseId),
+        throwsA(
+          isA<ToolFailure>().having(
+            (failure) => failure.diagnostics.any(
+              (diagnostic) => diagnostic.code == 'A3010',
+            ),
+            'asset boundary diagnostic',
+            isTrue,
+          ),
+        ),
+      );
+    },
+  );
+
+  test('native packaged resource changes are store-release-required', () async {
+    final root = await createPatchProject();
+    addTearDown(() => root.delete(recursive: true));
+    final resource = File(
+      '${root.path}/android/app/src/main/res/drawable/icon.png',
+    );
+    await resource.parent.create(recursive: true);
+    await resource.writeAsBytes(<int>[1, 2, 3]);
+    final tool = HyfensToolchain();
+    await tool.init(projectPath: root.path);
+    final release = await tool.release(
+      target: 'android',
+      projectPath: root.path,
+      metadataOnly: true,
+    );
+    await resource.writeAsBytes(<int>[4, 5, 6]);
+
+    final analysis = tool.analyze(
+      projectPath: root.path,
+      releaseId: release.releaseId,
+    );
+
+    expect(analysis.canPatch, isFalse);
+    expect(
+      analysis.diagnostics.any((diagnostic) => diagnostic.code == 'N3010'),
+      isTrue,
+    );
+  });
+
+  test(
+    'legacy baselines without resource or engine metadata require a new base',
+    () async {
+      final root = await createPatchProject();
+      addTearDown(() => root.delete(recursive: true));
+      final tool = HyfensToolchain();
+      await tool.init(projectPath: root.path);
+      final release = await tool.release(
+        target: 'android',
+        projectPath: root.path,
+        metadataOnly: true,
+      );
+      final raw = jsonDecode(release.encode()) as Map<String, Object?>
+        ..remove('resourceSnapshot')
+        ..remove('flutterEngineRevision');
+      final project = tool.project(projectPath: root.path);
+      await ToolStore(project)
+          .releaseMetadata(release.releaseId)
+          .writeAsString(jsonEncode(raw));
+
+      final analysis = tool.analyze(
+        projectPath: root.path,
+        releaseId: release.releaseId,
+      );
+
+      expect(analysis.canPatch, isFalse);
+      expect(
+        analysis.diagnostics.map((diagnostic) => diagnostic.code),
+        containsAll(<String>['R5010', 'T1103']),
+      );
+    },
+  );
 
   test('architecture is part of release identity', () async {
     final root = await createPatchProject();

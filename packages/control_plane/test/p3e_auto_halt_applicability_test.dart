@@ -240,6 +240,7 @@ void main() {
       final controlService = ControlPlaneService(
         store: fixture.control,
         p3eStore: fixture.p3e,
+        clock: () => now,
       );
       final applicationService = P3e5AutomaticHaltApplicationService(
         controlStore: fixture.control,
@@ -325,6 +326,7 @@ void main() {
         controlService: ControlPlaneService(
           store: fixture.control,
           p3eStore: fixture.p3e,
+          clock: () => now,
         ),
         clock: () => now,
         failure: (point) async {
@@ -356,6 +358,7 @@ void main() {
         controlService: ControlPlaneService(
           store: fixture.control,
           p3eStore: fixture.p3e,
+          clock: () => now,
         ),
         clock: () => now,
       );
@@ -568,6 +571,7 @@ void main() {
         controlService: ControlPlaneService(
           store: fixture.control,
           p3eStore: fixture.p3e,
+          clock: () => now,
         ),
         clock: () => now,
       );
@@ -622,6 +626,7 @@ void main() {
         controlService: ControlPlaneService(
           store: fixture.control,
           p3eStore: fixture.p3e,
+          clock: () => now,
         ),
         clock: () => now,
         failure: (point) async {
@@ -648,6 +653,7 @@ void main() {
         controlService: ControlPlaneService(
           store: fixture.control,
           p3eStore: fixture.p3e,
+          clock: () => now.add(const Duration(days: 1, hours: 1)),
         ),
         clock: () => now.add(const Duration(days: 1, hours: 1)),
       );
@@ -682,6 +688,7 @@ void main() {
       controlService: ControlPlaneService(
         store: fixture.control,
         p3eStore: fixture.p3e,
+        clock: () => now.add(const Duration(minutes: 10)),
       ),
       leasePolicy: const P3e5LeasePolicy(
         version: 1,
@@ -736,6 +743,7 @@ void main() {
         controlService: ControlPlaneService(
           store: fixture.control,
           p3eStore: fixture.p3e,
+          clock: () => now,
         ),
         clock: () => now,
         failure: (point) async {
@@ -3081,6 +3089,7 @@ P3e5AutomaticHaltRecoveryService _recovery(
   controlService: ControlPlaneService(
     store: fixture.control,
     p3eStore: fixture.p3e,
+    clock: () => recoveryNow,
   ),
   leasePolicy: const P3e5LeasePolicy(
     version: 1,
@@ -3102,6 +3111,7 @@ P3e5AutomaticHaltApplicationService _application(
   controlService: ControlPlaneService(
     store: fixture.control,
     p3eStore: fixture.p3e,
+    clock: clock ?? (() => _task67ReferenceNow),
   ),
   clock: clock ?? (() => _task67ReferenceNow),
 );

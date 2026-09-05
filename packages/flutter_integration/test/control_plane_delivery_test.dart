@@ -1,15 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/dart.dart';
 import 'package:hyfens_flutter_integration/flutter_integration.dart';
+import 'package:hyfens_flutter_integration/src/installation_key.dart';
 import 'package:hyfens_patch_format/patch_format.dart';
 import 'package:hyfens_runtime/runtime.dart';
 import 'package:instrumentation_e0/e0_runtime.dart';
 import 'package:instrumentation_e0/instrumentation_e0.dart';
 import 'package:patch_loading_e1/patch_loading_e1.dart';
+import 'package:pointycastle/export.dart';
 import 'package:test/test.dart';
 
 const _appId = 'dev.hyfens.delivery';
@@ -139,6 +142,38 @@ void main() {
         throwsA(isA<ArgumentError>()),
       );
     });
+
+    test('configuration errors do not echo URL or credential secrets', () {
+      const secret = 'config-secret-sentinel';
+      final urlWithSecret = Uri.parse(
+        'https://user:$secret@api.example.com/p2/?token=$secret',
+      );
+
+      for (final invalid in <Object Function()>[
+        () => HyfensControlPlaneConfiguration(
+          baseUrl: urlWithSecret,
+          deliveryCredential: _deliveryToken,
+          applicationId: 'app_delivery',
+          environmentId: 'env_delivery',
+          platformId: 'android-arm64-release',
+        ),
+        () => HyfensControlPlaneConfiguration(
+          baseUrl: Uri.parse('https://api.example.com/p2/'),
+          deliveryCredential: '$secret\n',
+          applicationId: 'app_delivery',
+          environmentId: 'env_delivery',
+          platformId: 'android-arm64-release',
+        ),
+      ]) {
+        try {
+          invalid();
+          fail('invalid configuration unexpectedly succeeded');
+        } on ArgumentError catch (error) {
+          expect(error.toString(), isNot(contains(secret)));
+          expect(error.toString(), isNot(contains(urlWithSecret.toString())));
+        }
+      }
+    });
   });
 
   test('authenticated lookup/fetch hands exact bytes to E1', () async {
@@ -164,6 +199,122 @@ void main() {
     final noUpdate = await adapter.deliver(controller);
     expect(noUpdate.decision, HyfensDeliveryDecision.noUpdate);
     expect(controller.durableState.highWaterSequence, 1);
+  });
+
+  test(
+    'healthy artifact does not prepare a second receipt admission',
+    () async {
+      final first = await adapter.deliver(controller);
+      expect(first.activated, isTrue);
+      expect(await controller.markHealthy(), isTrue);
+      final fetchesBeforeReceiptDelivery = server.artifactFetchCount;
+
+      final receiptAdapter = HyfensControlPlaneDelivery(
+        HyfensControlPlaneConfiguration(
+          baseUrl: server.baseUrl,
+          deliveryCredential: _deliveryToken,
+          applicationId: 'app_delivery',
+          environmentId: 'env_delivery',
+          platformId: 'android-arm64-release',
+          requestTimeout: const Duration(milliseconds: 250),
+          receiptMode: HyfensInstallReceiptMode.developmentAcceptance,
+        ),
+        receipts: HyfensInstallReceipts(
+          baseUrl: server.baseUrl,
+          deliveryCredential: _deliveryToken,
+          applicationId: 'app_delivery',
+          environmentId: 'env_delivery',
+          platformId: 'android-arm64-release',
+          keyStore: _UnexpectedReceiptKeyStore(),
+          requestTimeout: const Duration(milliseconds: 250),
+        ),
+      );
+
+      final result = await receiptAdapter.deliver(controller);
+      expect(result.activated, isTrue);
+      expect(controller.durableState.health, 'healthy');
+      expect(server.artifactFetchCount, fetchesBeforeReceiptDelivery);
+    },
+  );
+
+  test(
+    'artifact proof headers survive one retry without a second admission',
+    () async {
+      final receiptKey = await _ProofKey.create();
+      server.receiptKey = receiptKey;
+      server.verifyDownloadProof = true;
+      server.artifactFailuresRemaining = 1;
+      final receiptAdapter = HyfensControlPlaneDelivery(
+        HyfensControlPlaneConfiguration(
+          baseUrl: server.baseUrl,
+          deliveryCredential: _deliveryToken,
+          applicationId: 'app_delivery',
+          environmentId: 'env_delivery',
+          platformId: 'android-arm64-release',
+          requestTimeout: const Duration(milliseconds: 250),
+          receiptMode: HyfensInstallReceiptMode.developmentAcceptance,
+        ),
+        receipts: HyfensInstallReceipts(
+          baseUrl: server.baseUrl,
+          deliveryCredential: _deliveryToken,
+          applicationId: 'app_delivery',
+          environmentId: 'env_delivery',
+          platformId: 'android-arm64-release',
+          keyStore: receiptKey,
+          requestTimeout: const Duration(milliseconds: 250),
+        ),
+      );
+
+      final result = await receiptAdapter.deliver(controller);
+
+      expect(result.activated, isTrue);
+      expect(controller.durableState.health, 'pending');
+      expect(server.receiptAdmissions, 1);
+      expect(server.artifactFetchCount, 2);
+      expect(server.artifactMethods, ['GET', 'GET']);
+      // HttpClient omits Content-Length for an empty GET, which the fixture
+      // exposes as -1; either representation is bodyless.
+      expect(
+        server.artifactContentLengths.every((length) => length <= 0),
+        isTrue,
+      );
+      expect(server.downloadProofValid, [true, true]);
+      expect(server.downloadAdmissions.toSet(), hasLength(1));
+      expect(server.downloadProofs.toSet(), hasLength(1));
+      expect(server.installSuccessCount, 0);
+    },
+  );
+
+  test('streaming lookup response has a total deadline', () async {
+    server.mode = _DeliveryMode.streamTimeout;
+
+    await expectLater(
+      adapter.deliver(controller),
+      throwsA(
+        isA<HyfensControlPlaneDeliveryException>().having(
+          (error) => error.code,
+          'code',
+          'DELIVERY_TIMEOUT',
+        ),
+      ),
+    );
+    expect(controller.durableState.highWaterSequence, 0);
+  });
+
+  test('oversized lookup response is rejected before buffering', () async {
+    server.mode = _DeliveryMode.oversizedLookup;
+
+    await expectLater(
+      adapter.deliver(controller),
+      throwsA(
+        isA<HyfensControlPlaneDeliveryException>().having(
+          (error) => error.code,
+          'code',
+          'RESPONSE_TOO_LARGE',
+        ),
+      ),
+    );
+    expect(controller.durableState.highWaterSequence, 0);
   });
 
   test(
@@ -314,6 +465,8 @@ enum _DeliveryMode {
   wrongRelease,
   wrongPlatform,
   timeout,
+  streamTimeout,
+  oversizedLookup,
   artifactUnavailable,
   staleSequence,
 }
@@ -323,10 +476,20 @@ final class _FakeDeliveryServer {
 
   final List<int> patchBytes;
   final authorizationHeaders = <String>[];
+  final artifactMethods = <String>[];
+  final artifactContentLengths = <int>[];
+  final downloadAdmissions = <String>[];
+  final downloadProofs = <String>[];
+  final downloadProofValid = <bool>[];
   Map<String, Object?> lookupBody = const <String, Object?>{};
   _DeliveryMode mode = _DeliveryMode.patch;
   HttpServer? _server;
   int artifactFetchCount = 0;
+  int artifactFailuresRemaining = 0;
+  int receiptAdmissions = 0;
+  int installSuccessCount = 0;
+  _ProofKey? receiptKey;
+  bool verifyDownloadProof = false;
 
   Uri get baseUrl => Uri.parse('http://127.0.0.1:${_server!.port}');
 
@@ -345,6 +508,18 @@ final class _FakeDeliveryServer {
     authorizationHeaders.add(
       request.headers.value(HttpHeaders.authorizationHeader) ?? '',
     );
+    if (request.uri.path == '/v1/runtime/installations/challenge') {
+      await _receiptChallenge(request);
+      return;
+    }
+    if (request.uri.path == '/v1/runtime/installations/register') {
+      await _receiptRegister(request);
+      return;
+    }
+    if (request.uri.path == '/v1/runtime/install-success') {
+      await _receiptSuccess(request);
+      return;
+    }
     if (request.uri.path == '/v1/runtime/update-check') {
       await _lookup(request);
       return;
@@ -357,9 +532,129 @@ final class _FakeDeliveryServer {
     await request.response.close();
   }
 
+  Future<Map<String, Object?>> _requestBody(HttpRequest request) async =>
+      jsonDecode(await utf8.decoder.bind(request).join())
+          as Map<String, Object?>;
+
+  Future<void> _writeJson(
+    HttpRequest request,
+    Map<String, Object?> body,
+  ) async {
+    final bytes = utf8.encode(jsonEncode(body));
+    request.response
+      ..statusCode = HttpStatus.ok
+      ..headers.contentType = ContentType.json
+      ..headers.contentLength = bytes.length
+      ..add(bytes);
+    await request.response.close();
+  }
+
+  Future<void> _receiptChallenge(HttpRequest request) async {
+    final body = await _requestBody(request);
+    final artifactDigest = body['artifact_digest'];
+    if (artifactDigest is! String ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(artifactDigest)) {
+      request.response.statusCode = HttpStatus.badRequest;
+      await request.response.close();
+      return;
+    }
+    await _writeJson(request, <String, Object?>{
+      'enrollment': <String, Object?>{
+        ...body,
+        'version': 1,
+        'purpose': 'installation_enrollment',
+        'challenge_id': 'delivery-challenge',
+        'challenge': 'delivery-server-challenge',
+        'expires_at': DateTime.now()
+            .toUtc()
+            .add(const Duration(minutes: 5))
+            .toIso8601String(),
+      },
+      'billable': false,
+    });
+  }
+
+  Future<void> _receiptRegister(HttpRequest request) async {
+    final body = await _requestBody(request);
+    final enrollment = body['enrollment']! as Map<String, Object?>;
+    final signature = body['signature']! as String;
+    final key = receiptKey;
+    if (key == null || !await key.verify(enrollment, signature)) {
+      request.response.statusCode = HttpStatus.badRequest;
+      await request.response.close();
+      return;
+    }
+    receiptAdmissions++;
+    final activationDeadline = DateTime.now()
+        .toUtc()
+        .add(const Duration(days: 1))
+        .toIso8601String();
+    final receipt = <String, Object?>{
+      'version': 1,
+      'receipt_id': 'receipt-${enrollment['patch_id']}',
+      'installation_id': enrollment['installation_id'],
+      'key_id': enrollment['key_id'],
+      'application_id': enrollment['application_id'],
+      'environment_id': enrollment['environment_id'],
+      'release_id': enrollment['release_id'],
+      'runtime_application_id': enrollment['runtime_application_id'],
+      'platform': enrollment['platform'],
+      'patch_id': enrollment['patch_id'],
+      'artifact_digest': enrollment['artifact_digest'],
+      'admission_id': 'admission-${enrollment['patch_id']}',
+      'challenge': 'receipt-challenge-${enrollment['patch_id']}',
+      'runtime_version': HyfensInstallReceipts.runtimeVersion,
+      'activation_deadline': activationDeadline,
+      'result': 'activated',
+    };
+    lastReceipt = receipt;
+    await _writeJson(request, <String, Object?>{
+      'receipt': receipt,
+      'expires_at': activationDeadline,
+      'billable': false,
+      'trust_level': 'DEVELOPMENT_ACCEPTANCE',
+    });
+  }
+
+  Future<void> _receiptSuccess(HttpRequest request) async {
+    await _requestBody(request);
+    installSuccessCount++;
+    await _writeJson(request, <String, Object?>{
+      'receipt_id': 'accepted',
+      'accepted': true,
+      'billable': false,
+    });
+  }
+
+  Map<String, Object?>? lastReceipt;
+
   Future<void> _lookup(HttpRequest request) async {
     if (mode == _DeliveryMode.timeout) {
       await Future<void>.delayed(const Duration(seconds: 1));
+      await request.response.close();
+      return;
+    }
+    if (mode == _DeliveryMode.streamTimeout) {
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType.json
+        ..add(utf8.encode('{"decision":'));
+      await request.response.flush();
+      await Future<void>.delayed(const Duration(seconds: 1));
+      try {
+        await request.response.close();
+      } on Object {
+        // The client closes the response when its total deadline expires.
+      }
+      return;
+    }
+    if (mode == _DeliveryMode.oversizedLookup) {
+      final bytes = List<int>.filled(256 * 1024 + 1, 0x20);
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType.json
+        ..headers.contentLength = bytes.length
+        ..add(bytes);
       await request.response.close();
       return;
     }
@@ -410,6 +705,40 @@ final class _FakeDeliveryServer {
 
   Future<void> _artifact(HttpRequest request) async {
     artifactFetchCount++;
+    artifactMethods.add(request.method);
+    artifactContentLengths.add(request.contentLength);
+    final admission = request.headers.value('X-Hyfens-Install-Admission');
+    final proof = request.headers.value('X-Hyfens-Install-Proof');
+    if (admission != null) downloadAdmissions.add(admission);
+    if (proof != null) downloadProofs.add(proof);
+    final artifactId = Uri.decodeComponent(
+      request.uri.path.substring('/v1/runtime/artifacts/'.length),
+    );
+    if (verifyDownloadProof) {
+      final receipt = lastReceipt;
+      final key = receiptKey;
+      final valid =
+          receipt != null &&
+          key != null &&
+          admission == receipt['admission_id'] &&
+          proof != null &&
+          await key.verify(_downloadProofBody(receipt, artifactId), proof);
+      downloadProofValid.add(valid);
+      if (!valid) {
+        request.response.statusCode = HttpStatus.forbidden;
+        await request.response.close();
+        return;
+      }
+    }
+    if (artifactFailuresRemaining > 0) {
+      artifactFailuresRemaining--;
+      try {
+        (await request.response.detachSocket(writeHeaders: false)).destroy();
+      } on Object {
+        // The client is expected to retry this deliberately dropped response.
+      }
+      return;
+    }
     if (mode == _DeliveryMode.artifact404 ||
         mode == _DeliveryMode.artifactUnavailable) {
       request.response.statusCode = HttpStatus.notFound;
@@ -439,6 +768,16 @@ final class _FakeDeliveryServer {
       ..add(artifact);
     await request.response.close();
   }
+
+  static Map<String, Object?> _downloadProofBody(
+    Map<String, Object?> receipt,
+    String artifactId,
+  ) => <String, Object?>{
+    for (final entry in receipt.entries)
+      if (entry.key != 'result') entry.key: entry.value,
+    'purpose': 'artifact_download',
+    'artifact_id': artifactId,
+  };
 
   Future<List<int>> _artifactBytesForMode() async {
     if (mode == _DeliveryMode.wrongDigest) {
@@ -550,3 +889,85 @@ int calculatePrice(int quantity, int tier) {
 }
 
 String _digest(List<int> bytes) => 'sha256:${sha256.convert(bytes).toString()}';
+
+final class _UnexpectedReceiptKeyStore implements HyfensInstallationKeyStore {
+  @override
+  Future<HyfensInstallationIdentity> getIdentity() async {
+    throw StateError('receipt admission was unexpectedly prepared');
+  }
+
+  @override
+  Future<List<int>> sign(List<int> canonicalMessage) async {
+    throw StateError('receipt admission was unexpectedly signed');
+  }
+}
+
+final class _ProofKey implements HyfensInstallationKeyStore {
+  _ProofKey(this.private, this.public, this.identity);
+
+  final ECPrivateKey private;
+  final ECPublicKey public;
+  final HyfensInstallationIdentity identity;
+
+  static Future<_ProofKey> create() async {
+    final curve = ECDomainParameters('prime256v1');
+    final private = ECPrivateKey(BigInt.from(3), curve);
+    final public = ECPublicKey(curve.G * BigInt.from(3), curve);
+    final publicBytes = public.Q!.getEncoded(false);
+    return _ProofKey(
+      private,
+      public,
+      HyfensInstallationIdentity(
+        installationId: base64Url
+            .encode(List.filled(32, 9))
+            .replaceAll('=', ''),
+        keyId: sha256.convert(publicBytes).toString(),
+        publicKey: publicBytes,
+        storageProtection:
+            HyfensInstallationStorageProtection.platformProtected,
+      ),
+    );
+  }
+
+  @override
+  Future<HyfensInstallationIdentity> getIdentity() async => identity;
+
+  @override
+  Future<List<int>> sign(List<int> message) async {
+    final signer = ECDSASigner(SHA256Digest(), HMac(SHA256Digest(), 64))
+      ..init(true, PrivateKeyParameter<ECPrivateKey>(private));
+    final signature =
+        signer.generateSignature(Uint8List.fromList(message)) as ECSignature;
+    return [..._scalar(signature.r), ..._scalar(signature.s)];
+  }
+
+  Future<bool> verify(Map<String, Object?> body, String encoded) async {
+    try {
+      final raw = base64Url.decode(base64Url.normalize(encoded));
+      if (raw.length != 64) return false;
+      BigInt integer(List<int> bytes) => bytes.fold(
+        BigInt.zero,
+        (value, byte) => (value << 8) | BigInt.from(byte),
+      );
+      final verifier = ECDSASigner(SHA256Digest())
+        ..init(false, PublicKeyParameter<ECPublicKey>(public));
+      return verifier.verifySignature(
+        Uint8List.fromList(
+          utf8.encode(
+            jsonEncode({
+              for (final key in body.keys.toList()..sort()) key: body[key],
+            }),
+          ),
+        ),
+        ECSignature(integer(raw.sublist(0, 32)), integer(raw.sublist(32))),
+      );
+    } on Object {
+      return false;
+    }
+  }
+
+  static List<int> _scalar(BigInt value) => [
+    for (var index = 31; index >= 0; index--)
+      ((value >> (index * 8)) & BigInt.from(255)).toInt(),
+  ];
+}

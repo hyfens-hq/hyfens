@@ -97,6 +97,8 @@ Future<_Fixture> _createTrustedFixture() async {
     diagnostics: metadata.diagnostics,
     configFingerprint: metadata.configFingerprint,
     nativeFingerprints: metadata.nativeFingerprints,
+    resourceSnapshot: metadata.resourceSnapshot,
+    flutterEngineRevision: metadata.flutterEngineRevision,
   );
   await store.writeRelease(trusted, artifacts: <File>[sourceArtifact]);
   return _Fixture(root: root, tool: tool, release: trusted);

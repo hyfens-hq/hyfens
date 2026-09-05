@@ -89,14 +89,13 @@ corresponding line in `SHA256SUMS` before using the extracted executable. Use
 
 ## Package-manager metadata
 
-The current `v0.1.1` release has live Homebrew and Scoop distribution:
+The CLI release under preparation is `v0.1.3`. Homebrew and Scoop distribution
+remain separate external gates and must use the published release inventory:
 
-- Homebrew: `hyfens-hq/homebrew-tap`, installed directly with
-  `brew install hyfens-hq/tap/hyfens`. Homebrew automatically adds the tap
-  and trusts only the requested formula;
-- Scoop: `hyfens-hq/scoop-bucket`, installed with
-  `scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket` and
-  `scoop install hyfens`; and
+- Homebrew: `hyfens-hq/homebrew-tap`, after the approved formula is updated
+  from the published `v0.1.3` inventory;
+- Scoop: `hyfens-hq/scoop-bucket`, after the approved manifest is updated from
+  the published `v0.1.3` inventory; and
 - WinGet remains an external Microsoft submission gate.
 
 If the Homebrew tap was already added manually, trust only the formula once to
@@ -109,8 +108,8 @@ brew install hyfens
 
 Do not disable Homebrew tap trust globally.
 
-The live package metadata points to immutable GitHub Release archives and the
-release-generated SHA-256 values. For future releases, use
+After `v0.1.3` is published, package metadata must point to immutable GitHub
+Release archives and the release-generated SHA-256 values. Use
 `artifact-inventory.json` to update the approved tap or bucket, and fill the
 approved WinGet publisher identity separately. The templates under
 `packaging/cli/` are not themselves publication channels.

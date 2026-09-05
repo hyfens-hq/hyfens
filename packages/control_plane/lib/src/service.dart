@@ -7,6 +7,7 @@ import 'package:cryptography/dart.dart';
 import 'package:hyfens_patch_format/patch_format.dart';
 
 import 'aggregation.dart';
+import 'artifact_delivery_admission.dart';
 import 'audit.dart';
 import 'auth.dart';
 import 'billing.dart';
@@ -57,11 +58,19 @@ final class ControlPlaneService {
     this.humanAuth,
     BillingService? billingService,
     OrganizationInvitationDelivery? invitationDelivery,
+    this.artifactDeliveryAdmission,
+    this.artifactDeliveryAdmissionRequired = false,
   }) : _random = random ?? Random.secure(),
        _clock = clock ?? (() => DateTime.now().toUtc()),
        invitationDelivery =
            invitationDelivery ?? const NoopOrganizationInvitationDelivery() {
     observationPolicy.validate();
+    if (artifactDeliveryAdmissionRequired &&
+        artifactDeliveryAdmission == null) {
+      throw ArgumentError(
+        'Artifact delivery admission is required but no provider is configured',
+      );
+    }
     billing = billingService ?? BillingService(store);
   }
 
@@ -73,6 +82,8 @@ final class ControlPlaneService {
   final HumanAuthService? humanAuth;
   late final BillingService billing;
   final OrganizationInvitationDelivery invitationDelivery;
+  final ArtifactDeliveryAdmission? artifactDeliveryAdmission;
+  final bool artifactDeliveryAdmissionRequired;
   Future<void> _writeTail = Future<void>.value();
   final Map<String, List<DateTime>> _observationWindows =
       <String, List<DateTime>>{};
@@ -3685,6 +3696,8 @@ final class ControlPlaneService {
     required String artifactId,
     required String applicationId,
     required String environmentId,
+    String? admissionId,
+    String? downloadProof,
   }) async {
     final artifact = await _artifact(artifactId);
     final patch = await _patch(artifact.patchId);
@@ -3706,6 +3719,32 @@ final class ControlPlaneService {
         'NOT_FOUND',
         'Resource was not found',
         statusCode: 404,
+      );
+    }
+    final admission = artifactDeliveryAdmission;
+    if (admission == null) {
+      if (artifactDeliveryAdmissionRequired) {
+        throw const ControlPlaneException(
+          'ARTIFACT_ADMISSION_UNAVAILABLE',
+          'Artifact delivery admission is unavailable',
+          statusCode: 503,
+        );
+      }
+    } else {
+      await admission.authorize(
+        ArtifactDeliveryAdmissionContext(
+          organizationId: artifact.organizationId,
+          applicationId: environment.applicationId,
+          environmentId: environment.id,
+          runtimeApplicationId: release.runtimeApplicationId,
+          platform: release.platformId,
+          runtimeReleaseId: release.runtimeReleaseId,
+          runtimePatchId: patch.runtimePatchId,
+          artifactDigest: artifact.sha256,
+          artifactId: artifact.id,
+        ),
+        admissionId: admissionId,
+        downloadProof: downloadProof,
       );
     }
     final bytes = await store.readArtifact(artifact.sha256);

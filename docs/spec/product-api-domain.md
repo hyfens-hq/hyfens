@@ -360,6 +360,38 @@ The distribution response may include `ETag`, `Digest`, `Content-Length`,
 `Cache-Control: immutable`, and a request ID. A 304 is only a transport/cache
 result; the runtime never treats it as proof of validity.
 
+### Optional delivery admission hook
+
+A deployment may configure a generic admission adapter in the artifact-fetch
+path. The control plane resolves and checks the authenticated tenant,
+application, environment, release, patch, and artifact context first; the
+adapter is called before artifact bytes are read and returned. Clients may
+send these optional opaque headers:
+
+```http
+X-Hyfens-Install-Admission: <opaque-admission-id>
+X-Hyfens-Install-Proof: <opaque-proof-value>
+```
+
+The control plane forwards those values without parsing or verifying them.
+They are not evidence that a client executed code, is healthy, or passed an
+attestation check, and they never replace Patch Format v1 verification of the
+returned bytes.
+
+The hook is configured only through deployment environment variables:
+
+```text
+HYFENS_ARTIFACT_ADMISSION_REQUIRED=false
+HYFENS_ARTIFACT_ADMISSION_URL=<full HTTPS URL; loopback HTTP is allowed locally>
+HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN=<opaque base64url value, 32–256 characters>
+```
+
+With the URL and token unset, the hook is disabled and the existing self-hosted
+artifact-fetch behavior remains unchanged. The URL and token must be supplied
+together. Setting `HYFENS_ARTIFACT_ADMISSION_REQUIRED=true` without both
+values fails closed during process startup; when configured, an admission
+denial or unavailable adapter prevents artifact bytes from being returned.
+
 ## 8. Observation intake
 
 Observations are optional, bounded, deduplicated facts. They do not drive

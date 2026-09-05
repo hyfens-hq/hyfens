@@ -168,6 +168,61 @@ void main() {
     );
   });
 
+  test('artifact admission configuration is neutral and fail-closed', () {
+    final unconfigured = ControlPlaneConfig.fromEnvironment(<String, String>{});
+    expect(unconfigured.artifactAdmissionRequired, isFalse);
+    expect(unconfigured.artifactAdmissionUrl, isNull);
+    expect(unconfigured.artifactAdmissionServiceToken, isNull);
+
+    final token = List<String>.filled(32, 'a').join();
+    final configured = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_ARTIFACT_ADMISSION_URL':
+          'http://127.0.0.1:18192/internal/runtime/artifact-admission',
+      'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': token,
+      'HYFENS_ARTIFACT_ADMISSION_REQUIRED': 'true',
+    });
+    expect(
+      configured.artifactAdmissionUrl,
+      Uri.parse('http://127.0.0.1:18192/internal/runtime/artifact-admission'),
+    );
+    expect(configured.artifactAdmissionServiceToken, token);
+    expect(configured.artifactAdmissionRequired, isTrue);
+
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_ARTIFACT_ADMISSION_REQUIRED': 'true',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_ARTIFACT_ADMISSION_URL':
+            'http://admission.example/internal/runtime/artifact-admission',
+        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': token,
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_ARTIFACT_ADMISSION_URL':
+            'https://admission.example/internal/runtime/artifact-admission?x=1',
+        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': token,
+      }),
+      throwsArgumentError,
+    );
+    const invalidToken = 'short-secret';
+    try {
+      ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_ARTIFACT_ADMISSION_URL':
+            'https://admission.example/internal/runtime/artifact-admission',
+        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': invalidToken,
+      });
+      fail('expected invalid artifact admission token');
+    } on ArgumentError catch (error) {
+      expect(error.toString(), isNot(contains(invalidToken)));
+    }
+  });
+
   test('invalid limits and ports fail closed', () {
     expect(
       () => ControlPlaneConfig.fromEnvironment(<String, String>{

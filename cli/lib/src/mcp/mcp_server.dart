@@ -1123,7 +1123,9 @@ Map<String, Object?> _releaseJson(ReleaseRecord release) => <String, Object?>{
   'toolVersion': release.toolVersion,
   'flutterVersion': release.flutterVersion,
   'dartVersion': release.dartVersion,
+  'flutterEngineRevision': release.flutterEngineRevision,
   'buildFingerprint': release.buildFingerprint,
+  'resourceSnapshotFingerprint': release.resourceSnapshot?.fingerprint,
   'sourceFingerprint': release.sourceFingerprint,
   'graphFingerprint': release.graphFingerprint,
   'manifest': <String, Object?>{

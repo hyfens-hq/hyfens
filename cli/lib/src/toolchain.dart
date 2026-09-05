@@ -15,13 +15,14 @@ import 'discovery.dart';
 import 'graph.dart';
 import 'instrumentation.dart';
 import 'project.dart';
+import 'resource_snapshot.dart';
 import 'runtime_bundle.dart';
 import 'signing.dart';
 import 'source_fingerprints.dart';
 
 // The CLI version is part of release identity and must match cli/pubspec.yaml
 // and the version used by the release workflows.
-const hyfensToolVersion = '0.1.2';
+const hyfensToolVersion = '0.1.3';
 const _bridgeExtensionType = 9;
 const _rollbackStateVersion = 1;
 const _rollbackTargetBaseAot = 'base-aot';
@@ -965,6 +966,8 @@ final class ReleaseRecord {
     required List<ToolDiagnostic> diagnostics,
     required this.configFingerprint,
     required this.nativeFingerprints,
+    this.resourceSnapshot,
+    this.flutterEngineRevision,
     this.entrypointPath = 'lib/main.dart',
     this.flavor,
   }) : sources = List.unmodifiable(sources),
@@ -992,6 +995,8 @@ final class ReleaseRecord {
   final List<ToolDiagnostic> diagnostics;
   final String configFingerprint;
   final Map<String, Object?> nativeFingerprints;
+  final ResourceSnapshot? resourceSnapshot;
+  final String? flutterEngineRevision;
   final String entrypointPath;
   final String? flavor;
 
@@ -1025,6 +1030,10 @@ final class ReleaseRecord {
     'diagnostics': diagnostics.map((item) => item.toJson()).toList(),
     'configFingerprint': configFingerprint,
     'nativeFingerprints': nativeFingerprints,
+    if (resourceSnapshot != null)
+      'resourceSnapshot': resourceSnapshot!.toJson(),
+    if (flutterEngineRevision != null)
+      'flutterEngineRevision': flutterEngineRevision,
   };
 
   static ReleaseRecord decode(String source) {
@@ -1055,7 +1064,9 @@ final class ReleaseRecord {
         raw['sourceFingerprints'] is! Map<String, Object?> ||
         raw['instrumentation'] is! Map<String, Object?> ||
         raw['build'] is! Map<String, Object?> ||
-        raw['nativeFingerprints'] is! Map<String, Object?>) {
+        raw['nativeFingerprints'] is! Map<String, Object?> ||
+        (raw['flutterEngineRevision'] != null &&
+            raw['flutterEngineRevision'] is! String)) {
       throw const FormatException('Invalid release metadata fields');
     }
     final sources = (raw['sources']! as List<Object?>)
@@ -1096,6 +1107,10 @@ final class ReleaseRecord {
       diagnostics: diagnostics,
       configFingerprint: raw['configFingerprint']! as String,
       nativeFingerprints: raw['nativeFingerprints']! as Map<String, Object?>,
+      resourceSnapshot: raw['resourceSnapshot'] == null
+          ? null
+          : ResourceSnapshot.decode(raw['resourceSnapshot']!),
+      flutterEngineRevision: raw['flutterEngineRevision'] as String?,
       entrypointPath: entrypointPath,
       flavor: flavor,
     );
@@ -1297,12 +1312,14 @@ final class ToolEnvironmentSnapshot {
     required this.dartStatus,
     required this.androidStatus,
     required this.xcodeStatus,
+    this.flutterEngineRevision = 'unknown',
     this.gitStatus = 'NOT TESTED',
     this.runtimeStatus = 'NOT TESTED',
   });
 
   final String flutterVersion;
   final String dartVersion;
+  final String flutterEngineRevision;
   final String flutterStatus;
   final String dartStatus;
   final String androidStatus;
@@ -1313,6 +1330,7 @@ final class ToolEnvironmentSnapshot {
   Map<String, Object> toJson() => <String, Object>{
     'flutterVersion': flutterVersion,
     'dartVersion': dartVersion,
+    'flutterEngineRevision': flutterEngineRevision,
     'flutterStatus': flutterStatus,
     'dartStatus': dartStatus,
     'androidStatus': androidStatus,
@@ -1325,6 +1343,7 @@ final class ToolEnvironmentSnapshot {
       ToolEnvironmentSnapshot(
         flutterVersion: flutterVersion,
         dartVersion: dartVersion,
+        flutterEngineRevision: flutterEngineRevision,
         flutterStatus: flutterStatus,
         dartStatus: dartStatus,
         androidStatus: androidStatus,
@@ -1384,10 +1403,12 @@ final class ToolEnvironment {
     final flutter = _versionSync('flutter', const ['--version']);
     final dart = _versionSync('dart', const ['--version']);
     final flutterVersion = extractFlutterVersion(flutter.$1);
+    final flutterEngineRevision = extractFlutterEngineRevision(flutter.$1);
     final dartVersion = extractDartVersion(dart.$1);
     return ToolEnvironmentSnapshot(
       flutterVersion: flutterVersion ?? 'unknown',
       dartVersion: dartVersion ?? 'unknown',
+      flutterEngineRevision: flutterEngineRevision ?? 'unknown',
       flutterStatus: flutterToolchainStatus(flutter.$2, flutterVersion),
       dartStatus: dartToolchainStatus(dart.$2, dartVersion),
       androidStatus: 'NOT TESTED',
@@ -1401,6 +1422,7 @@ final class ToolEnvironment {
     final dart = await _version('dart', const ['--version']);
     final git = await _version('git', const ['--version']);
     final flutterVersion = extractFlutterVersion(flutter.$1);
+    final flutterEngineRevision = extractFlutterEngineRevision(flutter.$1);
     final dartVersion = extractDartVersion(dart.$1);
     final xcode =
         Platform.isMacOS &&
@@ -1420,6 +1442,7 @@ final class ToolEnvironment {
     return ToolEnvironmentSnapshot(
       flutterVersion: flutterVersion ?? 'unknown',
       dartVersion: dartVersion ?? 'unknown',
+      flutterEngineRevision: flutterEngineRevision ?? 'unknown',
       flutterStatus: flutterToolchainStatus(flutter.$2, flutterVersion),
       dartStatus: dartToolchainStatus(dart.$2, dartVersion),
       androidStatus: android,
@@ -2270,6 +2293,29 @@ final class HyfensToolchain {
       entrypointPath: selection.entrypointPath,
     );
     final environment = await _environment.inspect(current);
+    late final ResourceSnapshot resourceSnapshot;
+    try {
+      resourceSnapshot = ResourceSnapshot.capture(
+        project: current,
+        graph: graph,
+        target: target,
+      );
+    } on ResourceSnapshotFailure catch (failure) {
+      throw ToolFailure(
+        exitCode: ToolExitCode.environment,
+        diagnostics: <ToolDiagnostic>[failure.toDiagnostic()],
+      );
+    }
+    if (!metadataOnly && environment.flutterEngineRevision == 'unknown') {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: ToolDiagnosticCodes.engineRevisionUnavailable,
+        summary: 'Flutter engine revision is unavailable',
+        detail: 'The release cannot establish an exact engine identity.',
+        action: 'Use a Flutter SDK that reports its engine revision, then retry the release.',
+        storeReleaseRequired: true,
+      );
+    }
     final targetName = '$target-$architecture-$buildMode';
     final graphFingerprint = graph.fingerprint;
     final native = _nativeSnapshot(current, graph);
@@ -2279,9 +2325,11 @@ final class HyfensToolchain {
     final dependencyFingerprint = digestJson(<String, Object?>{
       'graph': graphFingerprint,
       'flutter': environment.flutterVersion,
+      'engine': environment.flutterEngineRevision,
       'dart': environment.dartVersion,
       'config': configFingerprint,
       'native': digestJson(native),
+      'resources': resourceSnapshot.fingerprint,
       'toolVersion': hyfensToolVersion,
       'formatVersion': patchFormatV1,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
@@ -2305,11 +2353,13 @@ final class HyfensToolchain {
       'target': targetName,
       'applicationId': applicationId,
       'flutter': environment.flutterVersion,
+      'engine': environment.flutterEngineRevision,
       'dart': environment.dartVersion,
       'tool': hyfensToolVersion,
       'runtime': patchFormatRuntimeCompatibilityV1,
       'format': patchFormatV1,
       'graph': graphFingerprint,
+      'resources': resourceSnapshot.fingerprint,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
       'entrypoint': selection.entrypointPath,
       'flavor': selection.flavor,
@@ -2401,6 +2451,8 @@ final class HyfensToolchain {
       diagnostics: plan.diagnostics,
       configFingerprint: configFingerprint,
       nativeFingerprints: native,
+      resourceSnapshot: resourceSnapshot,
+      flutterEngineRevision: environment.flutterEngineRevision,
       entrypointPath: selection.entrypointPath,
       flavor: selection.flavor,
     );
@@ -2469,6 +2521,26 @@ final class HyfensToolchain {
     final items = <AnalysisItem>[];
     final diagnostics = <ToolDiagnostic>[...plan.diagnostics];
     final environment = _environment.inspectVersionsSync();
+    ResourceSnapshot? currentResourceSnapshot;
+    try {
+      currentResourceSnapshot = ResourceSnapshot.capture(
+        project: current,
+        graph: graph,
+        target: release.target,
+      );
+    } on ResourceSnapshotFailure catch (failure) {
+      final diagnostic = failure.toDiagnostic();
+      diagnostics.add(diagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: failure.path,
+          detail: failure.detail,
+          functionIds: const <String>[],
+          diagnostic: diagnostic,
+        ),
+      );
+    }
     if (environment.flutterStatus != 'SUPPORTED' ||
         environment.dartStatus != 'SUPPORTED') {
       final diagnostic = ToolDiagnostic(
@@ -2533,6 +2605,101 @@ final class HyfensToolchain {
           diagnostic: diagnostic,
         ),
       );
+    }
+    if (environment.flutterStatus == 'SUPPORTED' &&
+        (release.flutterEngineRevision == null ||
+            release.flutterEngineRevision == 'unknown' ||
+            environment.flutterEngineRevision == 'unknown' ||
+            release.flutterEngineRevision !=
+                environment.flutterEngineRevision)) {
+      final diagnostic = ToolDiagnostic(
+        code: ToolDiagnosticCodes.engineRevisionUnavailable,
+        severity: DiagnosticSeverity.error,
+        summary: 'Flutter engine identity differs from the release',
+        detail:
+            'Release Flutter ${release.flutterVersion}/${release.flutterEngineRevision ?? 'missing'}; current Flutter ${environment.flutterVersion}/${environment.flutterEngineRevision}.',
+        action: 'Use the exact Flutter framework/engine toolchain or create a new base release.',
+        storeReleaseRequired: true,
+      );
+      diagnostics.add(diagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: '<toolchain>',
+          detail: diagnostic.detail,
+          functionIds: const <String>[],
+          diagnostic: diagnostic,
+        ),
+      );
+    }
+    if (release.resourceSnapshot == null) {
+      final diagnostic = ToolDiagnostic(
+        code: ToolDiagnosticCodes.resourceSnapshotMissing,
+        severity: DiagnosticSeverity.error,
+        summary: 'Release baseline has no resource snapshot',
+        detail:
+            'Packaged assets, fonts, and native resources were not recorded.',
+        action:
+            'Create a new base release before generating an OTA code patch.',
+        storeReleaseRequired: true,
+      );
+      diagnostics.add(diagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: '<resource snapshot>',
+          detail: diagnostic.detail,
+          functionIds: const <String>[],
+          diagnostic: diagnostic,
+        ),
+      );
+    } else if (currentResourceSnapshot != null) {
+      final changes = release.resourceSnapshot!.diff(currentResourceSnapshot);
+      for (final kind in ResourceInputKind.values) {
+        final kindChanges = changes.changes
+            .where((change) => change.kind == kind)
+            .toList(growable: false);
+        if (kindChanges.isEmpty) continue;
+        final labels = kindChanges
+            .take(16)
+            .map((change) => '${change.displayPath} (${change.reason})');
+        final remainder = kindChanges.length - labels.length;
+        final detail = StringBuffer(labels.join('; '));
+        if (remainder > 0) detail.write('; ... $remainder more');
+        final diagnostic = ToolDiagnostic(
+          code: switch (kind) {
+            ResourceInputKind.asset => ToolDiagnosticCodes.resourceAssetChanged,
+            ResourceInputKind.font => ToolDiagnosticCodes.resourceFontChanged,
+            ResourceInputKind.native =>
+              ToolDiagnosticCodes.resourceNativeChanged,
+          },
+          severity: DiagnosticSeverity.error,
+          summary: switch (kind) {
+            ResourceInputKind.asset =>
+              'Packaged asset inputs differ from the release baseline',
+            ResourceInputKind.font => 'Packaged font or Material icon inputs differ from the release baseline',
+            ResourceInputKind.native => 'Native packaged resource inputs differ from the release baseline',
+          },
+          detail: detail.toString(),
+          path: switch (kind) {
+            ResourceInputKind.asset => '<packaged assets>',
+            ResourceInputKind.font => '<packaged fonts>',
+            ResourceInputKind.native => '<native resources>',
+          },
+          action: 'Create a new base release; packaged resources are not OTA patch content.',
+          storeReleaseRequired: true,
+        );
+        diagnostics.add(diagnostic);
+        items.add(
+          AnalysisItem(
+            classification: ChangeClassification.storeReleaseRequired,
+            path: diagnostic.path!,
+            detail: diagnostic.detail,
+            functionIds: const <String>[],
+            diagnostic: diagnostic,
+          ),
+        );
+      }
     }
     for (final path in paths.toList()..sort()) {
       final before = baselineSources[path];
@@ -3348,7 +3515,8 @@ final class HyfensToolchain {
       for (final entity in root.listSync(recursive: true, followLinks: false)) {
         if (entity is! File) continue;
         final relative = relativePath(project.root, entity);
-        if (_nativeInput(relative) && !_volatileNativePath(relative)) {
+        if (isNativeBuildInputPath(relative) &&
+            !_volatileNativePath(relative)) {
           paths.add(relative);
         }
       }
@@ -3371,7 +3539,8 @@ final class HyfensToolchain {
         )) {
           if (entity is! File) continue;
           final relative = relativePath(package.root!, entity);
-          if (_nativeInput(relative) && !_volatileNativePath(relative)) {
+          if (isNativeBuildInputPath(relative) &&
+              !_volatileNativePath(relative)) {
             packageFiles['package:${package.name}/$relative'] = entity;
           }
         }
@@ -3635,6 +3804,7 @@ final class HyfensToolchain {
       'HYFENS_APPLICATION_ID',
       'HYFENS_ENVIRONMENT_ID',
       'HYFENS_PLATFORM_ID',
+      'HYFENS_INSTALL_RECEIPT_MODE',
     ];
     final arguments = <String>[];
     final recordedArguments = <String>[];
@@ -4485,33 +4655,6 @@ final class PatchInspection {
     'keyId': artifact.signatureMetadata.keyId,
     'extensionTypes': artifact.extensions.map((item) => item.type).toList(),
   };
-}
-
-bool _nativeInput(String relative) {
-  final lower = relative.toLowerCase();
-  final basename = p.basename(lower);
-  return lower.endsWith('androidmanifest.xml') ||
-      lower.endsWith('podfile.lock') ||
-      basename == 'podfile' ||
-      lower.endsWith('.plist') ||
-      lower.endsWith('.pbxproj') ||
-      lower.endsWith('.entitlements') ||
-      lower.endsWith('.xcconfig') ||
-      lower.endsWith('.gradle') ||
-      lower.endsWith('.gradle.kts') ||
-      lower.endsWith('gradle.properties') ||
-      lower.endsWith('settings.gradle') ||
-      lower.endsWith('settings.gradle.kts') ||
-      lower.endsWith('.podfile') ||
-      lower.endsWith('.podspec') ||
-      lower.endsWith('.kt') ||
-      lower.endsWith('.swift') ||
-      lower.endsWith('.java') ||
-      lower.endsWith('.mm') ||
-      lower.endsWith('.m') ||
-      lower.endsWith('.h') ||
-      lower.endsWith('.cpp') ||
-      lower.endsWith('.c');
 }
 
 bool _volatileNativePath(String relative) {

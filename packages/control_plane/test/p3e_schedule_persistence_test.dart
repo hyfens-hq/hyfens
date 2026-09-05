@@ -210,6 +210,7 @@ void main() {
       final control = FileControlPlaneStore(Directory('${root.path}/control'));
       final schedules = FileP3e5ScheduleStore(
         Directory('${root.path}/schedule'),
+        clock: () => now,
       );
       await control.initialize();
       final credentials = CredentialService(random: Random(11));
@@ -217,12 +218,7 @@ void main() {
         id: 'credential_admin',
         organizationId: 'org_1',
         kind: CredentialKind.control,
-        scopes: const <String>{
-          'health:schedule',
-          'rollout:read',
-          'credential:issue',
-          'credential:revoke',
-        },
+        scopes: controlScopes,
       );
       await control.createJson(
         'credentials',

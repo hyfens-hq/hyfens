@@ -6,6 +6,28 @@ import 'package:path/path.dart' as p;
 import '../../cli/lib/src/runtime_bundle.dart';
 import 'release_support.dart';
 
+const _runtimeExcludedDirectories = <String>{
+  '.dart_tool',
+  '.git',
+  '.gradle',
+  '.symlinks',
+  'build',
+  'example',
+  'examples',
+  'pods',
+  'test',
+  'tests',
+};
+
+const _runtimeLegalFileNames = <String>{
+  'license',
+  'license.md',
+  'license.txt',
+  'notice',
+  'notice.md',
+  'notice.txt',
+};
+
 String get repositoryRoot =>
     File.fromUri(Platform.script).parent.parent.parent.absolute.path;
 
@@ -101,13 +123,33 @@ Future<Directory> buildCliBundle({
   return bundle;
 }
 
-Future<void> copyDirectory(Directory source, Directory destination) async {
+Future<void> copyDirectory(
+  Directory source,
+  Directory destination, {
+  Set<String> excludedDirectories = const {},
+}) async {
+  final sourceType = FileSystemEntity.typeSync(source.path, followLinks: false);
+  if (sourceType == FileSystemEntityType.link) {
+    throw StateError('Release bundle source directory is a symlink.');
+  }
+  if (sourceType != FileSystemEntityType.directory) {
+    throw StateError('Release bundle source directory is unavailable.');
+  }
   await destination.create(recursive: true);
   await for (final entity in source.list(followLinks: false)) {
     final name = p.basename(entity.path);
     final target = p.join(destination.path, name);
     if (entity is Directory) {
-      await copyDirectory(entity, Directory(target));
+      if (excludedDirectories.any(
+        (excluded) => excluded.toLowerCase() == name.toLowerCase(),
+      )) {
+        continue;
+      }
+      await copyDirectory(
+        entity,
+        Directory(target),
+        excludedDirectories: excludedDirectories,
+      );
     } else if (entity is File) {
       await entity.copy(target);
     } else if (entity is Link) {
@@ -116,14 +158,121 @@ Future<void> copyDirectory(Directory source, Directory destination) async {
   }
 }
 
-Future<void> copyRuntimePackage(Directory source, Directory destination) async {
+Future<void> copyRuntimePackage(
+  Directory source,
+  Directory destination, {
+  required String packageName,
+}) async {
+  final sourceType = FileSystemEntity.typeSync(source.path, followLinks: false);
+  if (sourceType == FileSystemEntityType.link) {
+    throw StateError('Runtime package source is a symlink: $packageName');
+  }
+  if (sourceType != FileSystemEntityType.directory) {
+    throw StateError('Runtime package source is unavailable: $packageName');
+  }
   final sourceLib = Directory(p.join(source.path, 'lib'));
   final sourcePubspec = File(p.join(source.path, 'pubspec.yaml'));
-  if (!sourceLib.existsSync() || !sourcePubspec.existsSync()) {
-    throw StateError('Runtime package is incomplete: ${source.path}');
+  if (FileSystemEntity.typeSync(sourceLib.path, followLinks: false) !=
+          FileSystemEntityType.directory ||
+      FileSystemEntity.typeSync(sourcePubspec.path, followLinks: false) !=
+          FileSystemEntityType.file) {
+    throw StateError('Runtime package is incomplete: $packageName');
   }
   await copyDirectory(sourceLib, Directory(p.join(destination.path, 'lib')));
   await sourcePubspec.copy(p.join(destination.path, 'pubspec.yaml'));
+  for (final relative
+      in RuntimePackageBundle.additionalPackagePaths[packageName] ??
+          const <String>[]) {
+    await _copyRuntimePath(
+      source: source,
+      destination: destination,
+      relative: relative,
+      packageName: packageName,
+    );
+  }
+  // Runtime-owned platform plugins are part of the base build, not OTA data.
+  // The released executable must carry their source just like their Dart API;
+  // native registrants cannot resolve an omitted platform implementation.
+  for (final platform in RuntimePackageBundle.nativePackageDirectoryNames) {
+    final native = Directory(p.join(source.path, platform));
+    final type = FileSystemEntity.typeSync(native.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) continue;
+    if (type == FileSystemEntityType.link) {
+      throw StateError(
+        'Runtime package platform directory is a symlink: $packageName/$platform',
+      );
+    }
+    if (type != FileSystemEntityType.directory) {
+      throw StateError(
+        'Runtime package platform directory is unavailable: $packageName/$platform',
+      );
+    }
+    await copyDirectory(
+      native,
+      Directory(p.join(destination.path, platform)),
+      excludedDirectories: _runtimeExcludedDirectories,
+    );
+  }
+  await _copyRuntimeLegalFiles(source, destination);
+}
+
+Future<void> _copyRuntimePath({
+  required Directory source,
+  required Directory destination,
+  required String relative,
+  required String packageName,
+}) async {
+  final sourcePath = p.join(source.path, relative);
+  var checkedPath = source.path;
+  for (final segment in p.split(relative)) {
+    checkedPath = p.join(checkedPath, segment);
+    if (FileSystemEntity.typeSync(checkedPath, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw StateError(
+        'Runtime package path is a symlink: $packageName/$relative',
+      );
+    }
+  }
+  final type = FileSystemEntity.typeSync(sourcePath, followLinks: false);
+  if (type == FileSystemEntityType.link) {
+    throw StateError(
+      'Runtime package path is a symlink: $packageName/$relative',
+    );
+  }
+  if (type == FileSystemEntityType.file) {
+    final target = File(p.join(destination.path, relative));
+    await target.parent.create(recursive: true);
+    await File(sourcePath).copy(target.path);
+    return;
+  }
+  if (type == FileSystemEntityType.directory) {
+    await copyDirectory(
+      Directory(sourcePath),
+      Directory(p.join(destination.path, relative)),
+      excludedDirectories: _runtimeExcludedDirectories,
+    );
+    return;
+  }
+  throw StateError('Runtime package path is missing: $packageName/$relative');
+}
+
+Future<void> _copyRuntimeLegalFiles(
+  Directory source,
+  Directory destination,
+) async {
+  await destination.create(recursive: true);
+  await for (final entity in source.list(followLinks: false)) {
+    final name = p.basename(entity.path);
+    if (!_runtimeLegalFileNames.contains(name.toLowerCase())) continue;
+    final type = FileSystemEntity.typeSync(entity.path, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      throw StateError('Runtime package legal file is a symlink: $name');
+    }
+    if (type != FileSystemEntityType.file) {
+      throw StateError('Runtime package legal file is unavailable: $name');
+    }
+    await File(entity.path).copy(p.join(destination.path, name));
+  }
 }
 
 Map<String, Directory> packageRootsFromConfig(Directory cliRoot) {
@@ -162,6 +311,7 @@ Future<void> stageRuntimePackages({
     await copyRuntimePackage(
       Directory(p.join(repository.path, entry.value)),
       Directory(p.join(runtimeRoot.path, entry.key)),
+      packageName: entry.key,
     );
   }
   for (final name in RuntimePackageBundle.hostedPackageNames) {
@@ -169,7 +319,11 @@ Future<void> stageRuntimePackages({
     if (source == null) {
       throw StateError('Runtime package is missing from the CLI graph: $name');
     }
-    await copyRuntimePackage(source, Directory(p.join(runtimeRoot.path, name)));
+    await copyRuntimePackage(
+      source,
+      Directory(p.join(runtimeRoot.path, name)),
+      packageName: name,
+    );
   }
 }
 

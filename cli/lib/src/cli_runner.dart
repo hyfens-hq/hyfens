@@ -968,6 +968,8 @@ final class ReleaseCommand extends _ToolCommand {
       'entrypoint': record.entrypointPath,
       'flavor': record.flavor,
       'buildFingerprint': record.buildFingerprint,
+      'flutterEngineRevision': record.flutterEngineRevision,
+      'resourceSnapshotFingerprint': record.resourceSnapshot?.fingerprint,
       'functions': record.functions.length,
       'sourceUnits': record.sources.length,
       'build': record.build,

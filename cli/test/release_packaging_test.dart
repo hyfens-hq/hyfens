@@ -3,9 +3,11 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+import 'package:yaml/yaml.dart';
 
 import '../../scripts/cli-release/build.dart' as release_build;
 import '../../scripts/cli-release/release_support.dart';
+import '../lib/src/runtime_bundle.dart';
 
 Directory repositoryDirectory() {
   var directory = Directory.current.absolute;
@@ -21,11 +23,194 @@ Directory repositoryDirectory() {
 void main() {
   final repository = repositoryDirectory();
 
+  test(
+    'runtime archive retains native plugin sources but not build caches',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'hyfens-native-bundle-',
+      );
+      addTearDown(() => root.delete(recursive: true));
+      final source = Directory(p.join(root.path, 'source'));
+      final destination = Directory(p.join(root.path, 'runtime'));
+      for (final relative in [
+        'lib/key.dart',
+        'lib/src/build/code.dart',
+        'pubspec.yaml',
+        'android/src/main/Plugin.kt',
+        'android/build.gradle',
+        'ios/Classes/Plugin.swift',
+        'ios/key_plugin.podspec',
+        'darwin/Classes/Plugin.swift',
+        'linux/src/plugin.cc',
+        'macos/Classes/Plugin.swift',
+        'windows/src/plugin.cpp',
+        'hook/build.dart',
+        'src/objective_c.c',
+        'LICENSE',
+        'NOTICE',
+        'README.md',
+        'test/ignored.dart',
+        'example/ignored.dart',
+        'android/build/private-output',
+        'android/.gradle/cache',
+        'android/test/ignored.dart',
+        'ios/Pods/cache',
+        'ios/example/ignored.swift',
+      ]) {
+        final file = File(p.join(source.path, relative));
+        await file.parent.create(recursive: true);
+        await file.writeAsString('package test input');
+      }
+      await release_build.copyRuntimePackage(
+        source,
+        destination,
+        packageName: 'objective_c',
+      );
+      for (final relative in [
+        'lib/key.dart',
+        'lib/src/build/code.dart',
+        'pubspec.yaml',
+        'android/src/main/Plugin.kt',
+        'android/build.gradle',
+        'ios/Classes/Plugin.swift',
+        'ios/key_plugin.podspec',
+        'darwin/Classes/Plugin.swift',
+        'linux/src/plugin.cc',
+        'macos/Classes/Plugin.swift',
+        'windows/src/plugin.cpp',
+        'hook/build.dart',
+        'src/objective_c.c',
+        'LICENSE',
+        'NOTICE',
+      ]) {
+        expect(
+          File(p.join(destination.path, relative)).existsSync(),
+          isTrue,
+          reason: relative,
+        );
+      }
+      for (final relative in [
+        'android/build',
+        'android/.gradle',
+        'android/test',
+        'ios/Pods',
+        'ios/example',
+        'test',
+        'example',
+        'README.md',
+      ]) {
+        expect(
+          FileSystemEntity.typeSync(p.join(destination.path, relative)),
+          FileSystemEntityType.notFound,
+          reason: relative,
+        );
+      }
+    },
+  );
+
+  test('runtime bundle pins the locked non-SDK production closure', () {
+    const expectedHosted = <String>[
+      '_fe_analyzer_shared',
+      'analyzer',
+      'async',
+      'characters',
+      'code_assets',
+      'collection',
+      'convert',
+      'crypto',
+      'cryptography',
+      'ffi',
+      'file',
+      'glob',
+      'hooks',
+      'logging',
+      'material_color_utilities',
+      'meta',
+      'objective_c',
+      'package_config',
+      'path',
+      'path_provider',
+      'path_provider_android',
+      'path_provider_foundation',
+      'path_provider_linux',
+      'path_provider_platform_interface',
+      'path_provider_windows',
+      'platform',
+      'plugin_platform_interface',
+      'pub_semver',
+      'record_use',
+      'source_span',
+      'string_scanner',
+      'term_glyph',
+      'typed_data',
+      'vector_math',
+      'watcher',
+      'xdg_directories',
+      'yaml',
+    ];
+    const expectedRepository = <String>[
+      'hyfens_flutter_integration',
+      'hyfens_patch_format',
+      'hyfens_runtime',
+      'instrumentation_e0',
+      'patch_loading_e1',
+    ];
+
+    expect(
+      RuntimePackageBundle.repositoryPackagePaths.keys,
+      orderedEquals(expectedRepository),
+    );
+    expect(
+      RuntimePackageBundle.hostedPackageNames,
+      orderedEquals(expectedHosted),
+    );
+    expect(
+      RuntimePackageBundle.packageNames,
+      orderedEquals(<String>[...expectedRepository, ...expectedHosted]),
+    );
+    expect(RuntimePackageBundle.packageNames, isNot(contains('flutter')));
+    expect(RuntimePackageBundle.packageNames, isNot(contains('sky_engine')));
+    expect(RuntimePackageBundle.packageNames, isNot(contains('test')));
+    expect(
+      RuntimePackageBundle.additionalPackagePaths['objective_c'],
+      orderedEquals(<String>['hook/build.dart', 'src']),
+    );
+
+    // Inspect the resolved production graph instead of only comparing two
+    // copies of the allowlist. A newly introduced dependency must fail here
+    // until the standalone bundle includes it, even if source builds work.
+    final roots = release_build.packageRootsFromConfig(
+      Directory(p.join(repository.path, 'cli')),
+    );
+    final pending = RuntimePackageBundle.repositoryPackagePaths.keys.toList();
+    final closure = <String>{};
+    while (pending.isNotEmpty) {
+      final name = pending.removeLast();
+      if (!closure.add(name)) continue;
+      final root = roots[name];
+      expect(
+        root,
+        isNotNull,
+        reason: 'Resolved runtime package missing: $name',
+      );
+      final manifest = loadYaml(
+        File(p.join(root!.path, 'pubspec.yaml')).readAsStringSync(),
+      ) as YamlMap;
+      final dependencies = manifest['dependencies'];
+      if (dependencies is YamlMap) {
+        pending.addAll(dependencies.keys.cast<String>());
+      }
+    }
+    closure.removeAll(const ['flutter', 'sky_engine']);
+    expect(RuntimePackageBundle.packageNames.toSet(), unorderedEquals(closure));
+    expect(RuntimePackageBundle.packageNames.length, closure.length);
+  });
+
   group('release metadata', () {
     test('normalizes tags and enforces the CLI package version', () {
       expect(normalizeReleaseVersion('v0.1.0'), '0.1.0');
-      expect(cliPackageVersion(repository.path), '0.1.2');
-      validateReleaseVersion(repositoryRoot: repository.path, version: '0.1.2');
+      expect(cliPackageVersion(repository.path), '0.1.3');
+      validateReleaseVersion(repositoryRoot: repository.path, version: '0.1.3');
       expect(
         () => validateReleaseVersion(
           repositoryRoot: repository.path,
@@ -38,17 +223,17 @@ void main() {
     test('uses platform-specific archive names and formats', () {
       expect(
         artifactFileName(
-          version: '0.1.2',
+          version: '0.1.3',
           platform: 'macos',
           architecture: 'arm64',
         ),
-        'hyfens-0.1.2-macos-arm64.tar.gz',
+        'hyfens-0.1.3-macos-arm64.tar.gz',
       );
-      final windows = parseArtifactFileName('hyfens-0.1.2-windows-x64.zip');
+      final windows = parseArtifactFileName('hyfens-0.1.3-windows-x64.zip');
       expect(windows.platform, 'windows');
       expect(windows.architecture, 'x64');
       expect(
-        () => parseArtifactFileName('hyfens-0.1.2-linux-x64.zip'),
+        () => parseArtifactFileName('hyfens-0.1.3-linux-x64.zip'),
         throwsFormatException,
       );
     });
@@ -70,11 +255,11 @@ void main() {
           final platform = parts[0];
           final architecture = parts[1];
           final archiveName =
-              'hyfens-0.1.2-$platform-$architecture.' + entry.value;
+              'hyfens-0.1.3-$platform-$architecture.' + entry.value;
 
           expect(
             artifactFileName(
-              version: '0.1.2',
+              version: '0.1.3',
               platform: platform,
               architecture: architecture,
             ),
@@ -82,7 +267,7 @@ void main() {
           );
           expect(
             release_build.archiveRootName(archiveName),
-            'hyfens-0.1.2-$platform-$architecture',
+            'hyfens-0.1.3-$platform-$architecture',
           );
         }
       },
@@ -95,12 +280,12 @@ void main() {
     );
     addTearDown(() => artifacts.delete(recursive: true));
     final names = <String>[
-      'hyfens-0.1.2-linux-arm64.tar.gz',
-      'hyfens-0.1.2-linux-x64.tar.gz',
-      'hyfens-0.1.2-macos-arm64.tar.gz',
-      'hyfens-0.1.2-macos-x64.tar.gz',
-      'hyfens-0.1.2-windows-arm64.zip',
-      'hyfens-0.1.2-windows-x64.zip',
+      'hyfens-0.1.3-linux-arm64.tar.gz',
+      'hyfens-0.1.3-linux-x64.tar.gz',
+      'hyfens-0.1.3-macos-arm64.tar.gz',
+      'hyfens-0.1.3-macos-x64.tar.gz',
+      'hyfens-0.1.3-windows-arm64.zip',
+      'hyfens-0.1.3-windows-x64.zip',
     ];
     for (final name in names) {
       await File(p.join(artifacts.path, name)).writeAsString(name);
@@ -110,7 +295,7 @@ void main() {
       'run',
       '../scripts/cli-release/inventory.dart',
       '--version',
-      '0.1.2',
+      '0.1.3',
       '--artifacts-dir',
       artifacts.path,
       '--output',
@@ -119,7 +304,7 @@ void main() {
     expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
     final body =
         jsonDecode(await inventory.readAsString()) as Map<String, dynamic>;
-    expect(body['releaseVersion'], '0.1.2');
+    expect(body['releaseVersion'], '0.1.3');
     expect((body['artifacts'] as List<dynamic>), hasLength(6));
     final checksums = await File(p.join(artifacts.path, 'SHA256SUMS'))
         .readAsLines();

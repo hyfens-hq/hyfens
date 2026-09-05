@@ -1379,6 +1379,14 @@ String? extractFlutterVersion(String output) {
   return match?.group(1);
 }
 
+String? extractFlutterEngineRevision(String output) {
+  final match = RegExp(
+    r'Engine\s+[•·]\s+(?:hash\s+([0-9a-f]{40})|revision\s+([0-9a-f]{7,64}))',
+    caseSensitive: false,
+  ).firstMatch(output);
+  return (match?.group(1) ?? match?.group(2))?.toLowerCase();
+}
+
 String? extractDartVersion(String output) {
   final match = RegExp(r'Dart SDK version:\s*(\d+\.\d+\.\d+)')
       .firstMatch(output);

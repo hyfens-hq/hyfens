@@ -23,13 +23,63 @@ final class RuntimePackageBundle {
   /// Hosted packages used by the generated Flutter runtime that may not be
   /// present in an otherwise ordinary Flutter application.
   static const hostedPackageNames = <String>[
+    '_fe_analyzer_shared',
+    'analyzer',
+    'async',
+    'characters',
+    'code_assets',
     'collection',
+    'convert',
     'crypto',
     'cryptography',
     'ffi',
+    'file',
+    'glob',
+    'hooks',
+    'logging',
+    'material_color_utilities',
     'meta',
+    'objective_c',
+    'package_config',
+    'path',
+    'path_provider',
+    'path_provider_android',
+    'path_provider_foundation',
+    'path_provider_linux',
+    'path_provider_platform_interface',
+    'path_provider_windows',
+    'platform',
+    'plugin_platform_interface',
+    'pub_semver',
+    'record_use',
+    'source_span',
+    'string_scanner',
+    'term_glyph',
     'typed_data',
+    'vector_math',
+    'watcher',
+    'xdg_directories',
+    'yaml',
   ];
+
+  /// Platform directories that Flutter plugin discovery may read from a
+  /// packaged runtime dependency.
+  static const nativePackageDirectoryNames = <String>[
+    'android',
+    'darwin',
+    'ios',
+    'linux',
+    'macos',
+    'windows',
+  ];
+
+  /// Non-lib paths required by the locked production runtime closure.
+  ///
+  /// objective_c's hook/build.dart compiles the package-root src/ tree. No
+  /// package tests, examples, generators, or SDK roots belong in the archive.
+  static const additionalPackagePaths = <String, List<String>>{
+    'objective_c': <String>['hook/build.dart', 'src'],
+  };
 
   static const packageNames = <String>[
     'hyfens_flutter_integration',

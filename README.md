@@ -178,15 +178,17 @@ See the [MCP guide](docs/mcp.md) for setup and tool details.
 
 | Change | Patch |
 | --- | :---: |
-| Dart business logic | Yes |
-| Flutter widgets and state | Yes |
-| Supported async Dart code | Yes |
-| Native Kotlin or Swift | No |
-| AndroidManifest or Info.plist | No |
-| New native plugin or dependency | No |
+| Dart business logic | Verified subset |
+| Flutter widgets, state and async code | Verified subset |
+| Changed, added or removed assets/fonts | New base release |
+| New tree-shaken icon glyph | New base release |
+| Native code, plugins or configuration | New base release |
+| Flutter engine change | New base release |
 
-Native changes need a new native release. See the [support matrix](docs/dart-support-matrix.md)
-for the current boundary.
+Patches currently carry code, not asset or font bundles. Referencing an asset
+already in the base is different from changing its bytes. See the
+[support matrix](docs/dart-support-matrix.md) for exact boundaries and device
+evidence. Broader real-application acceptance is still in progress.
 
 ## Common fixes
 

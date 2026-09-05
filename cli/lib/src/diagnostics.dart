@@ -41,6 +41,12 @@ abstract final class ToolDiagnosticCodes {
   static const statusNotInitialized = 'T1801';
   static const statusStoreIncomplete = 'T1802';
   static const statusInventoryTruncated = 'T1803';
+
+  static const resourceAssetChanged = 'A3010';
+  static const resourceFontChanged = 'F3010';
+  static const resourceNativeChanged = 'N3010';
+  static const resourceSnapshotMissing = 'R5010';
+  static const engineRevisionUnavailable = 'T1103';
 }
 
 final class ToolDiagnostic {

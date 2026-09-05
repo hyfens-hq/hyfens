@@ -1,6 +1,7 @@
 library hyfens_control_plane;
 
 export 'src/aggregation.dart';
+export 'src/artifact_delivery_admission.dart';
 export 'src/audit.dart';
 export 'src/audit_export_signing.dart';
 export 'src/auth.dart' show CredentialService;

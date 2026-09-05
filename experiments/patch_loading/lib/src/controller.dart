@@ -10,8 +10,10 @@ import 'package:hyfens_patch_format/patch_format.dart';
 import 'package:hyfens_runtime/runtime.dart';
 import 'package:instrumentation_e0/e0_runtime.dart';
 
+export 'controller_receipt.dart';
 export 'lifecycle_state.dart';
 
+import 'controller_receipt.dart';
 import 'key_lifecycle.dart';
 import 'lifecycle_state.dart';
 import 'rollback_control.dart';
@@ -126,8 +128,10 @@ final class E1PatchController {
     this.runtimeConfiguration = const E1RuntimeConfiguration(),
     E1LogSink? log,
     this.testHooks,
+    DateTime Function()? clock,
   }) : trustedPublicKeys = Map.unmodifiable(trustedPublicKeys),
-       _log = log ?? print {
+       _log = log ?? print,
+       _clock = clock ?? (() => DateTime.now().toUtc()) {
     _initialTrustState =
         initialTrustState ??
         _legacyTrustBaseline(
@@ -167,6 +171,7 @@ final class E1PatchController {
 
   static const _statePrimary = 'state-v3-a.json';
   static const _stateBackup = 'state-v3-b.json';
+  static const int maxInstallReceiptOutbox = 128;
   static E1PatchController? _runtimeOwner;
   final Directory storageDirectory;
   final String appId;
@@ -180,6 +185,7 @@ final class E1PatchController {
   final E1RuntimeConfiguration runtimeConfiguration;
   final E1LogSink _log;
   final E1PatchControllerTestHooks? testHooks;
+  final DateTime Function() _clock;
   late final E1KeyLifecycleState _initialTrustState;
   late E1KeyLifecycleState _trustState;
   late _PersistentState _durableState;
@@ -202,6 +208,10 @@ final class E1PatchController {
   E1KeyLifecycleState get trustState => _trustState;
   int get trustGeneration => _trustState.commandSequence;
   E1ControllerDurableState get durableState => _durableState.toPublicView();
+  List<E1InstallReceiptContext> get pendingInstallReceipts =>
+      List<E1InstallReceiptContext>.unmodifiable(
+        _durableState.installReceiptOutbox,
+      );
   E1LifecycleState get lifecycleState =>
       _recoveryNeeded ? E1LifecycleState.failed : _lifecycleState;
 
@@ -262,6 +272,7 @@ final class E1PatchController {
       }
       _adoptState(state);
     } else if (loaded.needsRepair) {
+      state = state.copyWith(formatVersion: _PersistentState.currentVersion);
       try {
         await _repairStateCopies(state);
       } on Object catch (error) {
@@ -277,9 +288,17 @@ final class E1PatchController {
         );
         return;
       }
+      _adoptState(state);
     }
 
     if (state.health == _PatchHealth.pending) {
+      final pendingReceipt = state.pendingInstallReceipt;
+      if (pendingReceipt != null && !_receiptDeadlineIsFuture(pendingReceipt)) {
+        _log(
+          'E1_PATCH expired pending install receipt; '
+          'unconfirmed candidate will not be booted',
+        );
+      }
       final fallback = state.lastKnownGood == null
           ? null
           : await _readAndValidate(state.lastKnownGood!, state);
@@ -294,6 +313,7 @@ final class E1PatchController {
               replayLedger: state.replayLedger.selectActiveArtifact(
                 _digestFromPatchReference(state.lastKnownGood!),
               ),
+              clearPendingInstallReceipt: true,
             ),
           );
           _adoptState(state);
@@ -315,6 +335,7 @@ final class E1PatchController {
               clearLastKnownGood: true,
               candidateBootAttempts: 0,
               replayLedger: state.replayLedger.rollbackToBase(),
+              clearPendingInstallReceipt: true,
             ),
           );
           _adoptState(state);
@@ -379,17 +400,72 @@ final class E1PatchController {
     }
   });
 
-  Future<bool> activateBytes(List<int> envelopeBytes, {int? downloadMicros}) {
+  Future<bool> activateBytes(
+    List<int> envelopeBytes, {
+    int? downloadMicros,
+    E1InstallReceiptContext? receiptContext,
+  }) {
     // Copy synchronously, before the first await or queue delay.
     final immutableInput = Uint8List.fromList(envelopeBytes);
     return _enqueue(
-      () => _activateBytes(immutableInput, downloadMicros: downloadMicros),
+      () => _activateBytes(
+        immutableInput,
+        downloadMicros: downloadMicros,
+        receiptContext: receiptContext,
+      ),
     );
   }
+
+  /// Removes one receipt after the owning server has acknowledged it.
+  ///
+  /// The controller performs no transport or acknowledgement itself. An
+  /// unknown ID is a durable no-op and returns false.
+  Future<bool> ackInstallReceipt(String receiptId) => _enqueue(() async {
+    if (_recoveryNeeded) {
+      return _recoveryLocked(
+        'receipt acknowledgement locked: controller recovery is required',
+      );
+    }
+    final loaded = await _loadState();
+    if (loaded.recoveryNeeded) {
+      _recoveryNeeded = true;
+      _lifecycleState = E1LifecycleState.failed;
+      _reject('receipt acknowledgement locked: ${loaded.detail}');
+      return false;
+    }
+    var state = loaded.state!;
+    if (loaded.needsRepair) {
+      state = state.copyWith(formatVersion: _PersistentState.currentVersion);
+      try {
+        await _repairStateCopies(state);
+      } on Object catch (error) {
+        _recoveryNeeded = true;
+        _lifecycleState = E1LifecycleState.failed;
+        _reject(
+          'receipt acknowledgement locked: durable state repair failed: $error',
+        );
+        return false;
+      }
+    }
+    _adoptState(state);
+    final index = state.installReceiptOutbox.indexWhere(
+      (receipt) => receipt.receiptId == receiptId,
+    );
+    if (index < 0) return false;
+    final nextOutbox = List<E1InstallReceiptContext>.of(
+      state.installReceiptOutbox,
+    )..removeAt(index);
+    final committed = await _commitState(
+      state.copyWith(installReceiptOutbox: nextOutbox),
+    );
+    _adoptState(committed);
+    return true;
+  });
 
   Future<bool> _activateBytes(
     Uint8List envelopeBytes, {
     int? downloadMicros,
+    E1InstallReceiptContext? receiptContext,
   }) async {
     if (_recoveryNeeded) {
       return _recoveryLocked(
@@ -404,9 +480,10 @@ final class E1PatchController {
       _reject('activation locked: ${loaded.detail}');
       return false;
     }
-    final state = loaded.state!;
+    var state = loaded.state!;
     _adoptState(state);
     if (loaded.needsRepair) {
+      state = state.copyWith(formatVersion: _PersistentState.currentVersion);
       try {
         await _repairStateCopies(state);
       } on Object catch (error) {
@@ -415,6 +492,7 @@ final class E1PatchController {
         _reject('activation locked: durable state repair failed: $error');
         return false;
       }
+      _adoptState(state);
     }
     final verifyWatch = Stopwatch()..start();
     late _VerifiedRuntimePatch verified;
@@ -438,6 +516,7 @@ final class E1PatchController {
       state: state,
       downloadMicros: downloadMicros,
       verificationMicros: verifyWatch.elapsedMicroseconds,
+      receiptContext: receiptContext,
     );
   }
 
@@ -446,6 +525,7 @@ final class E1PatchController {
     required _PersistentState state,
     int? downloadMicros,
     required int verificationMicros,
+    E1InstallReceiptContext? receiptContext,
   }) async {
     final oldState = state;
     _adoptState(oldState);
@@ -457,6 +537,22 @@ final class E1PatchController {
     }
     final stableEnvelope = Uint8List.fromList(verified.artifactBytes);
     final digest = sha256.convert(stableEnvelope).toString();
+    E1InstallReceiptContext? boundReceiptContext;
+    try {
+      boundReceiptContext = _bindReceiptContext(
+        receiptContext,
+        digest: digest,
+        verified: verified,
+      );
+    } on Object catch (error) {
+      _reject('install receipt context rejected: $error');
+      return false;
+    }
+    if (boundReceiptContext != null &&
+        !_receiptDeadlineIsFuture(boundReceiptContext)) {
+      _reject('install receipt activation deadline expired');
+      return false;
+    }
     final patchName = verified.patchFormat
         ? 'patch-$digest.v1.patch'
         : 'patch-$digest.e1.signed.json';
@@ -496,6 +592,17 @@ final class E1PatchController {
       _reject('signed patch rejected: ${admission.status.name}');
       return false;
     }
+    if (boundReceiptContext != null) {
+      if (oldState.installReceiptOutbox.length >=
+          E1PatchController.maxInstallReceiptOutbox) {
+        _reject('install receipt outbox is full; candidate was not published');
+        return false;
+      }
+      if (_receiptIdIsQueued(oldState, boundReceiptContext.receiptId)) {
+        _reject('install receipt ID is already queued');
+        return false;
+      }
+    }
 
     var pending = oldState;
     try {
@@ -509,6 +616,8 @@ final class E1PatchController {
           lastKnownGood: oldState.current,
           candidateBootAttempts: E1LifecycleInvariant.maxCandidateBootAttempts,
           replayLedger: admission.ledger,
+          pendingInstallReceipt: boundReceiptContext,
+          clearPendingInstallReceipt: boundReceiptContext == null,
         ),
       );
       _adoptState(pending);
@@ -560,8 +669,25 @@ final class E1PatchController {
       _reject('health confirmation rejected: no pending candidate');
       return false;
     }
+    final pendingReceipt = state.pendingInstallReceipt;
+    if (pendingReceipt != null && !_receiptDeadlineIsFuture(pendingReceipt)) {
+      await _recoverState(
+        state,
+        'pending install receipt activation deadline expired',
+      );
+      return false;
+    }
+    final nextOutbox = List<E1InstallReceiptContext>.of(
+      state.installReceiptOutbox,
+    );
+    if (pendingReceipt != null) nextOutbox.add(pendingReceipt);
     final committed = await _commitState(
-      state.copyWith(health: _PatchHealth.healthy, candidateBootAttempts: 0),
+      state.copyWith(
+        health: _PatchHealth.healthy,
+        candidateBootAttempts: 0,
+        clearPendingInstallReceipt: true,
+        installReceiptOutbox: nextOutbox,
+      ),
     );
     _adoptState(committed);
     _emit(
@@ -608,6 +734,7 @@ final class E1PatchController {
             clearLastKnownGood: true,
             candidateBootAttempts: 0,
             replayLedger: state.replayLedger.rollbackToBase(),
+            clearPendingInstallReceipt: true,
           ),
         );
         _adoptState(committed);
@@ -634,6 +761,7 @@ final class E1PatchController {
           replayLedger: state.replayLedger.selectActiveArtifact(
             _digestFromPatchReference(state.lastKnownGood!),
           ),
+          clearPendingInstallReceipt: true,
         ),
       );
       _adoptState(committed);
@@ -744,6 +872,7 @@ final class E1PatchController {
           clearLastKnownGood: true,
           candidateBootAttempts: 0,
           replayLedger: state.replayLedger.rollbackToBase(),
+          clearPendingInstallReceipt: true,
         ),
       );
       _adoptState(committed);
@@ -792,6 +921,7 @@ final class E1PatchController {
     var state = loaded.state!;
     _adoptState(state);
     if (loaded.needsRepair) {
+      state = state.copyWith(formatVersion: _PersistentState.currentVersion);
       try {
         await _repairStateCopies(state);
       } on Object catch (error) {
@@ -800,6 +930,7 @@ final class E1PatchController {
         _reject('key lifecycle repair failed; activation is locked: $error');
         return false;
       }
+      _adoptState(state);
     }
 
     late final E1KeyLifecycleCommand command;
@@ -1057,6 +1188,7 @@ final class E1PatchController {
       sequence: sequence,
       patchFormat: true,
       keyId: artifact.signatureMetadata.keyId,
+      patchId: artifact.patchId,
     );
   }
 
@@ -1398,7 +1530,11 @@ final class E1PatchController {
         expectedReleaseId: releaseId,
         fallbackTrustState: _initialTrustState,
       );
-      return _StateCopy(exists: true, state: state, legacy: state.legacy);
+      return _StateCopy(
+        exists: true,
+        state: state,
+        legacy: state.formatVersion != _PersistentState.currentVersion,
+      );
     } on Object catch (error) {
       _log('E1_PATCH invalid $name: $error');
       return const _StateCopy(exists: true, state: null);
@@ -1413,8 +1549,13 @@ final class E1PatchController {
       );
 
   Future<_PersistentState> _commitState(_PersistentState desired) async {
-    desired.validate();
-    final committed = desired.copyWith(generation: desired.generation + 1);
+    final normalized = desired.formatVersion == _PersistentState.currentVersion
+        ? desired
+        : desired.copyWith(formatVersion: _PersistentState.currentVersion);
+    normalized.validate();
+    final committed = normalized.copyWith(
+      generation: normalized.generation + 1,
+    );
     committed.validate();
     try {
       await _writeStateCopy(_stateBackup, committed);
@@ -1434,8 +1575,11 @@ final class E1PatchController {
   }
 
   Future<void> _repairStateCopies(_PersistentState state) async {
-    await _writeStateCopy(_stateBackup, state);
-    await _writeStateCopy(_statePrimary, state);
+    final normalized = state.formatVersion == _PersistentState.currentVersion
+        ? state
+        : state.copyWith(formatVersion: _PersistentState.currentVersion);
+    await _writeStateCopy(_stateBackup, normalized);
+    await _writeStateCopy(_statePrimary, normalized);
   }
 
   Future<void> _writeStateCopy(String name, _PersistentState state) async {
@@ -1516,7 +1660,11 @@ final class E1PatchController {
       'highWaterSequence': state.highWaterSequence,
       'releaseId': releaseId,
     }, expectedReleaseId: releaseId);
-    return state.copyWith(replayLedger: ledger, legacy: false);
+    return state.copyWith(
+      replayLedger: ledger,
+      formatVersion: _PersistentState.currentVersion,
+      legacy: false,
+    );
   }
 
   _PersistentState _removeRevokedExecutableSelection(
@@ -1540,6 +1688,7 @@ final class E1PatchController {
         clearLastKnownGood: true,
         candidateBootAttempts: 0,
         replayLedger: state.replayLedger.rollbackToBase(),
+        clearPendingInstallReceipt: true,
       );
     }
     if (lkgUsesKey) {
@@ -1648,6 +1797,50 @@ final class E1PatchController {
   static bool _validPatchName(String name) =>
       RegExp(r'^patch-[0-9a-f]{64}(?:\.e1\.signed\.json|\.v1\.patch)$')
           .hasMatch(name);
+
+  bool _receiptDeadlineIsFuture(E1InstallReceiptContext receipt) =>
+      DateTime.parse(receipt.activationDeadline).isAfter(_clock().toUtc());
+
+  E1InstallReceiptContext? _bindReceiptContext(
+    E1InstallReceiptContext? context, {
+    required String digest,
+    required _VerifiedRuntimePatch verified,
+  }) {
+    if (context == null) return null;
+    if (!verified.patchFormat || verified.patchId == null) {
+      throw const FormatException(
+        'install receipts require a signed Patch Format artifact identity',
+      );
+    }
+    if (context.normalizedArtifactDigest != digest) {
+      throw const FormatException(
+        'install receipt artifact digest is not the verified artifact digest',
+      );
+    }
+    if (context.releaseId != releaseId) {
+      throw const FormatException(
+        'install receipt release is not the controller release',
+      );
+    }
+    if (context.runtimeApplicationId != appId) {
+      throw const FormatException(
+        'install receipt runtime application is not the controller app',
+      );
+    }
+    if (context.patchId != verified.patchId) {
+      throw const FormatException(
+        'install receipt patch is not the verified artifact patch',
+      );
+    }
+    return context;
+  }
+
+  static bool _receiptIdIsQueued(_PersistentState state, String receiptId) =>
+      state.pendingInstallReceipt?.receiptId == receiptId ||
+      state.installReceiptOutbox.any(
+        (receipt) => receipt.receiptId == receiptId,
+      );
+
   static String _digestFromPatchReference(String name) {
     if (!_validPatchName(name)) {
       throw const FormatException('invalid patch reference');
@@ -1715,18 +1908,22 @@ final class _VerifiedRuntimePatch {
     required this.sequence,
     required this.patchFormat,
     required this.keyId,
+    this.patchId,
   });
   final Uint8List artifactBytes;
   final List<Uint8List> programBytes;
   final int sequence;
   final bool patchFormat;
   final String keyId;
+  final String? patchId;
 }
 
 enum _PatchHealth { base, pending, healthy }
 
 final class _PersistentState {
-  const _PersistentState({
+  static const int currentVersion = 5;
+
+  _PersistentState({
     required this.appId,
     required this.releaseId,
     required this.generation,
@@ -1739,8 +1936,14 @@ final class _PersistentState {
     required this.trustState,
     required this.trustGeneration,
     required this.replayLedger,
+    this.pendingInstallReceipt,
+    List<E1InstallReceiptContext> installReceiptOutbox =
+        const <E1InstallReceiptContext>[],
+    this.formatVersion = currentVersion,
     this.legacy = false,
-  });
+  }) : installReceiptOutbox = List<E1InstallReceiptContext>.unmodifiable(
+         installReceiptOutbox,
+       );
   factory _PersistentState.base({
     required String appId,
     required String releaseId,
@@ -1771,6 +1974,9 @@ final class _PersistentState {
   final E1KeyLifecycleState trustState;
   final int trustGeneration;
   final E1ArtifactReplayLedger replayLedger;
+  final E1InstallReceiptContext? pendingInstallReceipt;
+  final List<E1InstallReceiptContext> installReceiptOutbox;
+  final int formatVersion;
   final bool legacy;
 
   E1LifecycleState get lifecycleState => switch (health) {
@@ -1791,6 +1997,7 @@ final class _PersistentState {
       isValidReference: E1PatchController._validPatchName,
     );
     _validateIntegratedTrust();
+    _validateReceipts();
   }
 
   void _validateIntegratedTrust() {
@@ -1822,6 +2029,51 @@ final class _PersistentState {
     }
   }
 
+  void _validateReceipts() {
+    if (formatVersion < 3 || formatVersion > currentVersion) {
+      throw const FormatException('durable state version is invalid');
+    }
+    if (installReceiptOutbox.length >
+        E1PatchController.maxInstallReceiptOutbox) {
+      throw const FormatException('install receipt outbox is full');
+    }
+    final receiptIds = <String>{};
+    for (final receipt in installReceiptOutbox) {
+      _validateReceiptIdentity(receipt);
+      if (!receiptIds.add(receipt.receiptId)) {
+        throw const FormatException('duplicate install receipt ID');
+      }
+    }
+    final pending = pendingInstallReceipt;
+    if (pending == null) return;
+    if (health != _PatchHealth.pending || current == null) {
+      throw const FormatException(
+        'pending install receipt requires a pending candidate',
+      );
+    }
+    _validateReceiptIdentity(pending);
+    if (!receiptIds.add(pending.receiptId)) {
+      throw const FormatException('pending install receipt ID is duplicated');
+    }
+    if (pending.normalizedArtifactDigest !=
+        E1PatchController._digestFromPatchReference(current!)) {
+      throw const FormatException(
+        'pending install receipt is not bound to current artifact',
+      );
+    }
+  }
+
+  void _validateReceiptIdentity(E1InstallReceiptContext receipt) {
+    if (receipt.releaseId != releaseId ||
+        receipt.runtimeApplicationId != appId) {
+      throw const FormatException('install receipt is not release-bound');
+    }
+    final identity = replayLedger.artifacts[receipt.normalizedArtifactDigest];
+    if (identity == null) {
+      throw const FormatException('install receipt artifact is not remembered');
+    }
+  }
+
   E1ControllerDurableState toPublicView() => E1ControllerDurableState(
     appId: appId,
     releaseId: releaseId,
@@ -1850,6 +2102,10 @@ final class _PersistentState {
     E1KeyLifecycleState? trustState,
     int? trustGeneration,
     E1ArtifactReplayLedger? replayLedger,
+    E1InstallReceiptContext? pendingInstallReceipt,
+    bool clearPendingInstallReceipt = false,
+    List<E1InstallReceiptContext>? installReceiptOutbox,
+    int? formatVersion,
     bool? legacy,
   }) => _PersistentState(
     appId: appId,
@@ -1866,6 +2122,11 @@ final class _PersistentState {
     trustState: trustState ?? this.trustState,
     trustGeneration: trustGeneration ?? this.trustGeneration,
     replayLedger: replayLedger ?? this.replayLedger,
+    pendingInstallReceipt: clearPendingInstallReceipt
+        ? null
+        : (pendingInstallReceipt ?? this.pendingInstallReceipt),
+    installReceiptOutbox: installReceiptOutbox ?? this.installReceiptOutbox,
+    formatVersion: formatVersion ?? this.formatVersion,
     legacy: legacy ?? this.legacy,
   );
 
@@ -1878,9 +2139,13 @@ final class _PersistentState {
     'health': health.name,
     'highWaterDigest': highWaterDigest,
     'highWaterSequence': highWaterSequence,
+    'installReceiptOutbox': [
+      for (final receipt in installReceiptOutbox) receipt.body,
+    ],
     'lastKnownGood': lastKnownGood,
+    'pendingInstallReceipt': pendingInstallReceipt?.body,
     'releaseId': releaseId,
-    'stateVersion': 4,
+    'stateVersion': currentVersion,
     'trust': jsonDecode(trustState.encode()),
     'trustGeneration': trustGeneration,
   };
@@ -1906,7 +2171,9 @@ final class _PersistentState {
       throw const FormatException('invalid state fields');
     }
     final stateVersion = decoded['stateVersion'];
-    final keys = stateVersion == 4
+    final keys = stateVersion == currentVersion
+        ? _v5Keys
+        : stateVersion == 4
         ? _v4Keys
         : decoded.containsKey('candidateBootAttempts')
         ? _keys
@@ -1939,7 +2206,10 @@ final class _PersistentState {
         : health == _PatchHealth.pending
         ? E1LifecycleInvariant.maxCandidateBootAttempts
         : 0;
-    if (stateVersion != 3 && stateVersion != 4 ||
+    final rawTrustGeneration = decoded['trustGeneration'];
+    if (stateVersion != 3 &&
+            stateVersion != 4 &&
+            stateVersion != currentVersion ||
         decoded['appId'] != expectedAppId ||
         decoded['releaseId'] != expectedReleaseId ||
         decoded['generation'] is! int ||
@@ -1951,13 +2221,14 @@ final class _PersistentState {
             decoded['lastKnownGood'] is! String) ||
         (rawCandidateBootAttempts != null &&
             rawCandidateBootAttempts is! int) ||
+        (stateVersion != 3 && rawTrustGeneration is! int) ||
         health == null) {
       throw const FormatException('invalid release-bound state');
     }
-    final trustState = stateVersion == 4
+    final trustState = stateVersion != 3
         ? E1KeyLifecycleState.decode(utf8.encode(jsonEncode(decoded['trust'])))
         : fallbackTrustState;
-    final replayLedger = stateVersion == 4
+    final replayLedger = stateVersion != 3
         ? E1ArtifactReplayLedger.fromJson(
             decoded['artifactLedger'],
             expectedReleaseId: expectedReleaseId,
@@ -1969,6 +2240,31 @@ final class _PersistentState {
             'highWaterSequence': decoded['highWaterSequence'],
             'releaseId': expectedReleaseId,
           }, expectedReleaseId: expectedReleaseId);
+    E1InstallReceiptContext? pendingInstallReceipt;
+    final installReceiptOutbox = <E1InstallReceiptContext>[];
+    if (stateVersion == currentVersion) {
+      final rawPending = decoded['pendingInstallReceipt'];
+      if (rawPending != null) {
+        if (rawPending is! Map) {
+          throw const FormatException('invalid pending install receipt');
+        }
+        pendingInstallReceipt = E1InstallReceiptContext(
+          body: Map<String, Object?>.from(rawPending),
+        );
+      }
+      final rawOutbox = decoded['installReceiptOutbox'];
+      if (rawOutbox is! List) {
+        throw const FormatException('invalid install receipt outbox');
+      }
+      for (final rawReceipt in rawOutbox) {
+        if (rawReceipt is! Map) {
+          throw const FormatException('invalid install receipt outbox entry');
+        }
+        installReceiptOutbox.add(
+          E1InstallReceiptContext(body: Map<String, Object?>.from(rawReceipt)),
+        );
+      }
+    }
     final state = _PersistentState(
       appId: decoded['appId']! as String,
       releaseId: decoded['releaseId']! as String,
@@ -1980,14 +2276,17 @@ final class _PersistentState {
       lastKnownGood: decoded['lastKnownGood'] as String?,
       candidateBootAttempts: candidateBootAttempts,
       trustState: trustState,
-      trustGeneration: stateVersion == 4
-          ? decoded['trustGeneration']! as int
+      trustGeneration: stateVersion != 3
+          ? rawTrustGeneration! as int
           : trustState.commandSequence,
       replayLedger: replayLedger,
-      legacy: stateVersion != 4,
+      pendingInstallReceipt: pendingInstallReceipt,
+      installReceiptOutbox: installReceiptOutbox,
+      formatVersion: stateVersion! as int,
+      legacy: stateVersion == 3,
     );
     state.validate();
-    if (stateVersion == 4 && state.encode() != source) {
+    if (stateVersion == currentVersion && state.encode() != source) {
       throw const FormatException('state nested encoding is not canonical');
     }
     return state;
@@ -2021,6 +2320,11 @@ final class _PersistentState {
     'stateVersion',
     'trust',
     'trustGeneration',
+  };
+  static const _v5Keys = <String>{
+    ..._v4Keys,
+    'installReceiptOutbox',
+    'pendingInstallReceipt',
   };
 }
 

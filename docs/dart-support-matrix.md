@@ -117,3 +117,56 @@ general Dart support:
 
 Phase 1A deliberately leaves the earlier async-closure exclusions intact: an
 unsupported construct is rejected rather than silently lowered.
+
+## Independent real-application acceptance — current candidate
+
+The historical fixture/device evidence above is not independent-application
+acceptance. The receipt/resource-boundary changes do not themselves establish
+physical acceptance in this campaign. No row below is promoted by a unit test,
+host build, native typecheck, or simulated receipt.
+
+`PHYSICALLY_PROVEN` requires an actual no-reinstall run on the
+stated platform. `NEW_BASE_RELEASE_REQUIRED` is an intentional packaging
+boundary, not an OTA capability. `NOT_YET_PROVEN` means this campaign has
+not established support; it does not erase the narrower historical evidence.
+
+| Change type | Android | iOS | Result |
+| --- | --- | --- | --- |
+| Dart text | Not run | Not run | NOT_YET_PROVEN |
+| Widget tree | Not run | Not run | NOT_YET_PROVEN |
+| Theme/style | Not run | Not run | NOT_YET_PROVEN |
+| State | Not run | Not run | NOT_YET_PROVEN |
+| Business logic | Not run | Not run | NOT_YET_PROVEN |
+| Async | Not run | Not run | NOT_YET_PROVEN |
+| Routing | Not run | Not run | NOT_YET_PROVEN |
+| Animation | Not run | Not run | NOT_YET_PROVEN |
+| Localization/generated Dart | Not run | Not run | NOT_YET_PROVEN |
+| Pure-Dart dependency | Not run | Not run | NOT_YET_PROVEN |
+| Existing bundled asset reference | Not run | Not run | NOT_YET_PROVEN |
+| Changed asset | Excluded by format | Excluded by format | NEW_BASE_RELEASE_REQUIRED |
+| New asset | Excluded by format | Excluded by format | NEW_BASE_RELEASE_REQUIRED |
+| Removed asset | Excluded by format | Excluded by format | NEW_BASE_RELEASE_REQUIRED |
+| Existing font style | Not run | Not run | NOT_YET_PROVEN |
+| Changed font | Excluded by format | Excluded by format | NEW_BASE_RELEASE_REQUIRED |
+| New font | Excluded by format | Excluded by format | NEW_BASE_RELEASE_REQUIRED |
+| New icon/tree-shaken font glyph | No base-glyph proof | No base-glyph proof | NEW_BASE_RELEASE_REQUIRED |
+| Local persistence logic | Not run | Not run | NOT_YET_PROVEN |
+| Native plugin | Native binary boundary | Native binary boundary | NEW_BASE_RELEASE_REQUIRED |
+| Native configuration | Native binary boundary | Native binary boundary | NEW_BASE_RELEASE_REQUIRED |
+| Flutter engine change | Engine identity boundary | Engine identity boundary | NEW_BASE_RELEASE_REQUIRED |
+
+Patch Format v1 has no signed resource payload or atomic code/resource rollback.
+The CLI candidate snapshots declared asset/font bytes and native build inputs;
+changed, added, removed, unsafe or unreadable inputs fail closed. A new Material
+icon reference is conservatively rejected without exact base-glyph evidence.
+Unchanged bundled resources remain part of the native base and are not removed
+by code rollback. Resource OTA download, activation and garbage collection are
+not implemented or advertised. Older release records without the resource and
+engine baseline require a new base; missing evidence is never treated as an
+empty asset set.
+
+Receipt-bearing activation requires a signed Patch Format v1 patch identity.
+Legacy E1 envelopes remain receipt-less. Production attestation requires an
+explicit host evidence producer and server verifier; the default self-host
+runtime does not enroll in Cloud metering. An unsupported native attestation
+provider never silently grants production trust.
