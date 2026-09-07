@@ -52,7 +52,7 @@ distribution, and real-app acceptance evidence.
 
 ## Assumptions
 
-- `v0.1.4` and earlier public tags remain immutable; the next release is a new
+- `v0.1.8` and earlier public tags remain immutable; `v0.1.9` is the new
   version selected from the repository's existing `0.1.x` convention;
 - host-owned Flutter objects are represented opaquely or by immutable,
   bounded descriptors; arbitrary framework dispatch is not admitted;
