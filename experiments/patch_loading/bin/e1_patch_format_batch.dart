@@ -98,7 +98,7 @@ Future<void> main(List<String> arguments) async {
   ];
   final bridge = <String, Object?>{
     'bridgeVersion': 1,
-    'encoding': 'e0-patch-container-v9-bytes',
+    'encoding': 'e0-patch-container-v10-bytes',
     'functions': <String, Object?>{
       for (final id in programBytes.keys.toList()..sort())
         id: base64.encode(programBytes[id]!),

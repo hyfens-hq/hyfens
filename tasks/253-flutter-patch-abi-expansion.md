@@ -97,9 +97,10 @@ boundary:
 
 ## Next Action
 
-Finish the focused stock-Flutter fixtures and MCP assertion, then run the
-consolidated package validation before selecting and publishing the next
-immutable public version.
+Publish the validated `0.1.9` candidate as one new immutable public release,
+install that public binary, complete the iPhone Patch B/restart/rollback
+evidence, classify the Android/receipt/managed-Cloud gates, and restore the
+private acceptance app.
 
 ## Blockers
 
@@ -110,9 +111,10 @@ status must be re-probed after the public release.
 
 ## Outcome
 
-The bounded ABI/resource implementation and consolidated repository validation
-are complete. Public release, public-binary Kavach360 acceptance, and final
-device/external-gate classification remain in progress.
+The bounded ABI/resource implementation, candidate Kavach360 acceptance, and
+consolidated repository validation are complete. Public release,
+public-binary Kavach360 acceptance, and final device/external-gate
+classification remain in progress.
 
 ## Acceptance Matrix
 
@@ -173,6 +175,28 @@ device/external-gate classification remain in progress.
 - 2026-09-07 — Final release, public reinstall, physical acceptance, and
   bounded-gate classification remain to be recorded after consolidated
   validation.
+- 2026-09-07 — Reproduced the v0.1.8 analyzer/compiler mismatch: the old
+  analyzer reported a real `Future<void>.delayed` body as patchable, while
+  patch compilation failed on the unsupported method-invocation expression
+  with the generic unexpected-failure path. The fix makes compiler preflight
+  part of analysis, returns `P2012` for known unsupported shapes, and keeps
+  unexpected preflight failures distinct as `P2013`.
+- 2026-09-07 — Implemented patch/runtime format 10's bounded async seam:
+  stable-signature async bodies support typed `Future<T>.value`, bounded
+  `Future<void>.delayed`, the host-owned Flutter frame boundary, and the
+  explicit zero-argument async widget callback contract. Existing field,
+  resource, native, engine, stream, and unsafe closure boundaries remain
+  closed. Instrumentation (216), patch-loading (73), CLI focused (28),
+  Flutter-integration Dart-VM (55), compiler, instrumenter, and runtime
+  suites passed; Flutter integration analysis passed. The Flutter test runner
+  still has two pre-existing platform-runner failures (uninitialized
+  attestation binding and host storage semantics).
+- 2026-09-07 — Candidate iOS release built with complete resource evidence and
+  the persisted dev flavor; candidate `analyze`, `patch`, and `verify` all
+  passed for the real Kavach360 async/routing handoff. The candidate was
+  installed and launched on the connected iPhone, and the local signed patch
+  reached the healthy patched runtime. Candidate evidence is diagnostic until
+  the public release is installed.
 - 2026-09-07 — Audited implementation validated: 211 instrumentation tests,
   186 CLI tests, full instrumenter/compiler suites, full Dart-VM Flutter
   integration suite, scoped analyzers, and a local macOS arm64 archive/help/

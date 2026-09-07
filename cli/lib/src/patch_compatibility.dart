@@ -105,6 +105,12 @@ final class PatchCompatibilityAnalyzer {
   }
 
   static String explainExclusion(String exclusion) {
+    if (exclusion.contains('Unsupported patch compiler construct') ||
+        exclusion.contains('Patch compiler preflight')) {
+      return 'The changed method body is selected by the release ABI, but its '
+          'current Dart expression shape is not safely compiled for OTA use; '
+          'create a new base release or change only a supported method body.';
+    }
     final separator = exclusion.indexOf(':');
     final reason =
         (separator < 0 ? exclusion : exclusion.substring(separator + 1)).trim();

@@ -421,6 +421,71 @@ String? _futureElementSource(String source) {
   return element;
 }
 
+int _futureDelayMilliseconds(Expression expression) {
+  if (expression is ParenthesizedExpression) {
+    return _futureDelayMilliseconds(expression.expression);
+  }
+  if (expression is PrefixedIdentifier &&
+      expression.toSource() == 'Duration.zero') {
+    return 0;
+  }
+  if (expression is! InstanceCreationExpression ||
+      expression.constructorName.type.toSource() != 'Duration' ||
+      expression.constructorName.name != null) {
+    throw const FormatException(
+      'Future.delayed requires a bounded Duration.zero or const Duration literal',
+    );
+  }
+  var microseconds = 0;
+  for (final argument in expression.argumentList.arguments) {
+    if (argument is! NamedExpression) {
+      throw const FormatException(
+        'Future.delayed Duration arguments must be named integer literals',
+      );
+    }
+    final value = _durationInteger(argument.expression);
+    final multiplier = switch (argument.name.label.name) {
+      'days' => Duration.microsecondsPerDay,
+      'hours' => Duration.microsecondsPerHour,
+      'minutes' => Duration.microsecondsPerMinute,
+      'seconds' => Duration.microsecondsPerSecond,
+      'milliseconds' => Duration.microsecondsPerMillisecond,
+      'microseconds' => 1,
+      _ => throw FormatException(
+        'Unsupported Duration component ${argument.name.label.name}',
+      ),
+    };
+    microseconds += value * multiplier;
+    if (microseconds > e0MaxFutureDelayMilliseconds * 1000) {
+      throw const FormatException(
+        'Future.delayed duration exceeds the five-minute patch limit',
+      );
+    }
+  }
+  if (microseconds < 0) {
+    throw const FormatException('Future.delayed duration may not be negative');
+  }
+  final milliseconds = (microseconds + 999) ~/ 1000;
+  if (milliseconds > e0MaxFutureDelayMilliseconds) {
+    throw const FormatException(
+      'Future.delayed duration exceeds the five-minute patch limit',
+    );
+  }
+  return milliseconds;
+}
+
+int _durationInteger(Expression expression) {
+  if (expression is IntegerLiteral && expression.value != null) {
+    if (expression.value! < 0) {
+      throw const FormatException('Duration components may not be negative');
+    }
+    return expression.value!;
+  }
+  throw const FormatException(
+    'Future.delayed Duration components must be integer literals',
+  );
+}
+
 E0ValueSchema e0HostSchemaForType(String source, String position) {
   E0ValueSchema schema;
   try {
@@ -1185,6 +1250,49 @@ final class _Emitter {
         throw const FormatException('await requires an async patch function');
       }
       final operand = expression.expression;
+      if (operand is InstanceCreationExpression) {
+        final futureElement = _futureElementSource(
+          operand.constructorName.type.toSource(),
+        );
+        final constructorName = operand.constructorName.name?.name;
+        if (futureElement != null && constructorName == 'value') {
+          if (operand.argumentList.arguments.length != 1 ||
+              operand.argumentList.arguments.single is NamedExpression) {
+            throw const FormatException(
+              'Future<T>.value requires one positional argument',
+            );
+          }
+          final result = e0HostSchemaForType(
+            futureElement,
+            'Future element return',
+          );
+          final value = emitExpression(
+            operand.argumentList.arguments.single,
+            context: result,
+          );
+          if (!result.accepts(value)) {
+            throw FormatException(
+              'Future<T>.value result $value does not match $result',
+            );
+          }
+          code.add(E0Opcode.futureValue.code);
+          return _emitAwaitPoint(result);
+        }
+        if (futureElement != null && constructorName == 'delayed') {
+          if (futureElement != 'void' ||
+              operand.argumentList.arguments.length != 1 ||
+              operand.argumentList.arguments.single is NamedExpression) {
+            throw const FormatException(
+              'Future<T>.delayed patching supports only Future<void> with one bounded Duration',
+            );
+          }
+          final milliseconds = _futureDelayMilliseconds(
+            operand.argumentList.arguments.single,
+          );
+          code.addAll(<int>[E0Opcode.futureDelay.code, milliseconds]);
+          return _emitAwaitPoint(E0ValueSchema.voidValue);
+        }
+      }
       if (operand is MethodInvocation &&
           operand.target is SimpleIdentifier &&
           (operand.target! as SimpleIdentifier).name == 'Future' &&
@@ -1202,9 +1310,31 @@ final class _Emitter {
         code.add(E0Opcode.futureValue.code);
         return _emitAwaitPoint(value);
       }
+      if (operand is MethodInvocation &&
+          operand.target is SimpleIdentifier &&
+          (operand.target! as SimpleIdentifier).name == 'Future' &&
+          operand.methodName.name == 'delayed') {
+        if (operand.argumentList.arguments.length != 1 ||
+            operand.argumentList.arguments.single is NamedExpression) {
+          throw const FormatException(
+            'Future.delayed patching supports one bounded Duration',
+          );
+        }
+        final milliseconds = _futureDelayMilliseconds(
+          operand.argumentList.arguments.single,
+        );
+        code.addAll(<int>[E0Opcode.futureDelay.code, milliseconds]);
+        return _emitAwaitPoint(E0ValueSchema.voidValue);
+      }
+      if (operand is PropertyAccess &&
+          operand.toSource() == 'WidgetsBinding.instance.endOfFrame') {
+        code.add(E0Opcode.flutterEndOfFrame.code);
+        return _emitAwaitPoint(E0ValueSchema.voidValue);
+      }
       if (operand is! MethodInvocation || operand.target != null) {
         throw const FormatException(
-          'await supports Future.value or direct calls to registered async capabilities',
+          'await supports bounded Future.value, Future.delayed, '
+          'WidgetsBinding.instance.endOfFrame, or direct calls to registered async capabilities',
         );
       }
       final matches = _declaredCapabilities
@@ -1875,9 +2005,16 @@ final class _Emitter {
     required List<E0ValueSchema>? expectedParameters,
     required E0ValueSchema? returnSchema,
   }) {
+    final closureIsAsync = expression.body.isAsynchronous;
     if (isAsync) {
       throw const FormatException(
         'Closures inside async patches are deferred until async closure suspension is modeled',
+      );
+    }
+    if (closureIsAsync &&
+        (returnSchema == null || returnSchema.kind != E0ValueKind.voidValue)) {
+      throw const FormatException(
+        'Async closures require the bounded void host-callback contract',
       );
     }
     final parameters = _closureParameterSchemas(
@@ -1939,7 +2076,7 @@ final class _Emitter {
       receiverMembers,
       receiver: receiver,
       isInstanceMethod: isInstanceMethod,
-      isAsync: false,
+      isAsync: closureIsAsync,
       declaredCapabilities: _declaredCapabilities,
       declaredWidgetFactories: _declaredWidgetFactories,
       isWidgetBuild: isWidgetBuild,
@@ -1957,10 +2094,11 @@ final class _Emitter {
       }
       nested.code.add(E0Opcode.returnValue.code);
     } else if (body is BlockFunctionBody) {
-      if (body.isAsynchronous || body.isGenerator) {
-        throw const FormatException(
-          'Async and generator closures are unsupported',
-        );
+      if (body.isGenerator) {
+        throw const FormatException('Generator closures are unsupported');
+      }
+      if (body.isAsynchronous != closureIsAsync) {
+        throw const FormatException('Closure async marker is inconsistent');
       }
       if (nestedReturn.kind != E0ValueKind.voidValue &&
           !_blockDefinitelyReturns(body.block)) {
@@ -1996,6 +2134,8 @@ final class _Emitter {
         locals: nested.locals,
         handlers: nested.handlers,
         receiver: receiver,
+        isAsync: closureIsAsync,
+        asyncPoints: nested.asyncPoints,
       ),
     );
     code.addAll(<int>[E0Opcode.makeClosure.code, index]);

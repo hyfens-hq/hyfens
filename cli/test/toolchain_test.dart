@@ -154,6 +154,117 @@ class UnsupportedSurface {
     },
   );
 
+  test('analyze and patch share the async compiler boundary', () async {
+    final root = await createPatchProject();
+    addTearDown(() => root.delete(recursive: true));
+    final tool = HyfensToolchain();
+    await tool.init(projectPath: root.path);
+    final source = File('${root.path}/lib/main.dart');
+    await source.writeAsString('''
+void main() {}
+
+int calculate(int left, int right) {
+  return left + right;
+}
+
+Future<void> waitForFrame() async {
+  await Future<void>.delayed(Duration.zero);
+}
+
+class UnsupportedSurface {
+  int get value => 1;
+}
+''');
+    final release = await tool.release(
+      target: 'android',
+      projectPath: root.path,
+      metadataOnly: true,
+    );
+    await source.writeAsString('''
+void main() {}
+
+int calculate(int left, int right) {
+  return left + right;
+}
+
+Future<void> waitForFrame() async {
+  final int milliseconds = 1;
+  await Future<void>.delayed(Duration(milliseconds: milliseconds));
+}
+
+class UnsupportedSurface {
+  int get value => 1;
+}
+''');
+
+    final analysis = tool.analyze(
+      projectPath: root.path,
+      releaseId: release.releaseId,
+    );
+    expect(analysis.canPatch, isFalse);
+    expect(
+      analysis.diagnostics
+          .singleWhere((diagnostic) => diagnostic.code == 'P2012')
+          .detail,
+      contains('bounded Duration'),
+    );
+    expect(
+      () => tool.patch(projectPath: root.path, releaseId: release.releaseId),
+      throwsA(
+        isA<ToolFailure>().having(
+          (failure) => failure.diagnostics.single.code,
+          'code',
+          'P2012',
+        ),
+      ),
+    );
+  });
+
+  test(
+    'supported async bodies are patchable through the CLI boundary',
+    () async {
+      final root = await createPatchProject();
+      addTearDown(() => root.delete(recursive: true));
+      final tool = HyfensToolchain();
+      await tool.init(projectPath: root.path);
+      await tool.generateKeys(projectPath: root.path);
+      final source = File('${root.path}/lib/main.dart');
+      await source.writeAsString('''
+void main() {}
+
+Future<void> waitForFrame() async {
+  await Future<void>.delayed(Duration.zero);
+}
+''');
+      final release = await tool.release(
+        target: 'android',
+        projectPath: root.path,
+        metadataOnly: true,
+      );
+      await source.writeAsString('''
+void main() {}
+
+Future<void> waitForFrame() async {
+  await Future<void>.delayed(const Duration(milliseconds: 1));
+}
+''');
+
+      final analysis = tool.analyze(
+        projectPath: root.path,
+        releaseId: release.releaseId,
+      );
+      expect(analysis.canPatch, isTrue, reason: analysis.toJson().toString());
+      expect(analysis.items.single.compatibility.label, 'PATCHABLE');
+
+      final patch = await tool.patch(
+        projectPath: root.path,
+        releaseId: release.releaseId,
+      );
+      expect(patch.output.existsSync(), isTrue);
+      expect(patch.artifact.releaseId, release.releaseId);
+    },
+  );
+
   test('ambiguous baselines require an explicit release target', () async {
     final root = await createPatchProject();
     addTearDown(() => root.delete(recursive: true));

@@ -23,7 +23,7 @@ import 'source_fingerprints.dart';
 
 // The CLI version is part of release identity and must match cli/pubspec.yaml
 // and the version used by the release workflows.
-const hyfensToolVersion = '0.1.8';
+const hyfensToolVersion = '0.1.9';
 const _bridgeExtensionType = 9;
 const _rollbackStateVersion = 1;
 const _rollbackTargetBaseAot = 'base-aot';
@@ -3089,17 +3089,39 @@ final class HyfensToolchain {
           (function) => function.id == functionIds.first,
         );
         final location = _functionLocation(after.file, firstFunction.name);
-        items.add(
-          AnalysisItem(
-            classification: ChangeClassification.patchable,
-            path: path,
-            detail: '${functionIds.length} function(s) selected',
-            functionIds: functionIds,
-            libraryUri: after.libraryUri,
-            line: location?.line,
-            column: location?.column,
-          ),
+        final compilerDiagnostic = _patchCompilerPreflight(
+          plan: plan,
+          release: release,
+          path: path,
+          functionIds: functionIds,
         );
+        if (compilerDiagnostic != null) {
+          diagnostics.add(compilerDiagnostic);
+          items.add(
+            AnalysisItem(
+              classification: ChangeClassification.unsupported,
+              path: path,
+              detail: compilerDiagnostic.detail,
+              functionIds: const <String>[],
+              libraryUri: after.libraryUri,
+              line: location?.line,
+              column: location?.column,
+              diagnostic: compilerDiagnostic,
+            ),
+          );
+        } else {
+          items.add(
+            AnalysisItem(
+              classification: ChangeClassification.patchable,
+              path: path,
+              detail: '${functionIds.length} function(s) selected',
+              functionIds: functionIds,
+              libraryUri: after.libraryUri,
+              line: location?.line,
+              column: location?.column,
+            ),
+          );
+        }
       }
     }
     if (graph.fingerprint != release.graphFingerprint) {
@@ -3290,16 +3312,28 @@ final class HyfensToolchain {
           detail: planned.manifest.id,
         );
       }
-      final bytes = HyfensCompiler().compile(
-        PatchCompileRequest(
-          source: planned.source.file.readAsStringSync(),
-          manifest: planned.sourceManifest(analysis.plan),
-          functionName: planned.manifest.name,
-          className: planned.manifest.identity.ownerName,
-          canonicalLibraryUri: planned.source.libraryUri,
-          patchSequence: sequence,
-        ),
-      );
+      late final List<int> bytes;
+      try {
+        bytes = HyfensCompiler().compile(
+          PatchCompileRequest(
+            source: planned.source.file.readAsStringSync(),
+            manifest: planned.sourceManifest(analysis.plan),
+            functionName: planned.manifest.name,
+            className: planned.manifest.identity.ownerName,
+            canonicalLibraryUri: planned.source.libraryUri,
+            patchSequence: sequence,
+          ),
+        );
+      } on FormatException catch (error) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.compatibility,
+          code: ToolDiagnosticCodes.patchCompilerUnsupported,
+          summary: 'Patch compiler rejected a selected function',
+          detail: '${planned.manifest.name}: ${error.message}',
+          path: planned.source.relativeTo(current),
+          action: 'Create a new base release or change only a supported method body.',
+        );
+      }
       final program = E0PatchContainer.decode(
         bytes,
         expectedAppId: analysis.release.applicationId,
@@ -3332,7 +3366,7 @@ final class HyfensToolchain {
     patchFunctions.sort((left, right) => left.id.compareTo(right.id));
     final bridge = <String, Object?>{
       'bridgeVersion': 1,
-      'encoding': 'e0-patch-container-v9-bytes',
+      'encoding': 'e0-patch-container-v10-bytes',
       'functions': <String, Object?>{
         for (final id in compiled.keys.toList()..sort())
           id: base64.encode(compiled[id]!),
@@ -4969,6 +5003,95 @@ ToolDiagnostic _diagnosticFromJson(Object? value) {
     action: value['action'] as String?,
     storeReleaseRequired: value['storeReleaseRequired'] as bool? ?? false,
   );
+}
+
+ToolDiagnostic? _patchCompilerPreflight({
+  required InstrumentationPlan plan,
+  required ReleaseRecord release,
+  required String path,
+  required List<String> functionIds,
+}) {
+  final expectedFunctions = <String, int>{
+    for (final function in release.functions) function.id: function.slot,
+  };
+  final expectedSignatures = <String, E0FunctionSignature>{};
+  final expectedReceivers = <String, E0ReceiverDescriptor>{};
+  for (final function in release.functions) {
+    final manifest = E0FunctionManifest.fromJson(function.manifest);
+    expectedSignatures[function.id] = manifest.signature;
+    expectedReceivers[function.id] = manifest.receiver;
+  }
+  for (final functionId in functionIds) {
+    final candidates = plan.functions.where(
+      (function) => function.manifest.id == functionId,
+    );
+    final planned = candidates.isEmpty ? null : candidates.first;
+    if (planned == null) {
+      return ToolDiagnostic(
+        code: 'P2009',
+        severity: DiagnosticSeverity.error,
+        summary: 'Changed function is not in the release baseline',
+        detail: functionId,
+        path: path,
+        action: 'Create a new store release for the changed function table.',
+      );
+    }
+    try {
+      final bytes = const HyfensCompiler().compile(
+        PatchCompileRequest(
+          source: planned.source.file.readAsStringSync(),
+          manifest: planned.sourceManifest(plan),
+          functionName: planned.manifest.name,
+          className: planned.manifest.identity.ownerName,
+          canonicalLibraryUri: planned.source.libraryUri,
+          patchSequence: 1,
+        ),
+      );
+      final program = E0PatchContainer.decode(
+        bytes,
+        expectedAppId: release.applicationId,
+        expectedReleaseId: release.releaseId,
+        expectedBuildFingerprint: release.buildFingerprint,
+        expectedFunctions: expectedFunctions,
+        expectedSignatures: expectedSignatures,
+        expectedReceivers: expectedReceivers,
+      );
+      if (program.capabilities.isNotEmpty) {
+        return ToolDiagnostic(
+          code: 'P2011',
+          severity: DiagnosticSeverity.error,
+          summary: 'Compiled patch requires an undeclared host contract',
+          detail: '${program.capabilities.length} runtime capabilities',
+          path: path,
+          action: 'Use only capabilities declared by the release contract or create a normal store release.',
+        );
+      }
+    } on FormatException catch (error) {
+      return ToolDiagnostic(
+        code: ToolDiagnosticCodes.patchCompilerUnsupported,
+        severity: DiagnosticSeverity.error,
+        summary:
+            'Changed function uses an unsupported patch compiler construct',
+        detail:
+            'Unsupported patch compiler construct in ${planned.manifest.name}: '
+            '${error.message}',
+        path: path,
+        action:
+            'Create a new base release or change only a supported method body.',
+      );
+    } on Object catch (error) {
+      return ToolDiagnostic(
+        code: ToolDiagnosticCodes.patchCompilerPreflightFailed,
+        severity: DiagnosticSeverity.error,
+        summary: 'Patch compiler preflight failed',
+        detail:
+            'Patch compiler preflight failed in ${planned.manifest.name}: $error',
+        path: path,
+        action: 'Create a new base release or report the compiler failure with this diagnostic.',
+      );
+    }
+  }
+  return null;
 }
 
 extension on PlannedFunction {

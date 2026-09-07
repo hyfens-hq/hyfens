@@ -22,7 +22,12 @@ remain unchanged:
   outside the promoted ABI;
 - reads from the existing receiver schema, including unqualified reads of
   schema-safe fields/getters, typed `void` methods, ordinary synchronous
-  callbacks, and `Future<T>` methods using the existing async interpreter; and
+  callbacks, and stable-signature async method bodies using bounded
+  `Future<T>.value`, `Future<void>.delayed` with `Duration.zero` or a constant
+  duration of at most five minutes, registered async capabilities, and
+  `WidgetsBinding.instance.endOfFrame`; and
+- bounded zero-argument async button callbacks using the same async
+  operations, where the host owns the callback and its returned `Future`; and
 - Dart-managed business logic, routing decisions, animation calculations, and
   persistence/localization transformations when their resulting ABI stays in
   the supported value set.
@@ -43,11 +48,11 @@ deliberate fail-closed limit.
 | --- | --- | --- | --- |
 | `build(BuildContext)` and `State<T>` builds | The old ABI had no opaque framework parameter or bounded widget result. Passing arbitrary framework objects or dispatching through them would cross host ownership. | `MISSING_ABI_IMPLEMENTATION` | Resolved for canonical Flutter imports, ordinary `*State<T>` wrappers, schema-safe receiver reads, and the immutable widget registry. |
 | `void` methods and host callbacks | There was no typed no-value schema or host-owned callback representation. Serializing a live callback would be unsafe. | `MISSING_ABI_IMPLEMENTATION` | Resolved for typed `void` and bounded zero-argument callbacks; callbacks remain non-serializable. |
-| Ordinary `Future<T>` bodies | Async Dart needs a resumable interpreter state, while async/generator closures need additional closure-state ABI. | `MISSING_ABI_IMPLEMENTATION` / `FUNDAMENTAL_RUNTIME_LIMIT` | Existing ordinary async bodies remain supported; async/generator closures remain rejected. |
+| Ordinary `Future<T>` bodies | Async Dart needs a resumable interpreter state, while arbitrary async/generator closures need additional closure-state ABI. | `MISSING_ABI_IMPLEMENTATION` / `FUNDAMENTAL_RUNTIME_LIMIT` | Stable-signature async bodies and the bounded host-callback seam are supported; nested async/generator closures remain rejected. |
 | Static, accessor, and operator targets | These do not provide the ordinary instance-call/receiver contract used by the patch table. Adding dispatch without a new contract could bypass receiver and rollback checks. | `FUNDAMENTAL_RUNTIME_LIMIT` | Deliberately retained as `NOT_YET_SUPPORTED`. |
 | Generic methods/owners and deep type-shape changes | The current manifest does not carry reified generic owner shape, and live field/layout, constructor, superclass, or mixin changes can invalidate existing objects. | `MISSING_ABI_IMPLEMENTATION` / `FUNDAMENTAL_RUNTIME_LIMIT` | Generic/type-shape changes require a new base or remain unsupported. |
 | Raw receiver access, receiver writes, and arbitrary receiver dispatch | Guest mutation or framework method dispatch could change live host state outside an atomic, verified receiver schema. | `FUNDAMENTAL_RUNTIME_LIMIT` | Explicit and safe unqualified reads of the existing receiver schema are supported; writes and arbitrary dispatch fail closed. |
-| Nested, captured, async, or generator closures | Closure captures and compiler-generated state do not yet have a stable serialized ABI. | `FUNDAMENTAL_RUNTIME_LIMIT` | Bounded synchronous closures and host callbacks are allowed only at their explicit seams. |
+| Nested, captured, async, or generator closures | Closure captures and compiler-generated state do not yet have a general stable serialized ABI. | `FUNDAMENTAL_RUNTIME_LIMIT` | Bounded synchronous closures and zero-argument async host callbacks are allowed only at the explicit widget seam; nested/capture-unsafe and generator closures remain closed. |
 | Arbitrary widget constructors/framework objects | Flutter objects are host-owned and may contain engine, resource, or native state that cannot cross the patch container. | `NATIVE_BOUNDARY` | Only bounded descriptions for the shipped registry are accepted. |
 | FFI, platform channels, reflection, plugins, and native configuration | These depend on native symbols, platform registries, or runtime configuration outside the Dart patch ABI. | `NATIVE_BOUNDARY` | A new base release is required. |
 | Flutter SDK Material-icon scan (`F3010`) | Source traversal treated the Flutter SDK's icon catalog/lookup implementation as application evidence, producing an incomplete AST result. | `OVERLY_CONSERVATIVE_RULE` | Fixed by excluding the SDK from source-reference scanning; the built artifact is now authoritative. |
@@ -67,9 +72,11 @@ report one of these outcomes:
   construct safely.
 
 The current promoted Flutter paths are method-body and bounded widget/async
-changes and do not silently require a restart. The restart-required outcome is
-explicit in the model so a future live-object-compatible path cannot be
-mistaken for an in-place hot swap.
+changes and do not silently require a restart. `analyze` performs the same
+compiler/verifier preflight used by `patch`, so a known unsupported expression
+is reported before patch compilation. The restart-required outcome is explicit
+in the model so a future live-object-compatible path cannot be mistaken for an
+in-place hot swap.
 
 ## New base release required
 
@@ -93,12 +100,14 @@ mobile release is patchable.
 
 ## Not yet supported
 
-The current ABI still rejects static/accessor/operator targets, async or
-generator closures, nested or capture-unsafe closures, arbitrary framework
-object calls, FFI/platform-channel/reflection boundaries, and deep type-shape
-mutation. Generated Dart is evaluated by its resulting ABI; generator brands
-are not special-cased, and a generated unit is not promoted if its declaration
-shape crosses an unsupported boundary.
+The current ABI still rejects static/accessor/operator targets, nested or
+capture-unsafe async closures, generator closures, general `Stream`/Future
+combinator graphs, arbitrary framework object calls,
+FFI/platform-channel/reflection boundaries, and deep type-shape mutation.
+Generated Dart is evaluated by its resulting ABI; generator brands are not
+special-cased, and a generated unit is not promoted if its declaration shape
+crosses an unsupported boundary. A zero-argument async callback is supported
+only at the immutable host-owned button boundary described above.
 
 ## Resource evidence
 

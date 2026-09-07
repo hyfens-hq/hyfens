@@ -264,6 +264,56 @@ int calculate() {
     expect(jsonEncode(result), isNot(contains(project.path)));
   });
 
+  test('MCP reports the same async compiler decision as the CLI', () async {
+    final project = await _createProject();
+    final auth = await Directory.systemTemp.createTemp('hyfens-mcp-auth-');
+    addTearDown(() async {
+      await project.delete(recursive: true);
+      await auth.delete(recursive: true);
+    });
+    final tool = HyfensToolchain();
+    await tool.init(projectPath: project.path);
+    await tool.generateKeys(projectPath: project.path);
+    final source = File('${project.path}/lib/main.dart');
+    await source.writeAsString('''
+void main() {}
+
+Future<void> waitForFrame() async {
+  await Future<void>.delayed(Duration.zero);
+}
+''');
+    final release = await tool.release(
+      target: 'ios',
+      projectPath: project.path,
+      metadataOnly: true,
+    );
+    await source.writeAsString('''
+void main() {}
+
+Future<void> waitForFrame() async {
+  final int milliseconds = 1;
+  await Future<void>.delayed(Duration(milliseconds: milliseconds));
+}
+''');
+    final adapter = HyfensMcpAdapter(
+      toolchain: tool,
+      authStorage: AuthStorage(root: auth),
+    );
+
+    final result = await adapter.analyze(
+      projectPath: project.path,
+      releaseId: release.releaseId,
+    );
+    expect(result['result'], 'PATCH_BLOCKED');
+    expect(result['compatibilityModel'], 'flutter-dart-abi-v1');
+    expect(((result['diagnostics']! as List).single as Map)['code'], 'P2012');
+    expect(
+      ((result['items']! as List).single as Map)['compatibility'],
+      'NOT_YET_SUPPORTED',
+    );
+    expect(jsonEncode(result), isNot(contains(project.path)));
+  });
+
   test(
     'profile metadata is host-bound and redacts all session material',
     () async {

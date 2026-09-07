@@ -60,6 +60,8 @@ the default; `--json` preserves the same code and action fields for automation.
 | `P2009` | Changed function is absent from the release | Do not manually add function IDs; create a store release. |
 | `P2010` | No patchable changes were found | Do not create an empty patch artifact. |
 | `P2011` | Compiled patch requires an undeclared host contract | Add a release-owned capability contract or create a normal release. |
+| `P2012` | Selected source uses an unsupported patch compiler construct | Create a new base release or change only a supported method body. |
+| `P2013` | Patch compiler preflight failed unexpectedly | Preserve the diagnostic and report the compiler failure before retrying. |
 | `N3001` | Native/store-reviewed input changed | Create a normal store release. |
 | `N3003` | Resolved package graph changed | Review dependency/plugin changes and create a store release. |
 | `N3004` | Toolchain configuration changed | Create a new baseline after changing policy. |

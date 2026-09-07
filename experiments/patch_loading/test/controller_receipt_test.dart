@@ -626,7 +626,7 @@ Future<List<int>> _signed(String source, int sequence) async {
         payload: utf8.encode(
           jsonEncode({
             'bridgeVersion': 1,
-            'encoding': 'e0-patch-container-v9-bytes',
+            'encoding': 'e0-patch-container-v10-bytes',
             'functions': {
               _functionId: base64.encode(_compile(source, sequence)),
             },

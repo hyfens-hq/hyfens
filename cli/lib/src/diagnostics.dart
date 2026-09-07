@@ -48,6 +48,8 @@ abstract final class ToolDiagnosticCodes {
   static const resourceSnapshotMissing = 'R5010';
   static const resourceArtifactEvidenceUnavailable = 'F3011';
   static const engineRevisionUnavailable = 'T1103';
+  static const patchCompilerUnsupported = 'P2012';
+  static const patchCompilerPreflightFailed = 'P2013';
 }
 
 final class ToolDiagnostic {

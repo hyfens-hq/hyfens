@@ -16,8 +16,9 @@ export 'src/value.dart';
 export 'src/widget.dart';
 export 'src/runtime_diagnostics.dart';
 
-const int e0PatchFormatVersion = 9;
-const int e0RuntimeVersion = 9;
+const int e0PatchFormatVersion = 10;
+const int e0RuntimeVersion = 10;
+const int e0MaxFutureDelayMilliseconds = 5 * 60 * 1000;
 
 enum E0CapabilityExecutionKind { sync, async }
 
@@ -753,7 +754,9 @@ enum E0Opcode {
   collectionWhere(40, 1),
   collectionFold(41, 1),
   collectionSort(42, 1),
-  futureValue(43, 1);
+  futureValue(43, 1),
+  futureDelay(44, 2),
+  flutterEndOfFrame(45, 1);
 
   const E0Opcode(this.code, this.width);
 
@@ -778,6 +781,8 @@ final class E0ClosureProgram {
     List<E0ValueSchema> locals = const <E0ValueSchema>[],
     List<E0ExceptionHandler> handlers = const <E0ExceptionHandler>[],
     this.receiver = E0ReceiverDescriptor.none,
+    this.isAsync = false,
+    List<E0AsyncPoint> asyncPoints = const <E0AsyncPoint>[],
   }) : parameters = List.unmodifiable(parameters),
        captures = List.unmodifiable(captures),
        constants = List.unmodifiable(
@@ -787,7 +792,8 @@ final class E0ClosureProgram {
        ),
        code = List.unmodifiable(code),
        locals = List.unmodifiable(locals),
-       handlers = List.unmodifiable(handlers);
+       handlers = List.unmodifiable(handlers),
+       asyncPoints = List.unmodifiable(asyncPoints);
 
   final List<E0ValueSchema> parameters;
   final List<E0ValueSchema> captures;
@@ -797,6 +803,8 @@ final class E0ClosureProgram {
   final List<E0ValueSchema> locals;
   final List<E0ExceptionHandler> handlers;
   final E0ReceiverDescriptor receiver;
+  final bool isAsync;
+  final List<E0AsyncPoint> asyncPoints;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'parameters': parameters.map((schema) => schema.toJson()).toList(),
@@ -807,6 +815,8 @@ final class E0ClosureProgram {
     'locals': locals.map((schema) => schema.toJson()).toList(),
     'handlers': handlers.map((handler) => handler.toJson()).toList(),
     'receiver': receiver.toJson(),
+    'async': isAsync,
+    'asyncPoints': asyncPoints.map((point) => point.toJson()).toList(),
   };
 
   static E0ClosureProgram fromJson(Map<String, Object?> value) {
@@ -819,6 +829,8 @@ final class E0ClosureProgram {
       'locals',
       'handlers',
       'receiver',
+      'async',
+      'asyncPoints',
     };
     if (value.keys.toSet().difference(keys).isNotEmpty ||
         keys.difference(value.keys.toSet()).isNotEmpty ||
@@ -828,7 +840,9 @@ final class E0ClosureProgram {
         value['constants'] is! List<Object?> ||
         value['locals'] is! List<Object?> ||
         value['handlers'] is! List<Object?> ||
-        value['receiver'] is! Map<String, Object?>) {
+        value['receiver'] is! Map<String, Object?> ||
+        value['async'] is! bool ||
+        value['asyncPoints'] is! List<Object?>) {
       throw const FormatException('Invalid closure program fields');
     }
     List<E0ValueSchema> parseSchemas(Object? raw, String name) {
@@ -867,6 +881,18 @@ final class E0ClosureProgram {
           return E0ExceptionHandler.fromJson(item);
         })
         .toList(growable: false);
+    final rawAsyncPoints = value['asyncPoints']! as List<Object?>;
+    if (rawAsyncPoints.length > 64) {
+      throw const FormatException('Invalid or oversized closure async points');
+    }
+    final asyncPoints = rawAsyncPoints
+        .map((item) {
+          if (item is! Map<String, Object?>) {
+            throw const FormatException('Invalid closure async point');
+          }
+          return E0AsyncPoint.fromJson(item);
+        })
+        .toList(growable: false);
     if (code.length > E0PatchContainer.maxCodeWords ||
         code.any((item) => item is! int || item < 0)) {
       throw const FormatException('Invalid closure code');
@@ -884,6 +910,8 @@ final class E0ClosureProgram {
       receiver: E0ReceiverDescriptor.fromJson(
         value['receiver']! as Map<String, Object?>,
       ),
+      isAsync: value['async']! as bool,
+      asyncPoints: asyncPoints,
     );
   }
 
@@ -896,12 +924,14 @@ final class E0ClosureProgram {
         ...parameters,
       ]),
       returnSchema: returnSchema,
+      isAsync: isAsync,
     ),
     receiver: receiver,
     constants: constants,
     code: code,
     locals: locals,
     handlers: handlers,
+    asyncPoints: asyncPoints,
   );
 }
 
@@ -1051,7 +1081,7 @@ final class E0PatchContainer {
     };
     if (decoded.keys.toSet().difference(keys).isNotEmpty ||
         keys.difference(decoded.keys.toSet()).isNotEmpty) {
-      throw const FormatException('Patch fields do not match format v9');
+      throw const FormatException('Patch fields do not match format v10');
     }
     final canonicalBytes = utf8.encode(jsonEncode(_canonicalJson(decoded)));
     if (!_equalBytes(bytes, canonicalBytes)) {
@@ -1431,6 +1461,11 @@ final class E0Interpreter {
             program.asyncPoints[index].resumePc != pc + opcode.width) {
           throw FormatException('Invalid async point operand at $pc');
         }
+      } else if (opcode == E0Opcode.futureDelay) {
+        final milliseconds = program.code[pc + 1];
+        if (milliseconds > e0MaxFutureDelayMilliseconds) {
+          throw FormatException('Future delay exceeds limit at $pc');
+        }
       } else if (opcode == E0Opcode.makeClosure) {
         final index = program.code[pc + 1];
         if (index >= program.closures.length) {
@@ -1485,16 +1520,20 @@ final class E0Interpreter {
         throw const FormatException('Unused sync capability metadata');
       }
       var syncScanPc = 0;
-      var usesFutureValue = false;
+      var usesAsyncIntrinsic = false;
       while (syncScanPc < program.code.length) {
         final syncOpcode = E0Opcode.fromCode(program.code[syncScanPc]);
         if (syncOpcode == null) break;
-        if (syncOpcode == E0Opcode.futureValue) usesFutureValue = true;
+        if (syncOpcode == E0Opcode.futureValue ||
+            syncOpcode == E0Opcode.futureDelay ||
+            syncOpcode == E0Opcode.flutterEndOfFrame) {
+          usesAsyncIntrinsic = true;
+        }
         syncScanPc += syncOpcode.width;
       }
-      if (usesFutureValue) {
+      if (usesAsyncIntrinsic) {
         throw const FormatException(
-          'Future value opcode is only valid in an async program',
+          'Async intrinsic opcode is only valid in an async program',
         );
       }
       return;
@@ -2010,6 +2049,14 @@ final class E0Interpreter {
         case E0Opcode.futureValue:
           final value = _popStatic(stack, current);
           stack.add(value);
+        case E0Opcode.futureDelay:
+        case E0Opcode.flutterEndOfFrame:
+          if (!program.signature.isAsync) {
+            throw FormatException(
+              'Async intrinsic in synchronous program at $current',
+            );
+          }
+          stack.add(E0ValueSchema.voidValue);
         case E0Opcode.makeClosure:
           final closureIndex = program.code[current + 1];
           final closure = program.closures[closureIndex];
@@ -2859,6 +2906,8 @@ final class E0Interpreter {
           case E0Opcode.callAsyncCapability:
           case E0Opcode.awaitValue:
           case E0Opcode.futureValue:
+          case E0Opcode.futureDelay:
+          case E0Opcode.flutterEndOfFrame:
             throw E0RuntimeFault(
               'Async opcode in synchronous executor',
               pc: pc,
@@ -2879,6 +2928,7 @@ final class E0Interpreter {
                   captures,
                   receiver,
                   pinnedAuthority,
+                  program,
                 ),
               ),
             );
@@ -3361,13 +3411,15 @@ final class _RuntimeValue {
   final Object? value;
 }
 
-final class _RuntimeClosure implements E0HostCallbackValue {
+final class _RuntimeClosure
+    implements E0HostCallbackValue, E0AsyncHostCallbackValue {
   const _RuntimeClosure(
     this.index,
     this.program,
     this.captures,
     this.receiver,
     this.authority,
+    this.ownerProgram,
   );
 
   final int index;
@@ -3375,17 +3427,51 @@ final class _RuntimeClosure implements E0HostCallbackValue {
   final List<_RuntimeValue> captures;
   final E0ReceiverCapability? receiver;
   final E0CapabilityAuthority? authority;
+  final E0PatchProgram ownerProgram;
 
   @override
-  Object? invoke() => E0Interpreter._invokeClosure(
-    this,
-    const <_RuntimeValue>[],
-    authority: authority,
-    instructionBudget: E0Interpreter.defaultInstructionBudget,
-    limits: E0RuntimeLimits.defaults,
-    closureDepth: 0,
-    counters: _E0ExecutionCounters(),
-  ).value;
+  Object? invoke() {
+    if (program.isAsync) {
+      throw StateError('Async callback must be invoked through invokeAsync');
+    }
+    return E0Interpreter._invokeClosure(
+      this,
+      const <_RuntimeValue>[],
+      authority: authority,
+      instructionBudget: E0Interpreter.defaultInstructionBudget,
+      limits: E0RuntimeLimits.defaults,
+      closureDepth: 0,
+      counters: _E0ExecutionCounters(),
+    ).value;
+  }
+
+  @override
+  Future<Object?> invokeAsync() async {
+    if (!program.isAsync) return invoke();
+    final patch = program.asPatchProgram(index);
+    try {
+      return await E0AsyncInterpreter.execute(
+        patch,
+        captures.map((capture) => capture.value).toList(growable: false),
+        receiver: receiver,
+        authority: authority,
+        onRuntimeFault: (message) =>
+            E0PatchRuntime._disableIfCurrent(ownerProgram, message),
+      );
+    } on StackOverflowError {
+      E0PatchRuntime._disableIfCurrent(
+        ownerProgram,
+        'Fatal async callback initialization failure',
+      );
+      rethrow;
+    } on OutOfMemoryError {
+      E0PatchRuntime._disableIfCurrent(
+        ownerProgram,
+        'Fatal async callback initialization failure',
+      );
+      rethrow;
+    }
+  }
 }
 
 Object? _mutableCopy(Object? value, [Map<Object, Object>? memo]) {
@@ -4101,6 +4187,30 @@ final class E0AsyncInterpreter {
                   ),
                 ),
               );
+            case E0Opcode.futureDelay:
+              final milliseconds = program.code[pc + 1];
+              state.stack.add(
+                _RuntimeValue(
+                  E0ValueSchema.voidValue,
+                  _PendingFutureValue(
+                    E0ValueSchema.voidValue,
+                    Future<Object?>.delayed(
+                      Duration(milliseconds: milliseconds),
+                      () => null,
+                    ),
+                  ),
+                ),
+              );
+            case E0Opcode.flutterEndOfFrame:
+              state.stack.add(
+                _RuntimeValue(
+                  E0ValueSchema.voidValue,
+                  _PendingFutureValue(
+                    E0ValueSchema.voidValue,
+                    E0PatchRuntime._waitForFlutterFrame(),
+                  ),
+                ),
+              );
             case E0Opcode.callSyncCapability:
               throw E0RuntimeFault(
                 'Sync capability is not enabled in async executor',
@@ -4514,6 +4624,7 @@ final class E0InvocationResult {
 final class E0PatchRuntime {
   static E0CapabilityAuthority? _authority;
   static E0WidgetFactoryRegistry? _widgetFactories;
+  static Future<void> Function()? _flutterFrameWaiter;
   static List<E0PatchProgram?> _slots = const [];
   static final Expando<int> _generations = Expando<int>('e0-generation');
   static int _nextGeneration = 1;
@@ -4590,6 +4701,24 @@ final class E0PatchRuntime {
     _widgetFactories = factories;
     _retryPendingCapabilities();
     return factories;
+  }
+
+  /// Installs the host-owned Flutter frame boundary used by the bounded
+  /// async ABI. Downloaded code can await the next frame, but it cannot
+  /// obtain or dispatch arbitrary framework objects.
+  static void configureFlutterFrameWaiterIfAbsent(
+    Future<void> Function() waiter,
+  ) {
+    _flutterFrameWaiter ??= waiter;
+  }
+
+  static Future<Object?> _waitForFlutterFrame() async {
+    final waiter = _flutterFrameWaiter;
+    if (waiter == null) {
+      throw StateError('Flutter frame waiter is not configured');
+    }
+    await waiter();
+    return null;
   }
 
   static bool _isWidgetBuildSignature(E0FunctionSignature signature) =>
@@ -5006,6 +5135,7 @@ final class E0PatchRuntime {
     _installedPayloadHash = null;
     _authority = null;
     _widgetFactories = null;
+    _flutterFrameWaiter = null;
     E0RuntimeSourceMaps.clear();
     E0RuntimeFunctionContexts.clear();
     _diagnosticSink = null;

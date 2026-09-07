@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -33,6 +34,15 @@ enum E0ValueKind {
 /// bounded, zero-argument guest closures.
 abstract interface class E0HostCallbackValue {
   Object? invoke();
+}
+
+/// A host-owned callback whose bounded guest body is asynchronous.
+///
+/// Async callbacks remain non-serializable. The Flutter host decides when to
+/// invoke them and owns the returned Future; the guest can only use the
+/// async operations admitted by the enclosing patch ABI.
+abstract interface class E0AsyncHostCallbackValue {
+  Future<Object?> invokeAsync();
 }
 
 final class E0ValueSchema {

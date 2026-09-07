@@ -69,6 +69,25 @@ Future<int> compute(int value) async {
 void main() {}
 ''';
 
+const _asyncCallbackSource = '''
+import 'package:flutter/material.dart';
+
+class AsyncActionView extends StatelessWidget {
+  const AsyncActionView();
+
+  Widget build(BuildContext context) {
+    return ElevatedButton(
+      onPressed: () async {
+        await Future<void>.delayed(Duration.zero);
+      },
+      child: Text('run'),
+    );
+  }
+}
+
+void main() {}
+''';
+
 void main() {
   setUp(E0PatchRuntime.reset);
   tearDown(E0PatchRuntime.reset);
@@ -161,6 +180,58 @@ void main() {
       final callback = root.children[1].properties['onPressed'];
       expect(callback, isA<E0HostCallbackValue>());
       expect((callback! as E0HostCallbackValue).invoke(), isNull);
+    },
+  );
+
+  test(
+    'bounded async widget callbacks execute through the host boundary',
+    () async {
+      final transformation = _transform(_asyncCallbackSource);
+      final build = transformation.manifest.functions.singleWhere(
+        (function) =>
+            function.name == 'build' &&
+            function.receiver.ownerClass == 'AsyncActionView',
+      );
+      final bytes = E0PatchCompiler().compile(
+        source: _asyncCallbackSource,
+        manifest: transformation.manifest,
+        className: 'AsyncActionView',
+        functionName: 'build',
+      );
+      E0PatchRuntime.configureWidgetFactories(_fakeWidgetRegistry());
+      expect(
+        E0PatchRuntime.installBytes(
+          bytes,
+          appId: 'flutter-abi',
+          releaseId: 'release-1',
+          buildFingerprint: 'build-1',
+          functions: <String, int>{
+            for (final item in transformation.manifest.functions)
+              item.id: item.slot,
+          },
+          signatures: <String, String>{
+            for (final item in transformation.manifest.functions)
+              item.id: item.signature.encode(),
+          },
+          receivers: <String, String>{
+            for (final item in transformation.manifest.functions)
+              item.id: item.receiver.encode(),
+          },
+        ),
+        isTrue,
+        reason: E0PatchRuntime.lastRejection,
+      );
+
+      final result = E0PatchRuntime.invokeWidget<_Node>(
+        E0PatchRuntime.lookup(build.slot)!,
+        <Object?>[Object()],
+        receiver: _DescriptorReceiver(build.receiver),
+      );
+      expect(result.isSuccess, isTrue, reason: E0PatchRuntime.lastRejection);
+      final callback = (result.value! as _Node).properties['onPressed'];
+      expect(callback, isA<E0AsyncHostCallbackValue>());
+      await (callback! as E0AsyncHostCallbackValue).invokeAsync();
+      expect(E0AsyncInterpreter.activeContinuations, 0);
     },
   );
 

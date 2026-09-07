@@ -61,7 +61,16 @@ E0WidgetFactoryRegistry standardFlutterWidgetRegistry() {
       create: (properties, children) {
         final callback = properties['onPressed'];
         return ElevatedButton(
-          onPressed: callback is E0HostCallbackValue
+          onPressed: callback is E0AsyncHostCallbackValue
+              ? () {
+                  unawaited(
+                    callback.invokeAsync().then<void>(
+                      (_) {},
+                      onError: (Object _, StackTrace __) {},
+                    ),
+                  );
+                }
+              : callback is E0HostCallbackValue
               ? () {
                   final result = callback.invoke();
                   if (result is Future) {
