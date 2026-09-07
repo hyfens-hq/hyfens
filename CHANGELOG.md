@@ -25,7 +25,7 @@ not select a version or publish software.
 - Existing delivery credentials must be reissued to receive the new
   `runtime:install` scope.
 
-## [0.1.10-rc.1]
+## [0.1.10-rc.2]
 
 ### Added
 
