@@ -192,3 +192,24 @@ temporary worktree.
   entry. Full affected suites and static analysis passed. PostgreSQL provider,
   attestation, private Cloud settlement, and RC gates remain explicitly
   classified; no stable release was published.
+
+## Post-completion validation — 2026-09-08
+
+The reviewed public implementation is no longer stranded in a temporary
+worktree. It was committed as `76d2f82a9957d146da2950dc1fb8c3404a2ce2d4`
+(`feat(runtime): add trusted install receipt settlement`) and fast-forwarded to
+public `origin/main`. The Task 261 worktree and branch were removed after the
+push. No published tag, archive, checksum, or stable release was changed.
+
+The previously unavailable PostgreSQL receipt gates were run against a new
+disposable PostgreSQL 17 instance. The focused public store suite passed 9
+tests, including the shared-database receipt settlement race; the PostgreSQL
+service suite passed 1 test. The complete control-plane run still reports nine
+unrelated pre-existing P3E5 automatic-halt/reconciliation failures and one
+environmental skip; no Task 261 receipt test failed. The focused receipt and
+service results are the evidence for this milestone's PostgreSQL gate.
+
+The private Cloud continuation is recorded in its private repository. Its
+canonical event remains `successful_patch_install`; acceptance usage is stored
+separately with zero financial units, and production usage remains policy-gated.
+Live checkout and overage collection remain disabled.
