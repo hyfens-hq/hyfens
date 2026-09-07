@@ -167,7 +167,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
         run: |
-          gh release create "v${RELEASE_VERSION}" dist/* \
-            --verify-tag \
-            --title "Hyfens CLI v${RELEASE_VERSION}" \
+          release_args=(
+            --verify-tag
+            --title "Hyfens CLI v${RELEASE_VERSION}"
             --notes-file "$RUNNER_TEMP/release-notes.md"
+          )
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "v${RELEASE_VERSION}" dist/* "${release_args[@]}"
