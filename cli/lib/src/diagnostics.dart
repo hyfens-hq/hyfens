@@ -46,6 +46,7 @@ abstract final class ToolDiagnosticCodes {
   static const resourceFontChanged = 'F3010';
   static const resourceNativeChanged = 'N3010';
   static const resourceSnapshotMissing = 'R5010';
+  static const resourceArtifactEvidenceUnavailable = 'F3011';
   static const engineRevisionUnavailable = 'T1103';
 }
 

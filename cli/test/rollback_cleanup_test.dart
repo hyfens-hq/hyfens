@@ -71,6 +71,27 @@ Future<_Fixture> _createTrustedFixture() async {
   await store.release(metadata.releaseId).delete(recursive: true);
   final sourceArtifact = File('${root.path}/base.apk');
   await sourceArtifact.writeAsBytes(<int>[1, 2, 3, 4]);
+  final trustedResourceSnapshot = metadata.resourceSnapshot!
+      .withArtifactEvidence(
+        ResourceArtifactEvidence(
+          status: 'COMPLETE',
+          assetManifestPresent: true,
+          fontManifestPresent: true,
+          materialIconFontPresent: false,
+          files: const <ResourceArtifactFile>[
+            ResourceArtifactFile(
+              path: 'build/app/flutter_assets/AssetManifest.bin.json',
+              size: 1,
+              sha256: '0000000000000000000000000000000000000000000000000000000000000000',
+            ),
+            ResourceArtifactFile(
+              path: 'build/app/flutter_assets/FontManifest.json',
+              size: 1,
+              sha256: '0000000000000000000000000000000000000000000000000000000000000000',
+            ),
+          ],
+        ),
+      );
   final trusted = ReleaseRecord(
     applicationId: metadata.applicationId,
     releaseId: metadata.releaseId,
@@ -89,6 +110,7 @@ Future<_Fixture> _createTrustedFixture() async {
     instrumentation: metadata.instrumentation,
     build: const <String, Object?>{
       'artifact': 'base.apk',
+      'compatibilityModel': 'flutter-dart-abi-v1',
       'metadataOnly': false,
       'status': 'SUCCESS',
     },
@@ -97,7 +119,7 @@ Future<_Fixture> _createTrustedFixture() async {
     diagnostics: metadata.diagnostics,
     configFingerprint: metadata.configFingerprint,
     nativeFingerprints: metadata.nativeFingerprints,
-    resourceSnapshot: metadata.resourceSnapshot,
+    resourceSnapshot: trustedResourceSnapshot,
     flutterEngineRevision: metadata.flutterEngineRevision,
   );
   await store.writeRelease(trusted, artifacts: <File>[sourceArtifact]);

@@ -9,6 +9,8 @@ import 'package:instrumentation_e0/e0_runtime.dart';
 import 'package:patch_loading_e1/patch_loading_e1.dart';
 
 import 'src/control_plane_delivery.dart';
+import 'src/flutter_widget_registry_stub.dart'
+    if (dart.library.ui) 'src/flutter_widget_registry.dart';
 import 'src/install_receipts.dart';
 import 'src/installation_key.dart';
 import 'src/runtime_attestation.dart';
@@ -89,6 +91,9 @@ final class HyfensFlutterIntegration {
       return;
     }
     _activeBootstrapKey = bootstrapKey;
+    E0PatchRuntime.configureWidgetFactoriesIfAbsent(
+      standardFlutterWidgetRegistry(),
+    );
     E0PatchRuntime.markGeneratedIntegrationStarted();
     _configureDiagnostics(functionContexts);
     unawaited(

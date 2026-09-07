@@ -8,6 +8,7 @@ import 'package:test/test.dart';
 Future<Directory> _createProject() async {
   final root = await Directory.systemTemp.createTemp('hyfens-mcp-project-');
   await Directory('${root.path}/lib').create(recursive: true);
+  await Directory('${root.path}/.dart_tool').create(recursive: true);
   await File('${root.path}/pubspec.yaml').writeAsString('''
 name: mcp_sample
 version: 1.0.0
@@ -21,7 +22,26 @@ packages: {}
 sdks:
   dart: ">=3.13.0 <4.0.0"
 ''');
-  await File('${root.path}/lib/main.dart').writeAsString('void main() {}\n');
+  await File('${root.path}/lib/main.dart').writeAsString('''
+void main() {}
+
+int calculate() {
+  return 1;
+}
+''');
+  await File('${root.path}/.dart_tool/package_config.json').writeAsString(
+    jsonEncode(<String, Object?>{
+      'configVersion': 2,
+      'packages': <Object?>[
+        <String, Object?>{
+          'name': 'mcp_sample',
+          'rootUri': root.uri.toString(),
+          'packageUri': 'lib/',
+          'languageVersion': '3.13',
+        },
+      ],
+    }),
+  );
   return root;
 }
 
@@ -128,6 +148,7 @@ void main() {
         containsAll(<String>{
           'hyfens_status',
           'hyfens_doctor',
+          'hyfens_analyze',
           'hyfens_profile_list',
           'hyfens_profile_current',
           'hyfens_profile_get',
@@ -199,6 +220,49 @@ void main() {
       expect(jsonEncode(init), isNot(contains(project.path)));
     },
   );
+
+  test('MCP analyze exposes the shared typed compatibility result', () async {
+    final project = await _createProject();
+    final auth = await Directory.systemTemp.createTemp('hyfens-mcp-auth-');
+    addTearDown(() async {
+      await project.delete(recursive: true);
+      await auth.delete(recursive: true);
+    });
+    final tool = HyfensToolchain();
+    await tool.init(projectPath: project.path);
+    await tool.generateKeys(projectPath: project.path);
+    final release = await tool.release(
+      target: 'android',
+      projectPath: project.path,
+      metadataOnly: true,
+    );
+    expect(release.build['compatibilityModel'], 'flutter-dart-abi-v1');
+    await File('${project.path}/lib/main.dart').writeAsString('''
+void main() {}
+
+int calculate() {
+  return 2;
+}
+''');
+    final adapter = HyfensMcpAdapter(
+      toolchain: tool,
+      authStorage: AuthStorage(root: auth),
+    );
+
+    final result = await adapter.analyze(
+      projectPath: project.path,
+      releaseId: release.releaseId,
+    );
+    expect(result['compatibilityModel'], 'flutter-dart-abi-v1');
+    expect(result['result'], 'PATCHABLE');
+    final items = (result['items']! as List)
+        .map((item) => (item as Map).cast<String, Object?>())
+        .toList();
+    expect(items, isNotEmpty);
+    expect(items.single['compatibility'], 'PATCHABLE');
+    expect(items.single['reasonCode'], isNotEmpty);
+    expect(jsonEncode(result), isNot(contains(project.path)));
+  });
 
   test(
     'profile metadata is host-bound and redacts all session material',

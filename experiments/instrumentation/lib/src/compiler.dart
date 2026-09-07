@@ -63,10 +63,21 @@ final class E0PatchCompiler {
         );
       }
       final method = methods.single;
-      final isWidgetBuild = e0IsWidgetBuildMethod(method);
+      final isWidgetBuildMethod = e0IsWidgetBuildMethod(method);
+      final isFlutterWidgetBuild =
+          isWidgetBuildMethod &&
+          !allowSyntheticWidgetTypes &&
+          _hasCanonicalFlutterWidgetImport(parsed.unit) &&
+          manifest.functions.any(
+            (item) =>
+                item.name == functionName &&
+                item.receiver.ownerClass == className &&
+                item.signature == e0FlutterWidgetBuildSignature,
+          );
       final unsupported = e0UnsupportedMethodReason(
         method,
-        allowWidgetBuild: isWidgetBuild,
+        allowWidgetBuild: isWidgetBuildMethod,
+        widgetBuildWithContext: isFlutterWidgetBuild,
       );
       if (unsupported != null) {
         throw FormatException(
@@ -75,7 +86,8 @@ final class E0PatchCompiler {
       }
       signature = e0SignatureForMethodDeclaration(
         method,
-        allowWidgetBuild: isWidgetBuild,
+        allowWidgetBuild: isWidgetBuildMethod,
+        widgetBuildWithContext: isFlutterWidgetBuild,
       );
       parameterList = method.parameters!;
       body = method.body;
@@ -111,7 +123,9 @@ final class E0PatchCompiler {
     }
     final arguments = <String, (int, E0ValueSchema)>{};
     final parameters = parameterList.parameters;
-    final isWidgetBuild = signature == e0WidgetBuildSignature;
+    final isWidgetBuild =
+        signature == e0WidgetBuildSignature ||
+        signature == e0FlutterWidgetBuildSignature;
     if (isWidgetBuild && !allowSyntheticWidgetTypes) {
       _validateFlutterWidgetPatchLibrary(
         parsed.unit,
@@ -122,7 +136,7 @@ final class E0PatchCompiler {
       throw const FormatException('Widget ABI is reserved for build methods');
     }
     for (var index = 0; index < parameters.length; index++) {
-      if (isWidgetBuild) break;
+      if (signature == e0WidgetBuildSignature) break;
       arguments[parameters[index].name!.lexeme] = (
         index,
         signature.parameters[index],
@@ -143,13 +157,17 @@ final class E0PatchCompiler {
       declaredWidgetFactories: manifest.widgetFactories,
       isWidgetBuild: isWidgetBuild,
     );
-    if (!_blockDefinitelyReturns(body.block)) {
+    if (signature.returnSchema.kind != E0ValueKind.voidValue &&
+        !_blockDefinitelyReturns(body.block)) {
       throw const FormatException(
         'Patch body must return a value on every reachable path',
       );
     }
     for (final statement in body.block.statements) {
       emitter.statement(statement);
+    }
+    if (signature.returnSchema.kind == E0ValueKind.voidValue) {
+      emitter.implicitVoidReturn();
     }
     final program = E0PatchProgram(
       functionId: function.id,
@@ -180,21 +198,18 @@ void _validateFlutterWidgetPatchLibrary(
   CompilationUnit unit,
   Set<String> factoryNames,
 ) {
-  final flutterImports = unit.directives.whereType<ImportDirective>().where(
-    (directive) =>
-        directive.uri.stringValue?.startsWith('package:flutter/') ?? false,
-  );
-  if (flutterImports.length != 1 ||
-      flutterImports.single.prefix != null ||
-      flutterImports.single.combinators.isNotEmpty) {
+  if (!_hasCanonicalFlutterWidgetImport(unit)) {
     throw const FormatException(
-      'Widget patches require one unprefixed, unfiltered package:flutter import',
+      'Widget patches require a canonical package:flutter import: '
+      'package:flutter/material.dart or package:flutter/widgets.dart',
     );
   }
   final forbidden = <String>{
     'Widget',
     'BuildContext',
     'StatelessWidget',
+    'StatefulWidget',
+    'State',
     ...factoryNames,
   };
   for (final declaration in unit.declarations) {
@@ -224,12 +239,29 @@ bool e0IsWidgetBuildMethod(MethodDeclaration declaration) {
           'BuildContext';
 }
 
+bool _hasCanonicalFlutterWidgetImport(CompilationUnit unit) {
+  final imports = unit.directives.whereType<ImportDirective>().where(
+    (directive) =>
+        directive.uri.stringValue?.startsWith('package:flutter/') ?? false,
+  );
+  return imports.any(
+    (directive) =>
+        directive.prefix == null &&
+        directive.combinators.isEmpty &&
+        (directive.uri.stringValue == 'package:flutter/material.dart' ||
+            directive.uri.stringValue == 'package:flutter/widgets.dart'),
+  );
+}
+
 E0FunctionSignature e0SignatureForMethodDeclaration(
   MethodDeclaration declaration, {
   bool allowWidgetBuild = false,
+  bool widgetBuildWithContext = false,
 }) {
   if (allowWidgetBuild && e0IsWidgetBuildMethod(declaration)) {
-    return e0WidgetBuildSignature;
+    return widgetBuildWithContext
+        ? e0FlutterWidgetBuildSignature
+        : e0WidgetBuildSignature;
   }
   return _signatureFor(
     returnType: declaration.returnType,
@@ -241,6 +273,7 @@ E0FunctionSignature e0SignatureForMethodDeclaration(
 String? e0UnsupportedMethodReason(
   MethodDeclaration declaration, {
   bool allowWidgetBuild = false,
+  bool widgetBuildWithContext = false,
 }) {
   if (declaration.isStatic) return 'static method target';
   if (declaration.isGetter || declaration.isSetter) return 'accessor target';
@@ -255,6 +288,7 @@ String? e0UnsupportedMethodReason(
     final signature = e0SignatureForMethodDeclaration(
       declaration,
       allowWidgetBuild: allowWidgetBuild,
+      widgetBuildWithContext: widgetBuildWithContext,
     );
     if (body.isAsynchronous != signature.isAsync) {
       return 'async body must declare Future<T>, and Future<T> patches must use async';
@@ -542,6 +576,11 @@ final class _Emitter {
     if (statement is ReturnStatement) {
       final expression = statement.expression;
       if (expression == null) {
+        if (returnSchema.kind == E0ValueKind.voidValue) {
+          _emitConstant(null, E0ValueSchema.voidValue);
+          code.add(E0Opcode.returnValue.code);
+          return;
+        }
         throw const FormatException('Missing return value');
       }
       if (expression is ThrowExpression) {
@@ -644,6 +683,15 @@ final class _Emitter {
       'Unsupported statement ${statement.runtimeType}; '
       'v6 supports typed locals, structured control flow, bounded exceptions, and typed async capabilities',
     );
+  }
+
+  /// Emits the implicit fall-through return permitted by a Dart `void`
+  /// function. It is deliberately explicit in the guest program so the
+  /// verifier and rollback path still observe a typed return value.
+  void implicitVoidReturn() {
+    if (returnSchema.kind != E0ValueKind.voidValue) return;
+    _emitConstant(null, E0ValueSchema.voidValue);
+    code.add(E0Opcode.returnValue.code);
   }
 
   void _emitTry(TryStatement statement) {
@@ -750,7 +798,7 @@ final class _Emitter {
           : _localSchema(type.toSource());
       if (schema == null) {
         final inferred = emitExpression(initializer!);
-        if (!inferred.isSupportedHostSignature) {
+        if (!inferred.isSupportedLocalSchema) {
           throw FormatException(
             'Inferred local ${declaration.name.lexeme} has unsupported type $inferred',
           );
@@ -1315,10 +1363,15 @@ final class _Emitter {
       );
     }
     if (expression is FunctionExpression) {
+      final closureReturn =
+          context?.kind == E0ValueKind.host &&
+              context?.hostType == 'VoidCallback'
+          ? E0ValueSchema.voidValue
+          : context;
       return _emitClosure(
         expression,
         expectedParameters: null,
-        returnSchema: context,
+        returnSchema: closureReturn,
       );
     }
     if (expression is FunctionExpressionInvocation) {
@@ -1899,13 +1952,17 @@ final class _Emitter {
           'Async and generator closures are unsupported',
         );
       }
-      if (!_blockDefinitelyReturns(body.block)) {
+      if (nestedReturn.kind != E0ValueKind.voidValue &&
+          !_blockDefinitelyReturns(body.block)) {
         throw const FormatException(
           'Closure must return on every reachable path',
         );
       }
       for (final statement in body.block.statements) {
         nested.statement(statement);
+      }
+      if (nestedReturn.kind == E0ValueKind.voidValue) {
+        nested.implicitVoidReturn();
       }
     } else {
       throw const FormatException('Unsupported closure body');
@@ -2059,6 +2116,63 @@ final class _Emitter {
           }
           properties['mainAxisSize'] = (mainAxisSize, E0ValueSchema.string);
         }
+      case 'Row':
+        if (positional.isNotEmpty) {
+          throw const FormatException(
+            'Row positional arguments are unsupported',
+          );
+        }
+        final childrenExpression = named.remove('children');
+        if (childrenExpression is! ListLiteral) {
+          throw const FormatException('Row requires a literal children list');
+        }
+        if (childrenExpression.elements.length >
+            E0WidgetFactoryRegistry.maxChildren) {
+          throw const FormatException('Row children limit exceeded');
+        }
+        for (final child in childrenExpression.elements) {
+          if (child is! Expression) {
+            throw const FormatException(
+              'Widget spreads and collection controls are unsupported',
+            );
+          }
+          children.add(child);
+        }
+        final mainAxisSize = named.remove('mainAxisSize');
+        if (mainAxisSize != null) {
+          final value = mainAxisSize.toSource();
+          if (value != 'MainAxisSize.min' && value != 'MainAxisSize.max') {
+            throw const FormatException('Unsupported Row.mainAxisSize');
+          }
+          properties['mainAxisSize'] = (mainAxisSize, E0ValueSchema.string);
+        }
+      case 'Center':
+        if (positional.isNotEmpty) {
+          throw const FormatException(
+            'Center positional arguments are unsupported',
+          );
+        }
+        final child = named.remove('child');
+        if (child == null) {
+          throw const FormatException('Center requires one child');
+        }
+        children.add(child);
+      case 'SizedBox':
+        if (positional.isNotEmpty) {
+          throw const FormatException(
+            'SizedBox positional arguments are unsupported',
+          );
+        }
+        final width = named.remove('width');
+        if (width != null) {
+          properties['width'] = (width, E0ValueSchema.doubleValue);
+        }
+        final height = named.remove('height');
+        if (height != null) {
+          properties['height'] = (height, E0ValueSchema.doubleValue);
+        }
+        final child = named.remove('child');
+        if (child != null) children.add(child);
       case 'ElevatedButton':
         if (positional.isNotEmpty) {
           throw const FormatException(
@@ -2066,9 +2180,21 @@ final class _Emitter {
           );
         }
         final callback = named.remove('onPressed');
-        if (callback is! NullLiteral) {
+        if (callback is FunctionExpression) {
+          if (!factory.properties.any(
+            (property) =>
+                property.name == 'onPressed' &&
+                property.schema == E0ValueSchema.hostCallback,
+          )) {
+            throw const FormatException(
+              'Patched button callbacks must remain host-owned; this widget '
+              'contract does not expose a callback boundary',
+            );
+          }
+          properties['onPressed'] = (callback, E0ValueSchema.hostCallback);
+        } else if (callback is! NullLiteral) {
           throw const FormatException(
-            'Patched button callbacks must remain host-owned; only null is supported',
+            'ElevatedButton.onPressed must be null or a bounded zero-argument closure',
           );
         }
         final child = named.remove('child');

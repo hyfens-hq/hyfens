@@ -11,6 +11,7 @@ export 'src/discovery.dart';
 export 'src/graph.dart';
 export 'src/instrumentation.dart';
 export 'src/mcp/mcp_server.dart';
+export 'src/patch_compatibility.dart';
 export 'src/profile.dart';
 export 'src/project.dart';
 export 'src/project_initialization.dart';

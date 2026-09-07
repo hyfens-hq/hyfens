@@ -47,6 +47,7 @@ final class E0SourceTransformer {
     List<E0WidgetFactoryDescriptor> widgetFactories =
         const <E0WidgetFactoryDescriptor>[],
     Set<String> widgetBuildClasses = const <String>{},
+    bool enableFlutterWidgetAbi = false,
     bool allowSyntheticWidgetTypes = false,
     bool requireMain = true,
     bool installRuntime = true,
@@ -108,6 +109,8 @@ final class E0SourceTransformer {
         'Widget',
         'BuildContext',
         'StatelessWidget',
+        'StatefulWidget',
+        'State',
         ...widgetFactories.map((factory) => factory.sourceName),
       }.contains,
     );
@@ -147,7 +150,8 @@ final class E0SourceTransformer {
         final qualifiedName =
             '${declaration.name.lexeme}.${method.name.lexeme}';
         final requestedWidgetBuild =
-            widgetBuildClasses.contains(declaration.name.lexeme) &&
+            (enableFlutterWidgetAbi ||
+                widgetBuildClasses.contains(declaration.name.lexeme)) &&
             e0IsWidgetBuildMethod(method);
         if (requestedWidgetBuild &&
             (!allowSyntheticWidgetTypes &&
@@ -158,10 +162,15 @@ final class E0SourceTransformer {
           continue;
         }
         final selectedWidgetBuild =
-            requestedWidgetBuild && _extendsStatelessWidget(declaration);
+            requestedWidgetBuild && _extendsFlutterWidget(declaration);
+        final widgetBuildWithContext =
+            selectedWidgetBuild &&
+            enableFlutterWidgetAbi &&
+            !allowSyntheticWidgetTypes;
         final reason = e0UnsupportedMethodReason(
           method,
           allowWidgetBuild: selectedWidgetBuild,
+          widgetBuildWithContext: widgetBuildWithContext,
         );
         if (reason != null) {
           exclusions.add('$qualifiedName: $reason');
@@ -182,6 +191,7 @@ final class E0SourceTransformer {
         final signature = e0SignatureForMethodDeclaration(
           method,
           allowWidgetBuild: selectedWidgetBuild,
+          widgetBuildWithContext: widgetBuildWithContext,
         );
         final declarationIdentity = identity.declaration(
           canonicalLibraryUri: libraryUri,
@@ -213,7 +223,11 @@ final class E0SourceTransformer {
         'Runtime installation requires a main function',
       );
     }
-    candidates.sort((left, right) => left.id.compareTo(right.id));
+    // Keep the pre-Flutter-ABI slot range stable for ordinary Dart functions.
+    // Widget build entries are an additive ABI surface, so append them after
+    // the existing function range instead of shifting every old slot when a
+    // Flutter library is enabled for widget patching.
+    candidates.sort(_compareCandidates);
     if (assignedSlots != null) {
       final candidateIds = candidates.map((candidate) => candidate.id).toSet();
       if (assignedSlots.keys.toSet().difference(candidateIds).isNotEmpty ||
@@ -275,13 +289,20 @@ final class E0SourceTransformer {
       final receiverArgument = candidate.ownerClass == null
           ? ''
           : ', receiver: ${adapterNames[slot]}(this)';
-      final isWidgetBuild = candidate.signature == e0WidgetBuildSignature;
+      final isWidgetBuild =
+          candidate.signature == e0WidgetBuildSignature ||
+          candidate.signature == e0FlutterWidgetBuildSignature;
       final invocationArguments = isWidgetBuild
-          ? '<Object?>[]'
+          ? candidate.signature == e0FlutterWidgetBuildSignature
+                ? '<Object?>[context]'
+                : '<Object?>[]'
           : '<Object?>[${_parameterNames(candidate.parameters).join(', ')}]';
       final namedInvocationArguments = isWidgetBuild
           ? ''
           : _namedParameterArguments(candidate.parameters);
+      final successfulReturn = candidate.returnType.toSource() == 'void'
+          ? '\n      return;'
+          : '\n      return $resultLocal.value as ${candidate.returnType.toSource()};';
       final guard = candidate.signature.isAsync
           ? '\n  final $patchLocal = $runtimePrefix.E0PatchRuntime.lookup($slot);'
                 '\n  if ($patchLocal != null) {'
@@ -302,10 +323,7 @@ final class E0SourceTransformer {
                 '$invocationArguments'
                 '$receiverArgument'
                 '$namedInvocationArguments);'
-                '\n    if ($resultLocal.isSuccess) {'
-                '\n      return $resultLocal.value as '
-                '${candidate.returnType.toSource()};'
-                '\n    }'
+                '\n    if ($resultLocal.isSuccess) {$successfulReturn\n    }'
                 '\n    if ($resultLocal.isGuestThrow) {'
                 '\n      $resultLocal.rethrowGuest();'
                 '\n    }'
@@ -365,20 +383,13 @@ final class E0SourceTransformer {
           _Edit(
             mainBody.expression.offset,
             'runtime-init',
-            '(()' +
-                (mainBody.keyword == null ? '' : ' async') +
-                ' {' +
-                runtimeInit.toString() +
-                '\n  ' +
-                (returnsValue ? 'return ' : ''),
+            '(()${mainBody.keyword == null ? '' : ' async'} {'
+                '${runtimeInit.toString()}\n  '
+                '${returnsValue ? 'return ' : ''}',
           ),
         );
         edits.add(
-          _Edit(
-            mainBody.expression.end,
-            'runtime-init-tail',
-            '; })()',
-          ),
+          _Edit(mainBody.expression.end, 'runtime-init-tail', '; })()'),
         );
       } else {
         throw const FormatException(
@@ -528,17 +539,24 @@ final class E0SourceTransformer {
   static bool _isSupportedMainBody(FunctionBody body) =>
       body is BlockFunctionBody || body is ExpressionFunctionBody;
 
-  static bool _extendsStatelessWidget(ClassDeclaration declaration) =>
-      declaration.extendsClause?.superclass.toSource() == 'StatelessWidget';
+  static bool _extendsFlutterWidget(ClassDeclaration declaration) {
+    final superclass = declaration.extendsClause?.superclass.toSource();
+    return superclass == 'StatelessWidget' ||
+        (superclass?.startsWith('State<') ?? false);
+  }
 
   static bool _hasCanonicalFlutterWidgetImport(CompilationUnit unit) {
     final imports = unit.directives.whereType<ImportDirective>().where(
       (directive) =>
           directive.uri.stringValue?.startsWith('package:flutter/') ?? false,
     );
-    return imports.length == 1 &&
-        imports.single.prefix == null &&
-        imports.single.combinators.isEmpty;
+    return imports.any(
+      (directive) =>
+          directive.prefix == null &&
+          directive.combinators.isEmpty &&
+          (directive.uri.stringValue == 'package:flutter/material.dart' ||
+              directive.uri.stringValue == 'package:flutter/widgets.dart'),
+    );
   }
 
   E0ReceiverDescriptor _receiverDescriptor({
@@ -740,6 +758,7 @@ final class E0OverlayBuilder {
     List<E0WidgetFactoryDescriptor> widgetFactories =
         const <E0WidgetFactoryDescriptor>[],
     Set<String> widgetBuildClasses = const <String>{},
+    bool enableFlutterWidgetAbi = false,
     bool allowSyntheticWidgetTypes = false,
   }) {
     final before = input.readAsBytesSync();
@@ -773,6 +792,7 @@ final class E0OverlayBuilder {
       capabilities: capabilities,
       widgetFactories: widgetFactories,
       widgetBuildClasses: widgetBuildClasses,
+      enableFlutterWidgetAbi: enableFlutterWidgetAbi,
       allowSyntheticWidgetTypes: allowSyntheticWidgetTypes,
     );
     outputDirectory.createSync(recursive: true);
@@ -1138,7 +1158,7 @@ final class E0PackageOverlayBuilder {
     final discoveredFunctions = discovered.values
         .expand((result) => result.manifest.functions)
         .toList();
-    discoveredFunctions.sort((left, right) => left.id.compareTo(right.id));
+    discoveredFunctions.sort(_compareFunctionManifests);
     final identityMaterial = <String, String>{};
     for (final function in discoveredFunctions) {
       final prior = identityMaterial[function.id];
@@ -1397,6 +1417,38 @@ final class _ResolvedPackageUnit {
   final String logicalLibraryPath;
   final String canonicalLibraryUri;
   final bool isEntrypoint;
+}
+
+bool _isWidgetBuildSignature(E0FunctionSignature signature) =>
+    signature == e0WidgetBuildSignature ||
+    signature == e0FlutterWidgetBuildSignature;
+
+bool _usesAdditiveAbi(E0FunctionSignature signature) =>
+    _isWidgetBuildSignature(signature) ||
+    signature.returnSchema.kind == E0ValueKind.voidValue ||
+    signature.parameters.any((schema) => schema.kind == E0ValueKind.host);
+
+int _compareCandidates(_Candidate left, _Candidate right) {
+  final leftIsAdditive = _usesAdditiveAbi(left.signature);
+  final rightIsAdditive = _usesAdditiveAbi(right.signature);
+  if (leftIsAdditive != rightIsAdditive) return leftIsAdditive ? 1 : -1;
+  final leftIsWidget = _isWidgetBuildSignature(left.signature);
+  final rightIsWidget = _isWidgetBuildSignature(right.signature);
+  if (leftIsWidget != rightIsWidget) return leftIsWidget ? 1 : -1;
+  return left.id.compareTo(right.id);
+}
+
+int _compareFunctionManifests(
+  E0FunctionManifest left,
+  E0FunctionManifest right,
+) {
+  final leftIsAdditive = _usesAdditiveAbi(left.signature);
+  final rightIsAdditive = _usesAdditiveAbi(right.signature);
+  if (leftIsAdditive != rightIsAdditive) return leftIsAdditive ? 1 : -1;
+  final leftIsWidget = _isWidgetBuildSignature(left.signature);
+  final rightIsWidget = _isWidgetBuildSignature(right.signature);
+  if (leftIsWidget != rightIsWidget) return leftIsWidget ? 1 : -1;
+  return left.id.compareTo(right.id);
 }
 
 final class _Candidate {

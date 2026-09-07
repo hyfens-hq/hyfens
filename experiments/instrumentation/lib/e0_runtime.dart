@@ -2873,7 +2873,13 @@ final class E0Interpreter {
             stack.add(
               _RuntimeValue(
                 E0ValueSchema.closure(closureIndex),
-                _RuntimeClosure(closureIndex, closure, captures, receiver),
+                _RuntimeClosure(
+                  closureIndex,
+                  closure,
+                  captures,
+                  receiver,
+                  pinnedAuthority,
+                ),
               ),
             );
           case E0Opcode.invokeClosure:
@@ -3355,13 +3361,31 @@ final class _RuntimeValue {
   final Object? value;
 }
 
-final class _RuntimeClosure {
-  const _RuntimeClosure(this.index, this.program, this.captures, this.receiver);
+final class _RuntimeClosure implements E0HostCallbackValue {
+  const _RuntimeClosure(
+    this.index,
+    this.program,
+    this.captures,
+    this.receiver,
+    this.authority,
+  );
 
   final int index;
   final E0ClosureProgram program;
   final List<_RuntimeValue> captures;
   final E0ReceiverCapability? receiver;
+  final E0CapabilityAuthority? authority;
+
+  @override
+  Object? invoke() => E0Interpreter._invokeClosure(
+    this,
+    const <_RuntimeValue>[],
+    authority: authority,
+    instructionBudget: E0Interpreter.defaultInstructionBudget,
+    limits: E0RuntimeLimits.defaults,
+    closureDepth: 0,
+    counters: _E0ExecutionCounters(),
+  ).value;
 }
 
 Object? _mutableCopy(Object? value, [Map<Object, Object>? memo]) {
@@ -4555,6 +4579,21 @@ final class E0PatchRuntime {
     _retryPendingCapabilities();
   }
 
+  /// Installs the generated host registry once, while preserving an
+  /// application-owned registry when an app configured one before bootstrap.
+  /// The registry remains immutable for the lifetime of the isolate.
+  static void configureWidgetFactoriesIfAbsent(
+    E0WidgetFactoryRegistry factories,
+  ) {
+    if (_widgetFactories != null) return;
+    _widgetFactories = factories;
+    _retryPendingCapabilities();
+  }
+
+  static bool _isWidgetBuildSignature(E0FunctionSignature signature) =>
+      signature == e0WidgetBuildSignature ||
+      signature == e0FlutterWidgetBuildSignature;
+
   static E0CapabilityAuthority _requireAuthority() =>
       _authority ??
       (throw StateError('Capability authority is not configured'));
@@ -4779,7 +4818,7 @@ final class E0PatchRuntime {
       for (final capability in program.capabilities) {
         _requireAuthority()._require(capability);
       }
-      if (program.signature == e0WidgetBuildSignature) {
+      if (_isWidgetBuildSignature(program.signature)) {
         final factories =
             _widgetFactories ??
             (throw StateError('Widget factory registry is not configured'));
@@ -4884,7 +4923,7 @@ final class E0PatchRuntime {
         for (final capability in program.capabilities) {
           _requireAuthority()._require(capability);
         }
-        if (program.signature == e0WidgetBuildSignature) {
+        if (_isWidgetBuildSignature(program.signature)) {
           final factories =
               _widgetFactories ??
               (throw StateError('Widget factory registry is not configured'));

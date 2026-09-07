@@ -209,8 +209,8 @@ void main() {
   group('release metadata', () {
     test('normalizes tags and enforces the CLI package version', () {
       expect(normalizeReleaseVersion('v0.1.0'), '0.1.0');
-      expect(cliPackageVersion(repository.path), '0.1.4');
-      validateReleaseVersion(repositoryRoot: repository.path, version: '0.1.4');
+      expect(cliPackageVersion(repository.path), '0.1.5');
+      validateReleaseVersion(repositoryRoot: repository.path, version: '0.1.5');
       expect(
         () => validateReleaseVersion(
           repositoryRoot: repository.path,
@@ -223,17 +223,17 @@ void main() {
     test('uses platform-specific archive names and formats', () {
       expect(
         artifactFileName(
-          version: '0.1.4',
+          version: '0.1.5',
           platform: 'macos',
           architecture: 'arm64',
         ),
-        'hyfens-0.1.4-macos-arm64.tar.gz',
+        'hyfens-0.1.5-macos-arm64.tar.gz',
       );
-      final windows = parseArtifactFileName('hyfens-0.1.4-windows-x64.zip');
+      final windows = parseArtifactFileName('hyfens-0.1.5-windows-x64.zip');
       expect(windows.platform, 'windows');
       expect(windows.architecture, 'x64');
       expect(
-        () => parseArtifactFileName('hyfens-0.1.4-linux-x64.zip'),
+        () => parseArtifactFileName('hyfens-0.1.5-linux-x64.zip'),
         throwsFormatException,
       );
     });
@@ -255,11 +255,11 @@ void main() {
           final platform = parts[0];
           final architecture = parts[1];
           final archiveName =
-              'hyfens-0.1.4-$platform-$architecture.' + entry.value;
+              'hyfens-0.1.5-$platform-$architecture.' + entry.value;
 
           expect(
             artifactFileName(
-              version: '0.1.4',
+              version: '0.1.5',
               platform: platform,
               architecture: architecture,
             ),
@@ -267,7 +267,7 @@ void main() {
           );
           expect(
             release_build.archiveRootName(archiveName),
-            'hyfens-0.1.4-$platform-$architecture',
+            'hyfens-0.1.5-$platform-$architecture',
           );
         }
       },
@@ -280,12 +280,12 @@ void main() {
     );
     addTearDown(() => artifacts.delete(recursive: true));
     final names = <String>[
-      'hyfens-0.1.4-linux-arm64.tar.gz',
-      'hyfens-0.1.4-linux-x64.tar.gz',
-      'hyfens-0.1.4-macos-arm64.tar.gz',
-      'hyfens-0.1.4-macos-x64.tar.gz',
-      'hyfens-0.1.4-windows-arm64.zip',
-      'hyfens-0.1.4-windows-x64.zip',
+      'hyfens-0.1.5-linux-arm64.tar.gz',
+      'hyfens-0.1.5-linux-x64.tar.gz',
+      'hyfens-0.1.5-macos-arm64.tar.gz',
+      'hyfens-0.1.5-macos-x64.tar.gz',
+      'hyfens-0.1.5-windows-arm64.zip',
+      'hyfens-0.1.5-windows-x64.zip',
     ];
     for (final name in names) {
       await File(p.join(artifacts.path, name)).writeAsString(name);
@@ -295,7 +295,7 @@ void main() {
       'run',
       '../scripts/cli-release/inventory.dart',
       '--version',
-      '0.1.4',
+      '0.1.5',
       '--artifacts-dir',
       artifacts.path,
       '--output',
@@ -304,7 +304,7 @@ void main() {
     expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
     final body =
         jsonDecode(await inventory.readAsString()) as Map<String, dynamic>;
-    expect(body['releaseVersion'], '0.1.4');
+    expect(body['releaseVersion'], '0.1.5');
     expect((body['artifacts'] as List<dynamic>), hasLength(6));
     final checksums = await File(p.join(artifacts.path, 'SHA256SUMS'))
         .readAsLines();

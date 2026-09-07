@@ -15,6 +15,7 @@ import 'configuration.dart';
 import 'control_plane_delivery.dart';
 import 'diagnostics.dart';
 import 'mcp/mcp_server.dart';
+import 'patch_compatibility.dart';
 import 'profile.dart';
 import 'project.dart';
 import 'project_initialization.dart';
@@ -867,12 +868,15 @@ final class AnalyzeCommand extends _ToolCommand {
     );
     runner.write('');
     for (final item in result.items) {
-      runner.write(_classificationLabel(item.classification));
+      runner.write(_classificationLabel(item));
       final location = item.line == null
           ? item.path
           : '${item.path}:${item.line}:${item.column ?? 1}';
       runner.write('  $location');
       runner.write('    ${item.detail}');
+      if (item.compatibility != PatchCompatibilityDecision.patchable) {
+        runner.write('    Why: ${item.compatibilityExplanation}');
+      }
     }
     if (result.items.isEmpty) runner.write('NO_EFFECT\n  No changes detected.');
     if (result.diagnostics.isNotEmpty) {
@@ -906,14 +910,11 @@ final class AnalyzeCommand extends _ToolCommand {
   }
 }
 
-String _classificationLabel(ChangeClassification classification) =>
-    switch (classification) {
-      ChangeClassification.patchable => 'PATCHABLE',
-      ChangeClassification.unsupported => 'UNSUPPORTED',
-      ChangeClassification.storeReleaseRequired => 'STORE RELEASE REQUIRED',
-      ChangeClassification.noEffect => 'NO EFFECT',
-      ChangeClassification.unknown => 'UNKNOWN',
-    };
+String _classificationLabel(AnalysisItem item) {
+  final label = item.compatibility.label;
+  if (item.classification == ChangeClassification.noEffect) return 'NO EFFECT';
+  return label;
+}
 
 final class ReleaseCommand extends _ToolCommand {
   ReleaseCommand(super.runner) {

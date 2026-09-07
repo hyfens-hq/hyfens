@@ -180,6 +180,8 @@ final class InstrumentationPlanner {
             canonicalLibraryUri: source.libraryUri,
             requireMain: source.entrypoint,
             installRuntime: source.entrypoint,
+            widgetFactories: e0StandardFlutterWidgetFactories,
+            enableFlutterWidgetAbi: true,
           ),
         );
         initialResults[source.libraryUri] = result;
@@ -264,6 +266,8 @@ final class InstrumentationPlanner {
             canonicalLibraryUri: source.libraryUri,
             requireMain: source.entrypoint,
             installRuntime: source.entrypoint,
+            widgetFactories: e0StandardFlutterWidgetFactories,
+            enableFlutterWidgetAbi: true,
             assignedSlots: assignedSlots,
             releaseFunctions: globalFunctions,
             runtimeBootstrapImport: source.entrypoint

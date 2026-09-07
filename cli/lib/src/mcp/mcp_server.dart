@@ -144,6 +144,24 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
           adapter.doctor(projectPath: _optionalPath(args, 'project_path')),
     );
     _add(
+      'hyfens_analyze',
+      'Read-only compatibility analysis for the selected release. It reports '
+          'typed patch decisions and never returns application source or '
+          'patch bytecode.',
+      _schema({
+        'project_path': _pathSchema(),
+        'release_id': _releaseSchema(),
+        'flavor': _flavorSchema(),
+        'entrypoint': _entrypointSchema(),
+      }),
+      (args) => adapter.analyze(
+        projectPath: _optionalPath(args, 'project_path'),
+        releaseId: _optionalRelease(args, 'release_id'),
+        flavor: _optionalString(args, 'flavor'),
+        entrypointPath: _optionalString(args, 'entrypoint'),
+      ),
+    );
+    _add(
       'hyfens_profile_list',
       'Read-only list of host-bound profiles and login status. Credential '
           'files are checked by endpoint and never returned.',
@@ -510,6 +528,20 @@ final class HyfensMcpAdapter {
       'environment': environment.toJson(),
     };
   }
+
+  Future<Map<String, Object?>> analyze({
+    String? projectPath,
+    String? releaseId,
+    String? flavor,
+    String? entrypointPath,
+  }) async => toolchain
+      .analyze(
+        projectPath: projectPath,
+        releaseId: releaseId,
+        flavor: flavor,
+        entrypointPath: entrypointPath,
+      )
+      .toJson();
 
   Future<Map<String, Object?>> profileList() async {
     final catalog = await authStorage.readProfileCatalog();

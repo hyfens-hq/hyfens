@@ -168,6 +168,154 @@ final class ResourceSnapshotDiff {
   bool get changed => changes.isNotEmpty;
 }
 
+final class ResourceArtifactFile {
+  const ResourceArtifactFile({
+    required this.path,
+    required this.size,
+    required this.sha256,
+  });
+
+  final String path;
+  final int size;
+  final String sha256;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'path': path,
+    'size': size,
+    'sha256': sha256,
+  };
+
+  static ResourceArtifactFile fromJson(Object? value) {
+    if (value is! Map<String, Object?> ||
+        value['path'] is! String ||
+        value['size'] is! int ||
+        value['sha256'] is! String) {
+      throw const FormatException('Invalid resource artifact file');
+    }
+    final path = _validateRelativeSnapshotPath(value['path']! as String);
+    final size = value['size']! as int;
+    final sha256 = value['sha256']! as String;
+    if (size < 0 || !RegExp(r'^[0-9a-f]{64}$').hasMatch(sha256)) {
+      throw const FormatException('Invalid resource artifact file digest');
+    }
+    return ResourceArtifactFile(path: path, size: size, sha256: sha256);
+  }
+}
+
+/// Evidence copied from the actual Flutter mobile build output.
+///
+/// Paths are relative to the isolated release workspace. The evidence is
+/// useful for proving that Flutter emitted the relevant manifests/font files,
+/// while source references remain the compatibility policy for a patch.
+final class ResourceArtifactEvidence {
+  ResourceArtifactEvidence({
+    required this.status,
+    required this.assetManifestPresent,
+    required this.fontManifestPresent,
+    required this.materialIconFontPresent,
+    required Iterable<ResourceArtifactFile> files,
+  }) : files = List.unmodifiable(
+         files.toList()..sort((left, right) => left.path.compareTo(right.path)),
+       ) {
+    if (status != 'COMPLETE' && status != 'UNAVAILABLE') {
+      throw ArgumentError.value(status, 'status');
+    }
+  }
+
+  final String status;
+  final bool assetManifestPresent;
+  final bool fontManifestPresent;
+  final bool materialIconFontPresent;
+  final List<ResourceArtifactFile> files;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'version': 1,
+    'status': status,
+    'assetManifestPresent': assetManifestPresent,
+    'fontManifestPresent': fontManifestPresent,
+    'materialIconFontPresent': materialIconFontPresent,
+    'files': files.map((file) => file.toJson()).toList(growable: false),
+  };
+
+  static ResourceArtifactEvidence fromJson(Object? value) {
+    if (value is! Map<String, Object?> ||
+        value['version'] != 1 ||
+        value['status'] is! String ||
+        value['assetManifestPresent'] is! bool ||
+        value['fontManifestPresent'] is! bool ||
+        value['materialIconFontPresent'] is! bool ||
+        value['files'] is! List<Object?>) {
+      throw const FormatException('Invalid resource artifact evidence');
+    }
+    return ResourceArtifactEvidence(
+      status: value['status']! as String,
+      assetManifestPresent: value['assetManifestPresent']! as bool,
+      fontManifestPresent: value['fontManifestPresent']! as bool,
+      materialIconFontPresent: value['materialIconFontPresent']! as bool,
+      files: (value['files']! as List<Object?>).map(
+        ResourceArtifactFile.fromJson,
+      ),
+    );
+  }
+}
+
+/// Captures the immutable resource files emitted by a Flutter build.
+///
+/// The source snapshot answers what the project declares; this artifact
+/// snapshot answers what the selected mobile build actually bundled. Keeping
+/// only relative paths, sizes, and hashes makes the evidence portable and
+/// prevents a missing/ambiguous build output from being treated as safe.
+ResourceArtifactEvidence captureFlutterArtifactEvidence(
+  Directory workspace, {
+  required bool usesMaterialDesign,
+}) {
+  final buildRoot = Directory(p.join(workspace.path, 'build'));
+  var assetManifestPresent = false;
+  var fontManifestPresent = false;
+  var materialIconFontPresent = false;
+  final files = <ResourceArtifactFile>[];
+  if (buildRoot.existsSync()) {
+    for (final entity in buildRoot.listSync(
+      recursive: true,
+      followLinks: false,
+    )) {
+      if (entity is! File) continue;
+      final basename = p.basename(entity.path);
+      final lower = basename.toLowerCase();
+      final relevant =
+          basename == 'FontManifest.json' ||
+          lower.startsWith('assetmanifest') ||
+          (lower.contains('materialicons') && lower.endsWith('.otf'));
+      if (!relevant) continue;
+      final relative = relativePath(workspace, entity);
+      final bytes = entity.readAsBytesSync();
+      files.add(
+        ResourceArtifactFile(
+          path: relative,
+          size: bytes.length,
+          sha256: sha256Hex(bytes),
+        ),
+      );
+      if (basename == 'FontManifest.json') fontManifestPresent = true;
+      if (lower.startsWith('assetmanifest')) assetManifestPresent = true;
+      if (lower.contains('materialicons') && lower.endsWith('.otf')) {
+        materialIconFontPresent = true;
+      }
+    }
+  }
+  final complete =
+      assetManifestPresent &&
+      fontManifestPresent &&
+      (!usesMaterialDesign || materialIconFontPresent);
+  return ResourceArtifactEvidence(
+    status: complete ? 'COMPLETE' : 'UNAVAILABLE',
+    assetManifestPresent: assetManifestPresent,
+    fontManifestPresent: fontManifestPresent,
+    materialIconFontPresent: materialIconFontPresent,
+    files: files,
+  );
+}
+
 final class ResourceSnapshot {
   ResourceSnapshot({
     required this.target,
@@ -175,6 +323,7 @@ final class ResourceSnapshot {
     required this.usesMaterialDesign,
     required this.materialIconAstComplete,
     required Iterable<String> materialIconReferences,
+    this.artifactEvidence,
   }) : entries = List.unmodifiable(
          entries.toList()..sort((left, right) => left.key.compareTo(right.key)),
        ),
@@ -194,6 +343,7 @@ final class ResourceSnapshot {
   final bool usesMaterialDesign;
   final bool materialIconAstComplete;
   final List<String> materialIconReferences;
+  final ResourceArtifactEvidence? artifactEvidence;
 
   String get fingerprint => digestJson(_payloadJson());
 
@@ -205,6 +355,7 @@ final class ResourceSnapshot {
       'usesMaterialDesign': usesMaterialDesign,
       'astComplete': materialIconAstComplete,
       'references': materialIconReferences,
+      if (artifactEvidence != null) 'artifact': artifactEvidence!.toJson(),
     },
   };
 
@@ -234,6 +385,10 @@ final class ResourceSnapshot {
         )) {
       throw const FormatException('Invalid material icon snapshot');
     }
+    final artifact = materialIcons['artifact'];
+    if (artifact != null && artifact is! Map<String, Object?>) {
+      throw const FormatException('Invalid resource artifact evidence');
+    }
     final entries = (raw['entries']! as List<Object?>)
         .map(ResourceSnapshotEntry.decode)
         .toList(growable: false);
@@ -244,6 +399,9 @@ final class ResourceSnapshot {
       materialIconAstComplete: materialIcons['astComplete']! as bool,
       materialIconReferences: (materialIcons['references']! as List<Object?>)
           .cast<String>(),
+      artifactEvidence: artifact == null
+          ? null
+          : ResourceArtifactEvidence.fromJson(artifact),
     );
     if (result.fingerprint != raw['fingerprint'] ||
         result.encode() != canonicalJson(raw)) {
@@ -251,6 +409,16 @@ final class ResourceSnapshot {
     }
     return result;
   }
+
+  ResourceSnapshot withArtifactEvidence(ResourceArtifactEvidence evidence) =>
+      ResourceSnapshot(
+        target: target,
+        entries: entries,
+        usesMaterialDesign: usesMaterialDesign,
+        materialIconAstComplete: materialIconAstComplete,
+        materialIconReferences: materialIconReferences,
+        artifactEvidence: evidence,
+      );
 
   ResourceSnapshotDiff diff(ResourceSnapshot current) {
     final changes = <ResourceSnapshotChange>[];
@@ -940,6 +1108,13 @@ void _collectMaterialIcons({
   required Set<String> materialIconReferences,
   required void Function() onIncomplete,
 }) {
+  // The Flutter framework owns the Material icon catalog. Its implementation
+  // contains declarations and lookup code that are not application icon
+  // references; scanning it made an otherwise complete app snapshot appear
+  // incomplete (F3010). Only application/local-package Dart is evidence for
+  // patch references. The built artifact remains the authority for what was
+  // actually tree-shaken into the base bundle.
+  if (package.name == 'flutter') return;
   final packageUri = _normalizePackageUri(package.packageUri);
   final lib = Directory(
     _safeJoin(root, packageUri, ResourceInputKind.font, package.name),

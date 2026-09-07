@@ -14,6 +14,7 @@ import 'diagnostics.dart';
 import 'discovery.dart';
 import 'graph.dart';
 import 'instrumentation.dart';
+import 'patch_compatibility.dart';
 import 'project.dart';
 import 'resource_snapshot.dart';
 import 'runtime_bundle.dart';
@@ -22,7 +23,7 @@ import 'source_fingerprints.dart';
 
 // The CLI version is part of release identity and must match cli/pubspec.yaml
 // and the version used by the release workflows.
-const hyfensToolVersion = '0.1.4';
+const hyfensToolVersion = '0.1.5';
 const _bridgeExtensionType = 9;
 const _rollbackStateVersion = 1;
 const _rollbackTargetBaseAot = 'base-aot';
@@ -1496,8 +1497,26 @@ final class AnalysisItem {
   final int? column;
   final ToolDiagnostic? diagnostic;
 
+  PatchCompatibilityDecision get compatibility =>
+      PatchCompatibilityAnalyzer.forAnalysis(
+        classification: classification.name,
+        detail: detail,
+      );
+
+  String get compatibilityReasonCode => PatchCompatibilityAnalyzer.reasonCode(
+    decision: compatibility,
+    diagnosticCode: diagnostic?.code,
+    detail: detail,
+  );
+
+  String get compatibilityExplanation =>
+      PatchCompatibilityAnalyzer.explainExclusion(detail);
+
   Map<String, Object?> toJson() => <String, Object?>{
     'classification': classification.name,
+    'compatibility': compatibility.label,
+    'reasonCode': compatibilityReasonCode,
+    'explanation': compatibilityExplanation,
     'path': path,
     'detail': detail,
     'functionIds': functionIds,
@@ -1543,11 +1562,16 @@ final class AnalysisResult {
 
   bool get canPatch =>
       items.any(
-        (item) => item.classification == ChangeClassification.patchable,
+        (item) =>
+            item.classification == ChangeClassification.patchable ||
+            item.compatibility ==
+                PatchCompatibilityDecision.patchableRestartRequired,
       ) &&
       items.every(
         (item) =>
-            item.classification == ChangeClassification.patchable ||
+            item.compatibility == PatchCompatibilityDecision.patchable ||
+            item.compatibility ==
+                PatchCompatibilityDecision.patchableRestartRequired ||
             item.classification == ChangeClassification.noEffect,
       ) &&
       diagnostics.every((item) => item.severity != DiagnosticSeverity.error);
@@ -1557,6 +1581,7 @@ final class AnalysisResult {
     'applicationId': release.applicationId,
     'target': release.target,
     'result': canPatch ? 'PATCHABLE' : 'PATCH_BLOCKED',
+    'compatibilityModel': patchCompatibilityModel,
     'currentSourceFingerprint': currentSourceFingerprint,
     'currentGraphFingerprint': currentGraphFingerprint,
     'items': items.map((item) => item.toJson()).toList(),
@@ -2342,9 +2367,9 @@ final class HyfensToolchain {
       entrypointPath: selection.entrypointPath,
     );
     final environment = await _environment.inspect(current);
-    late final ResourceSnapshot resourceSnapshot;
+    late final ResourceSnapshot sourceResourceSnapshot;
     try {
-      resourceSnapshot = ResourceSnapshot.capture(
+      sourceResourceSnapshot = ResourceSnapshot.capture(
         project: current,
         graph: graph,
         target: target,
@@ -2378,7 +2403,7 @@ final class HyfensToolchain {
       'dart': environment.dartVersion,
       'config': configFingerprint,
       'native': digestJson(native),
-      'resources': resourceSnapshot.fingerprint,
+      'resources': sourceResourceSnapshot.fingerprint,
       'toolVersion': hyfensToolVersion,
       'formatVersion': patchFormatV1,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
@@ -2405,7 +2430,7 @@ final class HyfensToolchain {
       'runtime': patchFormatRuntimeCompatibilityV1,
       'format': patchFormatV1,
       'graph': graphFingerprint,
-      'resources': resourceSnapshot.fingerprint,
+      'resources': sourceResourceSnapshot.fingerprint,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
       'entrypoint': selection.entrypointPath,
       'flavor': selection.flavor,
@@ -2451,12 +2476,14 @@ final class HyfensToolchain {
             flavor: selection.flavor,
             environment: environment,
             graph: graph,
+            usesMaterialDesign: sourceResourceSnapshot.usesMaterialDesign,
             artifactStagingDirectory: Directory(
               p.join(current.toolDirectory.path, '.builds', releaseId),
             ),
           );
     final build = <String, Object?>{
       ...buildResult,
+      'compatibilityModel': patchCompatibilityModel,
       'entrypoint': selection.entrypointPath,
       if (selection.flavor != null) 'flavor': selection.flavor,
       'projectPath': current.relativeProjectPath,
@@ -2464,6 +2491,12 @@ final class HyfensToolchain {
     };
     final stagedArtifactPath = build.remove('artifactPath');
     if (stagedArtifactPath is String) stagedArtifact = File(stagedArtifactPath);
+    final resourceEvidence = build['resourceEvidence'];
+    final resourceSnapshot = resourceEvidence is Map<String, Object?>
+        ? sourceResourceSnapshot.withArtifactEvidence(
+            ResourceArtifactEvidence.fromJson(resourceEvidence),
+          )
+        : sourceResourceSnapshot;
     final functions = _functionRecords(current, plan);
     final record = ReleaseRecord(
       applicationId: applicationId,
@@ -2727,6 +2760,30 @@ final class HyfensToolchain {
         AnalysisItem(
           classification: ChangeClassification.storeReleaseRequired,
           path: '<resource snapshot>',
+          detail: diagnostic.detail,
+          functionIds: const <String>[],
+          diagnostic: diagnostic,
+        ),
+      );
+    } else if (release.build['metadataOnly'] != true &&
+        release.resourceSnapshot!.artifactEvidence?.status != 'COMPLETE') {
+      final evidence = release.resourceSnapshot!.artifactEvidence;
+      final diagnostic = ToolDiagnostic(
+        code: ToolDiagnosticCodes.resourceArtifactEvidenceUnavailable,
+        severity: DiagnosticSeverity.error,
+        summary: 'Release baseline has incomplete Flutter artifact evidence',
+        detail: evidence == null
+            ? 'The mobile build did not record its asset/font manifests.'
+            : 'Artifact resource evidence status is ${evidence.status}.',
+        path: '<resource artifact evidence>',
+        action: 'Create a new base release with complete Flutter artifact evidence before patching.',
+        storeReleaseRequired: true,
+      );
+      diagnostics.add(diagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: diagnostic.path!,
           detail: diagnostic.detail,
           functionIds: const <String>[],
           diagnostic: diagnostic,
@@ -3189,7 +3246,12 @@ final class HyfensToolchain {
     }
     final sequence = store.nextSequence(analysis.release.releaseId);
     final changed = analysis.items
-        .where((item) => item.classification == ChangeClassification.patchable)
+        .where(
+          (item) =>
+              item.compatibility == PatchCompatibilityDecision.patchable ||
+              item.compatibility ==
+                  PatchCompatibilityDecision.patchableRestartRequired,
+        )
         .expand((item) => item.functionIds)
         .toSet();
     if (changed.isEmpty) {
@@ -3247,15 +3309,15 @@ final class HyfensToolchain {
         expectedSignatures: expectedSignatures,
         expectedReceivers: expectedReceivers,
       );
-      if (program.capabilities.isNotEmpty ||
-          program.widgetFactories.isNotEmpty) {
+      if (program.capabilities.isNotEmpty) {
         throw ToolFailure.single(
           exitCode: ToolExitCode.analysis,
           code: 'P2011',
           summary: 'Compiled patch requires an undeclared host contract',
-          detail:
-              '${program.capabilities.length} capabilities, ${program.widgetFactories.length} widget factories',
-          action: 'Use only capabilities declared by the release contract or create a normal store release.',
+          detail: '${program.capabilities.length} runtime capabilities',
+          action:
+              'Use only capabilities declared by the release contract or create a normal store release. '
+              'Widget constructors must come from the immutable Flutter widget ABI.',
         );
       }
       compiled[planned.manifest.id] = bytes;
@@ -3648,6 +3710,7 @@ final class HyfensToolchain {
     String? flavor,
     required ToolEnvironmentSnapshot environment,
     required ProjectGraph graph,
+    required bool usesMaterialDesign,
     required Directory artifactStagingDirectory,
   }) async {
     if (environment.flutterStatus != 'SUPPORTED') {
@@ -3861,6 +3924,23 @@ final class HyfensToolchain {
       );
       await destination.parent.create(recursive: true);
       await output.copy(destination.path);
+      final resourceEvidence = captureFlutterArtifactEvidence(
+        workspace,
+        usesMaterialDesign: usesMaterialDesign,
+      );
+      if (resourceEvidence.status != 'COMPLETE') {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.environment,
+          code: ToolDiagnosticCodes.resourceArtifactEvidenceUnavailable,
+          summary: 'Flutter release resource evidence is incomplete',
+          detail:
+              'Asset manifest: ${resourceEvidence.assetManifestPresent}; '
+              'font manifest: ${resourceEvidence.fontManifestPresent}; '
+              'Material icon font: ${resourceEvidence.materialIconFontPresent}.',
+          action: 'Use a complete Flutter mobile build output and retry; no patchable base was recorded.',
+          storeReleaseRequired: true,
+        );
+      }
       return <String, Object?>{
         'metadataOnly': false,
         'status': 'SUCCESS',
@@ -3868,6 +3948,7 @@ final class HyfensToolchain {
         'elapsedMs': DateTime.now().difference(started).inMilliseconds,
         'artifact': p.basename(output.path),
         'artifactPath': destination.path,
+        'resourceEvidence': resourceEvidence.toJson(),
       };
     } finally {
       if (workspace.existsSync()) {

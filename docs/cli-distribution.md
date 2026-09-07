@@ -31,7 +31,7 @@ approved.
 ## Install a GitHub Release directly
 
 The bounded macOS/Linux installer resolves `latest` by querying the fixed
-GitHub repository, or accepts an explicit published release such as `v0.1.4`:
+GitHub repository, or accepts an explicit published release such as `v0.1.5`:
 
 ```sh
 # Install the latest published release.
@@ -44,7 +44,7 @@ curl --fail --silent --show-error --location \
 curl --fail --silent --show-error --location \
   --proto '=https' --proto-redir '=https' --tlsv1.2 \
   https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh \
-  | bash -s -- --version v0.1.4
+  | bash -s -- --version v0.1.5
 ```
 
 The installer supports macOS and Linux on x64 and arm64. It downloads the
@@ -65,7 +65,7 @@ below when a native release archive is unavailable.
 On Windows PowerShell:
 
 ```powershell
-$version = "0.1.4"
+$version = "0.1.5"
 $architecture = "arm64"
 $archive = "hyfens-$version-windows-$architecture.zip"
 $base = "https://github.com/hyfens-hq/hyfens/releases/download/v$version"
@@ -89,15 +89,13 @@ corresponding line in `SHA256SUMS` before using the extracted executable. Use
 
 ## Package-manager metadata
 
-The latest GitHub CLI release is [`v0.1.4`](https://github.com/hyfens-hq/hyfens/releases/tag/v0.1.4).
+The latest GitHub CLI release is [`v0.1.5`](https://github.com/hyfens-hq/hyfens/releases/tag/v0.1.5).
 Package-manager channels are published independently from the GitHub Release
 and may lag until their separate review completes:
 
-- Homebrew: `hyfens-hq/homebrew-tap`, currently formula `0.1.3_1`. Revision 1
-  retains the complete runtime bundle alongside the executable; the `v0.1.4`
-  formula requires a separate tap update;
-- Scoop: `hyfens-hq/scoop-bucket`, currently manifest `0.1.3`. The `v0.1.4`
-  Windows archive can be verified from `SHA256SUMS`; native Scoop installation
+- Homebrew: `hyfens-hq/homebrew-tap`, formula `0.1.5`, retaining the complete
+  runtime bundle alongside the executable;
+- Scoop: `hyfens-hq/scoop-bucket`, manifest `0.1.5`; native Scoop installation
   remains a separate Windows gate; and
 - WinGet remains an external Microsoft submission gate.
 

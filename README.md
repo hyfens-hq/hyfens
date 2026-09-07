@@ -179,7 +179,7 @@ See the [MCP guide](docs/mcp.md) for setup and tool details.
 | Change | Patch |
 | --- | :---: |
 | Dart business logic | Verified subset |
-| Flutter widgets, state and async code | Real-app CLI acceptance not yet proven |
+| Flutter widgets, state and async code | Bounded ABI; see [patch capabilities](docs/runtime/patch-capabilities.md) |
 | Changed, added or removed assets/fonts | New base release |
 | New tree-shaken icon glyph | New base release |
 | Native code, plugins or configuration | New base release |
@@ -188,7 +188,8 @@ See the [MCP guide](docs/mcp.md) for setup and tool details.
 Patches currently carry code, not asset or font bundles. Referencing an asset
 already in the base is different from changing its bytes. See the
 [support matrix](docs/dart-support-matrix.md) for exact boundaries and device
-evidence. Broader real-application acceptance is still in progress.
+evidence, and the [patch capabilities](docs/runtime/patch-capabilities.md)
+page for the current bounded ABI.
 
 ## Common fixes
 

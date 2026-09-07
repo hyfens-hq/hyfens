@@ -119,6 +119,70 @@ void main() {
     );
   });
 
+  test('round-trips immutable Flutter artifact manifest and font evidence', () {
+    final snapshot = ResourceSnapshot(
+      target: 'android',
+      entries: const <ResourceSnapshotEntry>[],
+      usesMaterialDesign: true,
+      materialIconAstComplete: true,
+      materialIconReferences: const <String>['package:app/main.dart:Icons.add'],
+      artifactEvidence: ResourceArtifactEvidence(
+        status: 'COMPLETE',
+        assetManifestPresent: true,
+        fontManifestPresent: true,
+        materialIconFontPresent: true,
+        files: const <ResourceArtifactFile>[
+          ResourceArtifactFile(
+            path: 'build/app/flutter_assets/FontManifest.json',
+            size: 3,
+            sha256: '0000000000000000000000000000000000000000000000000000000000000000',
+          ),
+        ],
+      ),
+    );
+    final decoded = ResourceSnapshot.decode(snapshot.encode());
+    expect(decoded.artifactEvidence?.status, 'COMPLETE');
+    expect(decoded.artifactEvidence?.fontManifestPresent, isTrue);
+    expect(decoded.artifactEvidence?.materialIconFontPresent, isTrue);
+    expect(decoded.encode(), snapshot.encode());
+  });
+
+  test('captures complete evidence from actual Flutter output shape', () async {
+    final root = await Directory.systemTemp.createTemp('hyfens-artifact-');
+    addTearDown(() => root.delete(recursive: true));
+    final output = Directory('${root.path}/build/app/flutter_assets');
+    await output.create(recursive: true);
+    await File('${output.path}/AssetManifest.bin.json').writeAsBytes(<int>[1]);
+    await File('${output.path}/FontManifest.json').writeAsBytes(<int>[2]);
+    await File('${output.path}/MaterialIcons-Regular.otf')
+        .writeAsBytes(<int>[3, 4]);
+
+    final complete = captureFlutterArtifactEvidence(
+      root,
+      usesMaterialDesign: true,
+    );
+    expect(complete.status, 'COMPLETE');
+    expect(complete.assetManifestPresent, isTrue);
+    expect(complete.fontManifestPresent, isTrue);
+    expect(complete.materialIconFontPresent, isTrue);
+    expect(
+      complete.files.map((file) => file.path),
+      orderedEquals(<String>[
+        'build/app/flutter_assets/AssetManifest.bin.json',
+        'build/app/flutter_assets/FontManifest.json',
+        'build/app/flutter_assets/MaterialIcons-Regular.otf',
+      ]),
+    );
+
+    await File('${output.path}/MaterialIcons-Regular.otf').delete();
+    final unavailable = captureFlutterArtifactEvidence(
+      root,
+      usesMaterialDesign: true,
+    );
+    expect(unavailable.status, 'UNAVAILABLE');
+    expect(unavailable.materialIconFontPresent, isFalse);
+  });
+
   test('detects resource additions, removals, and byte changes', () async {
     final root = await _createProject();
     addTearDown(() => root.delete(recursive: true));
