@@ -1,6 +1,6 @@
 # Task 253 — Real Flutter runtime ABI and patchability expansion
 
-Status: [*] In Progress
+Status: [x] Completed — HYFENS ASYNC FLUTTER ABI — COMPLETE WITH BOUNDED GATES
 
 ## Goal
 
@@ -71,16 +71,16 @@ distribution, and real-app acceptance evidence.
 - [x] Capture immutable actual Flutter artifact resource evidence and preserve
   fail-closed asset/font/icon/native/engine boundaries.
 - [x] Run consolidated validation and review the combined release diff.
-- [ ] Publish a new immutable public release and update supported package
+- [x] Publish a new immutable public release and update supported package
   channels.
-- [ ] Reinstall the public binary and complete the finite Kavach360 physical
+- [x] Reinstall the public binary and complete the finite Kavach360 physical
   acceptance campaign, classifying device/project/external gates.
-- [ ] Record the final outcome and leave Kavach360 restored.
+- [x] Record the final outcome and leave Kavach360 restored.
 
 ## Validation
 
-Planned and required commands are scoped to the changed packages and release
-boundary:
+Completed validation was scoped to the changed packages, release boundary,
+public distribution, and one private physical acceptance app:
 
 - `dart analyze` in `experiments/instrumentation`,
   `packages/instrumenter`, `packages/flutter_integration`, and `cli`;
@@ -95,64 +95,79 @@ boundary:
   receipt/dedup accounting when the approved public runtime supports it; and
 - `git diff --check`, combined diff review, and final worktree hygiene.
 
+The analyzers, focused and relevant package suites, async fixtures, resource
+boundary tests, MCP tests, native archive smoke, release workflow, public
+artifact checksums, public package channels, public CLI help/version, public
+doctor, public analyze/patch/verify, iOS build/install, runtime activation,
+restart, rollback, and CocoaPods reconciliation passed. The full CLI suite
+had one unrelated Puro/Flutter SDK load failure in
+`test/deploy_runtime_e2e_test.dart`; the Flutter integration runner retained
+two pre-existing host-platform failures, while the direct Dart-VM integration
+suite passed. These were recorded as environment validation notes and did not
+affect the async parity or public iPhone result.
+
 ## Next Action
 
-Publish the validated `0.1.9` candidate as one new immutable public release,
-install that public binary, complete the iPhone Patch B/restart/rollback
-evidence, classify the Android/receipt/managed-Cloud gates, and restore the
-private acceptance app.
+No further action is required in this finite continuation. Any future Android
+signing, trusted receipt settlement, or managed-Cloud work requires its own
+approved scope; Task 247 remains closed and Task 253 retains commercial/runtime
+settlement ownership.
 
 ## Blockers
 
-At creation, public runtime release and final physical acceptance are pending.
-Managed Cloud identity is an external gate and must not be substituted with a
-production or personal commercial account. Android/iOS project and device
-status must be re-probed after the public release.
+The accepted bounded gates are: Android release signing remains a legitimate
+project configuration gate because `android/key.properties` is absent; physical
+acceptance receipts and deduplication remain a public-runtime gate because no
+approved settlement identity was available; and managed Cloud remains an
+external gate because no disposable project-owned managed identity was
+available. These gates were not substituted with production credentials or
+live billing.
 
 ## Outcome
 
-The bounded ABI/resource implementation, candidate Kavach360 acceptance, and
-consolidated repository validation are complete. Public release,
-public-binary Kavach360 acceptance, and final device/external-gate
-classification remain in progress.
+The async analyzer/compiler parity fix is public in immutable `v0.1.9`. The
+public Homebrew binary was installed and used against the private Kavach360
+workspace. Public discovery retained the Melos/Pub Workspace, persisted `dev`
+selection, nested `lib/src/flavors/dev.dart` entrypoint, and the matching
+flavor-specific Android/iOS identities. Public Patch B analysis, compilation,
+signature verification, iPhone no-reinstall activation, restart persistence,
+and signed rollback all passed. Android signing, receipt settlement, and
+managed Cloud remain explicitly bounded gates. Kavach360 temporary source,
+local-network delivery settings, rollback control, and private signing key
+were restored or removed; pre-existing private changes were preserved.
 
 ## Acceptance Matrix
 
-| Gate                             | Required |
-| -------------------------------- | -------- |
-| P2001 rules audited              | PASS |
-| Widget build support             | PASS |
-| BuildContext support             | PASS |
-| Stateful method behavior         | PASS |
-| Callback/closure support         | PASS |
-| Async/Future support             | PASS |
-| Routing callback support         | PASS |
-| Animation representative support | PASS |
-| Field-layout unsafe change       | NEW_BASE_RELEASE |
-| Resource evidence completeness   | PASS |
-| Existing Material-icon reference | PASS |
-| New icon glyph absent from base  | NEW_BASE_RELEASE |
-| Existing asset reference         | PASS |
-| Asset mutation                   | NEW_BASE_RELEASE |
-| New asset                        | NEW_BASE_RELEASE |
-| Font mutation/new font           | NEW_BASE_RELEASE |
-| Native plugin/config             | NEW_BASE_RELEASE |
-| Engine mismatch                  | NEW_BASE_RELEASE |
-| Compatibility analyzer           | PASS |
-| Analyze/patch parity             | PASS |
-| MCP compatibility output         | PASS |
-| Kavach360 Patch A                | PENDING |
-| Kavach360 Patch B                | PENDING |
-| Kavach360 Patch C                | PENDING |
-| Android no-reinstall             | PENDING |
-| iOS no-reinstall                 | PENDING |
-| Restart persistence              | PENDING |
-| Rollback                         | PENDING |
-| Physical acceptance receipt      | PENDING |
-| Receipt dedup                    | PENDING |
-| Public runtime release           | PENDING |
-| Public CLI reinstall             | PENDING |
-| Capability docs                  | PASS |
+| Gate                                   | Required |
+| -------------------------------------- | -------- |
+| v0.1.8 mismatch reproduced             | PASS |
+| Root cause identified                  | PASS |
+| Shared analyze/patch contract          | PASS |
+| Future<void>.delayed                   | PASS |
+| async/await                            | PASS |
+| Future<T>                              | PASS |
+| async closure                          | PASS |
+| async widget callback                  | PASS |
+| try/catch/finally async                | PASS |
+| async state update                     | PASS |
+| async routing                          | PASS |
+| unsupported async shape detected early | PASS |
+| MCP parity                             | PASS |
+| Patch A regression                     | PASS |
+| Resource boundaries unchanged          | PASS |
+| Kavach360 candidate Patch B            | PASS |
+| Public next version published          | PASS |
+| GitHub/curl                            | PASS |
+| Homebrew                               | PASS |
+| Scoop                                  | PASS |
+| Public CLI installed                   | PASS |
+| iPhone Patch B no-reinstall            | PASS |
+| iPhone restart persistence             | PASS |
+| iPhone rollback                        | PASS |
+| Android                                | PROJECT_GATE |
+| Acceptance receipt                     | PUBLIC_RUNTIME_GATE |
+| Managed Cloud                          | EXTERNAL_GATE |
+| Capability docs                        | PASS |
 
 ## References
 
@@ -165,6 +180,8 @@ classification remain in progress.
 - `cli/lib/src/patch_compatibility.dart` — shared compatibility policy.
 - `cli/lib/src/resource_snapshot.dart` — source and artifact resource evidence.
 - `.github/workflows/release-cli.yml` — immutable tag-triggered release path.
+- `https://github.com/hyfens-hq/hyfens/releases/tag/v0.1.9` — immutable public
+  async-parity release and artifact source.
 
 ## History
 
@@ -202,3 +219,35 @@ classification remain in progress.
   integration suite, scoped analyzers, and a local macOS arm64 archive/help/
   version/MCP smoke all passed. The next immutable public version is `0.1.5`;
   public distribution and Kavach360 physical gates remain pending.
+- 2026-09-07 — Published immutable `v0.1.9` from `97f2615` after the full
+  release workflow passed. The six GitHub archives, inventory, and checksums
+  matched; curl, Homebrew, and Scoop were updated to the same public version.
+  Homebrew upgraded the installed external-user binary to `hyfens 0.1.9`.
+  MCP initialize/tool discovery and a public MCP `hyfens_analyze` call reported
+  server `0.1.9`, `flutter-dart-abi-v1`, and `PATCHABLE` for the real async
+  routing change.
+- 2026-09-07 — Fresh public doctor resolved the real Melos/Pub Workspace,
+  persisted `dev` flavor, `lib/src/flavors/dev.dart`, and matching
+  flavor-specific Android/iOS identities. Fresh probes found the Android
+  device online over both available transports and the iPhone connected. The
+  public CLI built the signed iOS dev baseline with complete resource evidence;
+  public Patch B analyzed as `PATCHABLE`, compiled as a signed sequence-4
+  artifact, and verified successfully.
+- 2026-09-07 — The public-built iOS baseline was installed once. The existing
+  async/deep-link handoff Patch B was admitted without another install and
+  logged `pendingHealth` followed by `healthy`; after a supported stop/launch,
+  the same public app logged `current healthy signed patch active`. A signed
+  rollback then logged `rolledBack`/`base AOT` with the sequence high-water
+  retained. The focused widget Patch A path remains covered by the prior
+  physical proof and v0.1.9 regression suites; a deeper `BuildContext.l10n`
+  widget expression remains intentionally `P2012`/not-yet-supported and was
+  not worked around in Kavach360.
+- 2026-09-07 — Re-ran CocoaPods deployment reconciliation successfully. No
+  legitimate Android release signing file is present, so Android remains
+  `PROJECT_GATE`. No approved trusted receipt settlement or disposable managed
+  Cloud identity is available; acceptance receipts remain development,
+  explicitly non-billable `PUBLIC_RUNTIME_GATE` evidence and managed Cloud is
+  `EXTERNAL_GATE`. Live paid checkout and overage collection stayed disabled.
+  Restored Kavach360 source, iOS local-network settings, and loopback config;
+  removed the temporary project private key and rollback control while
+  preserving pre-existing private tracked changes.
