@@ -25,6 +25,38 @@ not select a version or publish software.
 - Existing delivery credentials must be reissued to receive the new
   `runtime:install` scope.
 
+## [0.1.10-rc.1]
+
+### Added
+
+- Added admission-bound signed runtime install receipts with durable,
+  idempotent `successful_patch_install` settlement.
+- Added explicit development-acceptance and provider-neutral Android/Apple
+  attestation adapter seams for deployment-owned production trust policy.
+
+### Changed
+
+- Added a release-candidate and release-verification process for real-app,
+  archive, installer, package-manager, and MCP acceptance.
+- Added explicit opt-in non-billable self-hosted runtime acceptance; production
+  billability remains disabled by default.
+- Existing delivery credentials must be reissued to receive the new
+  `runtime:install` scope.
+
+### Known limitations
+
+- Production Play Integrity and App Attest verification require deployment
+  credentials, application configuration, and the applicable store/provider
+  context.
+- New or changed assets and fonts, native plugins/configuration, and engine
+  changes remain new-base-release boundaries.
+
+### Upgrade
+
+```bash
+brew upgrade hyfens
+```
+
 ## [0.1.9] - 2026-09-07
 
 ### Fixed

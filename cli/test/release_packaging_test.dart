@@ -22,6 +22,7 @@ Directory repositoryDirectory() {
 
 void main() {
   final repository = repositoryDirectory();
+  final currentVersion = cliPackageVersion(repository.path);
 
   test(
     'runtime archive retains native plugin sources but not build caches',
@@ -209,8 +210,11 @@ void main() {
   group('release metadata', () {
     test('normalizes tags and enforces the CLI package version', () {
       expect(normalizeReleaseVersion('v0.1.0'), '0.1.0');
-      expect(cliPackageVersion(repository.path), '0.1.9');
-      validateReleaseVersion(repositoryRoot: repository.path, version: '0.1.9');
+      expect(cliPackageVersion(repository.path), currentVersion);
+      validateReleaseVersion(
+        repositoryRoot: repository.path,
+        version: currentVersion,
+      );
       expect(
         () => validateReleaseVersion(
           repositoryRoot: repository.path,
@@ -280,12 +284,12 @@ void main() {
     );
     addTearDown(() => artifacts.delete(recursive: true));
     final names = <String>[
-      'hyfens-0.1.9-linux-arm64.tar.gz',
-      'hyfens-0.1.9-linux-x64.tar.gz',
-      'hyfens-0.1.9-macos-arm64.tar.gz',
-      'hyfens-0.1.9-macos-x64.tar.gz',
-      'hyfens-0.1.9-windows-arm64.zip',
-      'hyfens-0.1.9-windows-x64.zip',
+      'hyfens-$currentVersion-linux-arm64.tar.gz',
+      'hyfens-$currentVersion-linux-x64.tar.gz',
+      'hyfens-$currentVersion-macos-arm64.tar.gz',
+      'hyfens-$currentVersion-macos-x64.tar.gz',
+      'hyfens-$currentVersion-windows-arm64.zip',
+      'hyfens-$currentVersion-windows-x64.zip',
     ];
     for (final name in names) {
       await File(p.join(artifacts.path, name)).writeAsString(name);
@@ -295,7 +299,7 @@ void main() {
       'run',
       '../scripts/cli-release/inventory.dart',
       '--version',
-      '0.1.9',
+      currentVersion,
       '--artifacts-dir',
       artifacts.path,
       '--output',
@@ -304,7 +308,7 @@ void main() {
     expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
     final body =
         jsonDecode(await inventory.readAsString()) as Map<String, dynamic>;
-    expect(body['releaseVersion'], '0.1.9');
+    expect(body['releaseVersion'], currentVersion);
     expect((body['artifacts'] as List<dynamic>), hasLength(6));
     final checksums = await File(p.join(artifacts.path, 'SHA256SUMS'))
         .readAsLines();
