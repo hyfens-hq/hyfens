@@ -14,6 +14,8 @@ outside the public documentation tree.
   Flutter project, and run the release/patch workflow.
 - [CLI distribution](cli-distribution.md) — release binaries, installers, and
   package-manager status.
+- [Release process](releases/releasing.md) — changelog, release candidates,
+  immutable tags, and post-release verification.
 - [Self-hosted deployment](../deploy/self-hosted/README.md) — the single-node
   PostgreSQL, MinIO, control-plane, and dashboard package.
 - [Dart/Flutter support matrix](dart-support-matrix.md) — supported toolchain

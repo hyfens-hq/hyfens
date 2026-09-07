@@ -251,3 +251,7 @@ were restored or removed; pre-existing private changes were preserved.
   Restored Kavach360 source, iOS local-network settings, and loopback config;
   removed the temporary project private key and rollback control while
   preserving pre-existing private tracked changes.
+- 2026-09-07 — Post-completion clarification: the earlier history line naming
+  `0.1.5` as the next candidate records an intermediate checkpoint. The final
+  public async-parity release is immutable `v0.1.9`; no historical tag or
+  release artifact was moved.

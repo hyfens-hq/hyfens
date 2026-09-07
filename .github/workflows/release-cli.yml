@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Test release-note tooling
+        run: bash scripts/release_notes_test.sh
       - name: Test curl installer
         run: bash scripts/install-hyfens_test.sh
       - name: Set up Flutter
@@ -40,6 +42,8 @@ jobs:
         run: |
           version="${RELEASE_TAG#v}"
           dart run ../scripts/cli-release/build.dart --check-version "$version"
+          bash ../scripts/release_notes.sh "$version" > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
@@ -152,6 +156,12 @@ jobs:
             --version "$RELEASE_VERSION" \
             --artifacts-dir ../dist \
             --output ../dist/artifact-inventory.json
+      - name: Prepare curated release notes
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: |
+          bash scripts/release_notes.sh "$RELEASE_VERSION" > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -160,4 +170,4 @@ jobs:
           gh release create "v${RELEASE_VERSION}" dist/* \
             --verify-tag \
             --title "Hyfens CLI v${RELEASE_VERSION}" \
-            --generate-notes
+            --notes-file "$RUNNER_TEMP/release-notes.md"

@@ -223,6 +223,8 @@ Run hyfens login and check the selected profile with hyfens profile current.
 - [CLI reference](docs/cli.md)
 - [Project discovery](docs/cli/project-discovery.md)
 - [Flutter support matrix](docs/dart-support-matrix.md)
+- [Release process](docs/releases/releasing.md)
+- [Changelog](CHANGELOG.md)
 - [Self-hosted deployment](deploy/self-hosted/README.md)
 - [Architecture](docs/architecture/dashboard-separation.md)
 

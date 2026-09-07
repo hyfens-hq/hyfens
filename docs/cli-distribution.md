@@ -10,12 +10,17 @@ The version source is `cli/pubspec.yaml`. To publish a release after the
 repository has been created and its Actions permissions are enabled:
 
 1. Set `version` in `cli/pubspec.yaml`.
-2. Run the CLI tests and a host-native build locally.
-3. Create and push an annotated tag with the same version, for example
+2. Add the user-visible changes to `[Unreleased]` in `CHANGELOG.md`, then move
+   the finalized notes into a matching `## [version]` section.
+3. Run the CLI tests and a host-native build locally, followed by the RC and
+   real-app checks required by the [release process](releases/releasing.md).
+4. Create and push an annotated tag with the same version, for example
    `v<version>`.
-4. `.github/workflows/release-cli.yml` builds and attaches six archives:
+5. `.github/workflows/release-cli.yml` validates the changelog section, builds
+   and attaches six archives:
    macOS, Linux, and Windows on x64 and arm64.
-5. The workflow also attaches `SHA256SUMS` and `artifact-inventory.json`.
+6. The workflow extracts the same changelog section into non-empty GitHub
+   Release notes and attaches `SHA256SUMS` and `artifact-inventory.json`.
 
 The separate `release-images.yml` workflow publishes matching multi-architecture
 `hyfens-control-plane` and `hyfens-dashboard` images to GHCR. The public
