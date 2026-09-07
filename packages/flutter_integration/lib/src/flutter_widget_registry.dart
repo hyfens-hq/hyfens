@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:instrumentation_e0/instrumentation_e0.dart';
+import 'package:instrumentation_e0/e0_runtime.dart';
 
 /// Creates the immutable host-owned widget registry used by the production
 /// Flutter widget ABI. Constructors remain in the AOT application; downloaded
