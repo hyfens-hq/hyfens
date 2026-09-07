@@ -23,7 +23,7 @@ import 'source_fingerprints.dart';
 
 // The CLI version is part of release identity and must match cli/pubspec.yaml
 // and the version used by the release workflows.
-const hyfensToolVersion = '0.1.7';
+const hyfensToolVersion = '0.1.8';
 const _bridgeExtensionType = 9;
 const _rollbackStateVersion = 1;
 const _rollbackTargetBaseAot = 'base-aot';

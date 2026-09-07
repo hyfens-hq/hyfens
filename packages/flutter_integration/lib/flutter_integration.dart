@@ -91,7 +91,7 @@ final class HyfensFlutterIntegration {
       return;
     }
     _activeBootstrapKey = bootstrapKey;
-    E0PatchRuntime.configureWidgetFactoriesIfAbsent(
+    final widgetFactories = E0PatchRuntime.configureWidgetFactoriesIfAbsent(
       standardFlutterWidgetRegistry(),
     );
     E0PatchRuntime.markGeneratedIntegrationStarted();
@@ -110,6 +110,7 @@ final class HyfensFlutterIntegration {
         publicKey: publicKey,
         patchUri: patchUri,
         controlPlane: controlPlane,
+        widgetFactories: widgetFactories,
         pollInterval: pollInterval,
       ),
     );
@@ -169,6 +170,7 @@ final class HyfensFlutterIntegration {
     required List<int> publicKey,
     required Uri patchUri,
     HyfensControlPlaneConfiguration? controlPlane,
+    required E0WidgetFactoryRegistry widgetFactories,
     required Duration pollInterval,
   }) async {
     try {
@@ -188,6 +190,9 @@ final class HyfensFlutterIntegration {
         trustedPublicKeys: <String, E1TrustedPublicKey>{
           keyId: E1TrustedPublicKey(keyId: keyId, bytes: publicKey),
         },
+        runtimeConfiguration: E1RuntimeConfiguration(
+          widgetFactories: widgetFactories,
+        ),
       );
       _controllers.add(controller);
       try {

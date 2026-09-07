@@ -4582,12 +4582,14 @@ final class E0PatchRuntime {
   /// Installs the generated host registry once, while preserving an
   /// application-owned registry when an app configured one before bootstrap.
   /// The registry remains immutable for the lifetime of the isolate.
-  static void configureWidgetFactoriesIfAbsent(
+  static E0WidgetFactoryRegistry configureWidgetFactoriesIfAbsent(
     E0WidgetFactoryRegistry factories,
   ) {
-    if (_widgetFactories != null) return;
+    final configured = _widgetFactories;
+    if (configured != null) return configured;
     _widgetFactories = factories;
     _retryPendingCapabilities();
+    return factories;
   }
 
   static bool _isWidgetBuildSignature(E0FunctionSignature signature) =>
