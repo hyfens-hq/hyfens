@@ -183,6 +183,7 @@ final class E0SourceTransformer {
             owner: declaration,
             classes: classes,
             canonicalLibraryUri: libraryUri,
+            collectImplicitReceiverReads: true,
           );
         } on FormatException catch (error) {
           exclusions.add('$qualifiedName: ${error.message}');
@@ -541,8 +542,13 @@ final class E0SourceTransformer {
 
   static bool _extendsFlutterWidget(ClassDeclaration declaration) {
     final superclass = declaration.extendsClause?.superclass.toSource();
-    return superclass == 'StatelessWidget' ||
-        (superclass?.startsWith('State<') ?? false);
+    if (superclass == 'StatelessWidget') return true;
+    final base = superclass?.split('<').first.trim();
+    // Framework state wrappers such as Riverpod's ConsumerState<T> retain
+    // the ordinary Flutter State<T> widget ABI. Keep this structural and
+    // framework-agnostic; the canonical Flutter import check remains the
+    // boundary against shadowed or synthetic widget types.
+    return base != null && base.endsWith('State');
   }
 
   static bool _hasCanonicalFlutterWidgetImport(CompilationUnit unit) {
@@ -564,12 +570,25 @@ final class E0SourceTransformer {
     required ClassDeclaration owner,
     required Map<String, ClassDeclaration> classes,
     required String canonicalLibraryUri,
+    bool collectImplicitReceiverReads = false,
   }) {
     if (owner.typeParameters != null) {
       throw const FormatException('generic owner class');
     }
     final referencedNames = <String>{};
-    method.body.accept(_ThisPropertyReadVisitor(referencedNames));
+    final receiverPropertyNames = collectImplicitReceiverReads
+        ? _supportedReceiverPropertyNames(owner: owner, classes: classes)
+        : const <String>{};
+    method.body.accept(
+      _ThisPropertyReadVisitor(
+        referencedNames,
+        receiverPropertyNames: receiverPropertyNames,
+        shadowedNames: {
+          for (final parameter in method.parameters!.parameters)
+            if (parameter.name != null) parameter.name!.lexeme,
+        },
+      ),
+    );
     final unresolved = <String>[];
     final resolved = <({String id, String name, E0ValueSchema schema})>[];
     for (final name in referencedNames) {
@@ -626,6 +645,61 @@ final class E0SourceTransformer {
       ownerClass: owner.name.lexeme,
       members: List.unmodifiable(members),
     );
+  }
+
+  static Set<String> _receiverPropertyNames({
+    required ClassDeclaration owner,
+    required Map<String, ClassDeclaration> classes,
+    Set<String>? seen,
+  }) {
+    final visited = seen ?? <String>{};
+    if (!visited.add(owner.name.lexeme)) return <String>{};
+    final names = <String>{};
+    for (final member in owner.members) {
+      if (member is FieldDeclaration && !member.isStatic) {
+        names.addAll(
+          member.fields.variables.map((variable) => variable.name.lexeme),
+        );
+      }
+      if (member is MethodDeclaration && member.isGetter && !member.isStatic) {
+        names.add(member.name.lexeme);
+      }
+    }
+    final parentName = owner.extendsClause?.superclass.name.lexeme;
+    final parent = parentName == null ? null : classes[parentName];
+    if (parent != null) {
+      names.addAll(
+        _receiverPropertyNames(owner: parent, classes: classes, seen: visited),
+      );
+    }
+    return names;
+  }
+
+  static Set<String> _supportedReceiverPropertyNames({
+    required ClassDeclaration owner,
+    required Map<String, ClassDeclaration> classes,
+  }) {
+    final supported = <String>{};
+    for (final name in _receiverPropertyNames(owner: owner, classes: classes)) {
+      final property = _resolveProperty(
+        owner: owner,
+        name: name,
+        classes: classes,
+      );
+      if (property == null) continue;
+      try {
+        e0HostSchemaForType(
+          property.type.toSource(),
+          'receiver property ${property.declaringClass}.$name',
+        );
+        supported.add(name);
+      } on FormatException {
+        // Unsupported framework/native receiver values remain outside the
+        // implicit-read set. An explicit `this.value` still fails closed
+        // below, while a patch that does not use the value can be selected.
+      }
+    }
+    return supported;
   }
 
   static ({String declaringClass, TypeAnnotation type})? _resolveProperty({
@@ -1476,14 +1550,55 @@ final class _Candidate {
 }
 
 final class _ThisPropertyReadVisitor extends RecursiveAstVisitor<void> {
-  _ThisPropertyReadVisitor(this.names);
+  _ThisPropertyReadVisitor(
+    this.names, {
+    this.receiverPropertyNames = const <String>{},
+    Set<String> shadowedNames = const <String>{},
+  }) : _shadowedNames = {...shadowedNames};
 
   final Set<String> names;
+  final Set<String> receiverPropertyNames;
+  final Set<String> _shadowedNames;
 
   @override
   void visitPropertyAccess(PropertyAccess node) {
     if (node.target is ThisExpression) names.add(node.propertyName.name);
     super.visitPropertyAccess(node);
+  }
+
+  @override
+  void visitSimpleIdentifier(SimpleIdentifier node) {
+    final parent = node.parent;
+    final isMemberName =
+        (parent is PropertyAccess && identical(parent.propertyName, node)) ||
+        (parent is PrefixedIdentifier && identical(parent.identifier, node)) ||
+        (parent is MethodInvocation && identical(parent.methodName, node)) ||
+        (parent is NamedExpression && identical(parent.name, node));
+    if (!isMemberName &&
+        receiverPropertyNames.contains(node.name) &&
+        !_shadowedNames.contains(node.name)) {
+      names.add(node.name);
+    }
+    super.visitSimpleIdentifier(node);
+  }
+
+  @override
+  void visitVariableDeclaration(VariableDeclaration node) {
+    _shadowedNames.add(node.name.lexeme);
+    super.visitVariableDeclaration(node);
+  }
+
+  @override
+  void visitDeclaredIdentifier(DeclaredIdentifier node) {
+    _shadowedNames.add(node.name.lexeme);
+    super.visitDeclaredIdentifier(node);
+  }
+
+  @override
+  void visitSimpleFormalParameter(SimpleFormalParameter node) {
+    final name = node.name;
+    if (name != null) _shadowedNames.add(name.lexeme);
+    super.visitSimpleFormalParameter(node);
   }
 }
 

@@ -12,16 +12,17 @@ schema, release identity, toolchain, resource snapshot, and native fingerprint
 remain unchanged:
 
 - ordinary, explicitly typed top-level and instance method bodies;
-- `StatelessWidget` and `State<T>` `build(BuildContext)` methods using the
+- `StatelessWidget` and ordinary `*State<T>` wrapper `build(BuildContext)`
+  methods (including framework wrappers such as `ConsumerState<T>`) using the
   canonical unprefixed Flutter material/widgets import;
 - bounded widget composition through the immutable host registry: `Text`,
   `Column`, `Row`, `Center`, `SizedBox`, and `ElevatedButton`;
 - literal children and conditional widget expressions, plus host-owned
   zero-argument button callbacks within that registry; builder closures remain
   outside the promoted ABI;
-- reads from the existing receiver schema, typed `void` methods, ordinary
-  synchronous callbacks, and `Future<T>` methods using the existing async
-  interpreter; and
+- reads from the existing receiver schema, including unqualified reads of
+  schema-safe fields/getters, typed `void` methods, ordinary synchronous
+  callbacks, and `Future<T>` methods using the existing async interpreter; and
 - Dart-managed business logic, routing decisions, animation calculations, and
   persistence/localization transformations when their resulting ABI stays in
   the supported value set.
@@ -40,12 +41,12 @@ deliberate fail-closed limit.
 
 | Rule family | Limitation and safety concern | Classification | Status |
 | --- | --- | --- | --- |
-| `build(BuildContext)` and `State<T>` builds | The old ABI had no opaque framework parameter or bounded widget result. Passing arbitrary framework objects or dispatching through them would cross host ownership. | `MISSING_ABI_IMPLEMENTATION` | Resolved only for canonical Flutter imports, `StatelessWidget`/`State<T>`, and the immutable widget registry. |
+| `build(BuildContext)` and `State<T>` builds | The old ABI had no opaque framework parameter or bounded widget result. Passing arbitrary framework objects or dispatching through them would cross host ownership. | `MISSING_ABI_IMPLEMENTATION` | Resolved for canonical Flutter imports, ordinary `*State<T>` wrappers, schema-safe receiver reads, and the immutable widget registry. |
 | `void` methods and host callbacks | There was no typed no-value schema or host-owned callback representation. Serializing a live callback would be unsafe. | `MISSING_ABI_IMPLEMENTATION` | Resolved for typed `void` and bounded zero-argument callbacks; callbacks remain non-serializable. |
 | Ordinary `Future<T>` bodies | Async Dart needs a resumable interpreter state, while async/generator closures need additional closure-state ABI. | `MISSING_ABI_IMPLEMENTATION` / `FUNDAMENTAL_RUNTIME_LIMIT` | Existing ordinary async bodies remain supported; async/generator closures remain rejected. |
 | Static, accessor, and operator targets | These do not provide the ordinary instance-call/receiver contract used by the patch table. Adding dispatch without a new contract could bypass receiver and rollback checks. | `FUNDAMENTAL_RUNTIME_LIMIT` | Deliberately retained as `NOT_YET_SUPPORTED`. |
 | Generic methods/owners and deep type-shape changes | The current manifest does not carry reified generic owner shape, and live field/layout, constructor, superclass, or mixin changes can invalidate existing objects. | `MISSING_ABI_IMPLEMENTATION` / `FUNDAMENTAL_RUNTIME_LIMIT` | Generic/type-shape changes require a new base or remain unsupported. |
-| Raw receiver access, receiver writes, and arbitrary receiver dispatch | Guest mutation or framework method dispatch could change live host state outside an atomic, verified receiver schema. | `FUNDAMENTAL_RUNTIME_LIMIT` | Reads of the existing receiver schema are supported; writes and arbitrary dispatch fail closed. |
+| Raw receiver access, receiver writes, and arbitrary receiver dispatch | Guest mutation or framework method dispatch could change live host state outside an atomic, verified receiver schema. | `FUNDAMENTAL_RUNTIME_LIMIT` | Explicit and safe unqualified reads of the existing receiver schema are supported; writes and arbitrary dispatch fail closed. |
 | Nested, captured, async, or generator closures | Closure captures and compiler-generated state do not yet have a stable serialized ABI. | `FUNDAMENTAL_RUNTIME_LIMIT` | Bounded synchronous closures and host callbacks are allowed only at their explicit seams. |
 | Arbitrary widget constructors/framework objects | Flutter objects are host-owned and may contain engine, resource, or native state that cannot cross the patch container. | `NATIVE_BOUNDARY` | Only bounded descriptions for the shipped registry are accepted. |
 | FFI, platform channels, reflection, plugins, and native configuration | These depend on native symbols, platform registries, or runtime configuration outside the Dart patch ABI. | `NATIVE_BOUNDARY` | A new base release is required. |

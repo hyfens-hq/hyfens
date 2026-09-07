@@ -108,6 +108,13 @@ final class PatchCompatibilityAnalyzer {
     final separator = exclusion.indexOf(':');
     final reason =
         (separator < 0 ? exclusion : exclusion.substring(separator + 1)).trim();
+    if (reason == 'PATCHABLE' || reason.contains('function(s) selected')) {
+      return 'The changed method body stays within the installed release ABI '
+          'and can be patched without a new base release.';
+    }
+    if (reason == 'No patchable source changes detected.') {
+      return 'No patchable source changes were detected for this release.';
+    }
     if (reason.contains('receiver setter writes')) {
       return 'This patch changes live receiver state. Hyfens cannot commit '
           'that object mutation atomically yet; create a new base release.';

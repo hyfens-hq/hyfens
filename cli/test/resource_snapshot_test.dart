@@ -147,6 +147,33 @@ void main() {
     expect(decoded.encode(), snapshot.encode());
   });
 
+  test('uses a complete current icon scan to recover an incomplete historical scan', () {
+    final artifact = ResourceArtifactEvidence(
+      status: 'COMPLETE',
+      assetManifestPresent: true,
+      fontManifestPresent: true,
+      materialIconFontPresent: true,
+      files: const <ResourceArtifactFile>[],
+    );
+    final before = ResourceSnapshot(
+      target: 'ios',
+      entries: const <ResourceSnapshotEntry>[],
+      usesMaterialDesign: true,
+      materialIconAstComplete: false,
+      materialIconReferences: const <String>['package:app/main.dart:Icons.add'],
+      artifactEvidence: artifact,
+    );
+    final current = ResourceSnapshot(
+      target: 'ios',
+      entries: const <ResourceSnapshotEntry>[],
+      usesMaterialDesign: true,
+      materialIconAstComplete: true,
+      materialIconReferences: const <String>['package:app/main.dart:Icons.add'],
+    );
+
+    expect(before.diff(current).changes, isEmpty);
+  });
+
   test('captures complete evidence from actual Flutter output shape', () async {
     final root = await Directory.systemTemp.createTemp('hyfens-artifact-');
     addTearDown(() => root.delete(recursive: true));
@@ -349,6 +376,18 @@ dependencies: {}
     _expectRedactedDiagnostic(failure!, rootSentinel: root.path, code: 'F3010');
     expect(failure.detail, 'Unable to read Dart source for icon evidence.');
   });
+
+  test(
+    'ignores parser failures in source without Material icon tokens',
+    () async {
+      final root = await _createProject();
+      addTearDown(() => root.delete(recursive: true));
+      await File('${root.path}/lib/other.dart')
+          .writeAsString('final value = ;');
+
+      expect(_capture(root).materialIconAstComplete, isTrue);
+    },
+  );
 
   test(
     'captures standard asset maps and fingerprints active metadata',

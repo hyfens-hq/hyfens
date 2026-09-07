@@ -52,4 +52,20 @@ void main() {
       PatchCompatibilityDecision.newBaseRelease,
     );
   });
+
+  test(
+    'actionable explanations distinguish patchable and no-effect results',
+    () {
+      expect(
+        PatchCompatibilityAnalyzer.explainExclusion('1 function(s) selected'),
+        contains('can be patched'),
+      );
+      expect(
+        PatchCompatibilityAnalyzer.explainExclusion(
+          'No patchable source changes detected.',
+        ),
+        contains('No patchable source changes'),
+      );
+    },
+  );
 }

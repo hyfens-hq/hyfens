@@ -855,6 +855,9 @@ final class _Emitter {
           : (expression as PostfixExpression).operator.lexeme;
       if (operand is SimpleIdentifier &&
           (operator == '++' || operator == '--')) {
+        if (isInstanceMethod && receiverMembers.containsKey(operand.name)) {
+          _rejectReceiverWrite();
+        }
         final local = _lookupLocal(operand.name);
         if (!local.isMutable) {
           throw FormatException('Cannot modify final local ${operand.name}');
@@ -914,6 +917,9 @@ final class _Emitter {
     final target = expression.leftHandSide;
     if (_isReceiverOrigin(target)) _rejectReceiverWrite();
     if (target is SimpleIdentifier) {
+      if (isInstanceMethod && receiverMembers.containsKey(target.name)) {
+        _rejectReceiverWrite();
+      }
       if (_findLocal(target.name) == null &&
           arguments.containsKey(target.name)) {
         throw FormatException(
@@ -1317,18 +1323,22 @@ final class _Emitter {
         return local.schema;
       }
       final argument = arguments[expression.name];
-      if (argument == null) {
-        if (isInstanceMethod) {
-          throw FormatException(
-            'Unknown identifier ${expression.name}; unqualified receiver '
-            'access is unsupported. Use an explicitly release-selected '
-            'this.property read',
-          );
-        }
-        throw FormatException('Unknown identifier ${expression.name}');
+      if (argument != null) {
+        code.addAll(<int>[E0Opcode.loadArgument.code, argument.$1]);
+        return argument.$2;
       }
-      code.addAll(<int>[E0Opcode.loadArgument.code, argument.$1]);
-      return argument.$2;
+      final receiverMember = receiverMembers[expression.name];
+      if (receiverMember != null) {
+        code.addAll(<int>[E0Opcode.loadReceiver.code, receiverMember.$1]);
+        return receiverMember.$2;
+      }
+      if (isInstanceMethod) {
+        throw FormatException(
+          'Unknown identifier ${expression.name}; receiver access was not '
+          'selected by the release descriptor',
+        );
+      }
+      throw FormatException('Unknown identifier ${expression.name}');
     }
     if (expression is PrefixedIdentifier) {
       final target = emitExpression(expression.prefix);

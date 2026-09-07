@@ -28,13 +28,22 @@ class Counter extends StatefulWidget {
 
 class CounterState extends State<Counter> {
   final int count = 1;
+  final String label = 'state';
 
   int increment() {
     return this.count + 1;
   }
 
   Widget build(BuildContext context) {
-    return Text('state');
+    return Text(label);
+  }
+}
+
+class ConsumerState<T> extends State<T> {}
+
+class ConsumerCounterState extends ConsumerState<Counter> {
+  Widget build(BuildContext context) {
+    return Text('consumer');
   }
 }
 
@@ -82,6 +91,28 @@ void main() {
               (function) =>
                   function.name == 'build' &&
                   function.receiver.ownerClass == 'CounterState',
+            )
+            .signature,
+        e0FlutterWidgetBuildSignature,
+      );
+      expect(
+        transformation.manifest.functions
+            .singleWhere(
+              (function) =>
+                  function.name == 'build' &&
+                  function.receiver.ownerClass == 'CounterState',
+            )
+            .receiver
+            .members
+            .map((member) => member.name),
+        contains('label'),
+      );
+      expect(
+        transformation.manifest.functions
+            .singleWhere(
+              (function) =>
+                  function.name == 'build' &&
+                  function.receiver.ownerClass == 'ConsumerCounterState',
             )
             .signature,
         e0FlutterWidgetBuildSignature,
@@ -181,6 +212,53 @@ void main() {
     );
     expect(result.isSuccess, isTrue, reason: E0PatchRuntime.lastRejection);
     expect(result.value, 5);
+  });
+
+  test('widget builds can read schema-safe state fields implicitly', () {
+    final transformation = _transform(_flutterSource);
+    final build = transformation.manifest.functions.singleWhere(
+      (function) =>
+          function.name == 'build' &&
+          function.receiver.ownerClass == 'CounterState',
+    );
+    final bytes = E0PatchCompiler().compile(
+      source: _flutterSource,
+      manifest: transformation.manifest,
+      className: 'CounterState',
+      functionName: 'build',
+    );
+    E0PatchRuntime.configureWidgetFactories(_fakeWidgetRegistry());
+    expect(
+      E0PatchRuntime.installBytes(
+        bytes,
+        appId: 'flutter-abi',
+        releaseId: 'release-1',
+        buildFingerprint: 'build-1',
+        functions: <String, int>{
+          for (final item in transformation.manifest.functions)
+            item.id: item.slot,
+        },
+        signatures: <String, String>{
+          for (final item in transformation.manifest.functions)
+            item.id: item.signature.encode(),
+        },
+        receivers: <String, String>{
+          for (final item in transformation.manifest.functions)
+            item.id: item.receiver.encode(),
+        },
+      ),
+      isTrue,
+      reason: E0PatchRuntime.lastRejection,
+    );
+    final result = E0PatchRuntime.invokeWidget<_Node>(
+      E0PatchRuntime.lookup(build.slot)!,
+      <Object?>[Object()],
+      receiver: _DescriptorReceiver(build.receiver, <String, Object?>{
+        'label': 'patched state',
+      }),
+    );
+    expect(result.isSuccess, isTrue, reason: E0PatchRuntime.lastRejection);
+    expect((result.value! as _Node).properties['data'], 'patched state');
   });
 
   test('void state/controller behavior has a typed no-value ABI', () {

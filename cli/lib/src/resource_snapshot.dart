@@ -466,7 +466,13 @@ final class ResourceSnapshot {
         ),
       );
     }
-    if (!materialIconAstComplete || !current.materialIconAstComplete) {
+    // A release created before the scanner learned to ignore framework-owned
+    // or otherwise irrelevant source can legitimately have an incomplete
+    // historical scan. Once the current source scan is complete, compare the
+    // exact references that can now be proven instead of permanently blocking
+    // the base. An incomplete current scan still fails closed because a newly
+    // introduced glyph could be hidden by an unsupported source shape.
+    if (!current.materialIconAstComplete) {
       changes.add(
         const ResourceSnapshotChange(
           kind: ResourceInputKind.font,
@@ -1108,13 +1114,13 @@ void _collectMaterialIcons({
   required Set<String> materialIconReferences,
   required void Function() onIncomplete,
 }) {
-  // The Flutter framework owns the Material icon catalog. Its implementation
-  // contains declarations and lookup code that are not application icon
-  // references; scanning it made an otherwise complete app snapshot appear
-  // incomplete (F3010). Only application/local-package Dart is evidence for
-  // patch references. The built artifact remains the authority for what was
-  // actually tree-shaken into the base bundle.
-  if (package.name == 'flutter') return;
+  // The Flutter SDK owns framework declarations and lookup code that are not
+  // application icon references. Scanning SDK packages made an otherwise
+  // complete app snapshot appear incomplete (F3010). Only application and
+  // resolved dependency Dart is evidence for patch references. The built
+  // artifact remains the authority for what was actually tree-shaken into the
+  // base bundle.
+  if (package.source == PackageSourceType.sdk) return;
   final packageUri = _normalizePackageUri(package.packageUri);
   final lib = Directory(
     _safeJoin(root, packageUri, ResourceInputKind.font, package.name),
@@ -1145,7 +1151,11 @@ void _collectMaterialIcons({
         throwIfDiagnostics: false,
       );
       if (parsed.errors.isNotEmpty) {
-        onIncomplete();
+        // A parser failure in a source file that cannot mention Material icons
+        // does not make Material-icon evidence incomplete. If the token is
+        // present, remain conservative because the failed parse could hide a
+        // new glyph reference.
+        if (_materialIconToken.hasMatch(source)) onIncomplete();
         continue;
       }
       final visitor = _MaterialIconVisitor();
@@ -1161,6 +1171,8 @@ void _collectMaterialIcons({
     }
   }
 }
+
+final _materialIconToken = RegExp(r'\bIcons\b');
 
 final class _MaterialIconVisitor extends RecursiveAstVisitor<void> {
   final references = <String>{};

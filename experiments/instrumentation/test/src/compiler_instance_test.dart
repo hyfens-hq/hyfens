@@ -156,7 +156,7 @@ class PricingService {
       );
     });
 
-    test('does not infer unqualified receiver access', () {
+    test('infers safe unqualified receiver access', () {
       final unqualifiedManifest = E0SourceTransformer()
           .transform(
             source: '''
@@ -175,34 +175,39 @@ void main(List<String> args) {}
             buildFingerprint: 'test-build-1',
           )
           .manifest;
-      expect(unqualifiedManifest.functions.single.receiver.members, isEmpty);
+      final unqualifiedFunction = unqualifiedManifest.functions.single;
       expect(
-        () => E0PatchCompiler().compile(
-          source: '''
+        unqualifiedFunction.receiver.members.map((member) => member.name),
+        contains('taxRate'),
+      );
+      final patch = E0PatchCompiler().compile(
+        source: '''
 class PricingService {
   double calculate(double amount, double quantity) {
     return amount + quantity + taxRate;
   }
 }
 ''',
-          manifest: unqualifiedManifest,
-          className: 'PricingService',
-          functionName: 'calculate',
-        ),
-        throwsA(
-          isA<FormatException>().having(
-            (error) => error.message,
-            'message',
-            allOf(contains('unqualified receiver'), contains('this.property')),
-          ),
-        ),
+        manifest: unqualifiedManifest,
+        className: 'PricingService',
+        functionName: 'calculate',
       );
+      expect(_install(patch, unqualifiedManifest), isTrue);
+      final result = E0PatchRuntime.invoke(
+        E0PatchRuntime.lookup(unqualifiedFunction.slot)!,
+        <Object?>[10.0, 2.0],
+        receiver: _Receiver(unqualifiedFunction.receiver, <String, Object?>{
+          'taxRate': 1.5,
+        }),
+      );
+      expect(result.isSuccess, isTrue, reason: E0PatchRuntime.lastRejection);
+      expect(result.value, 13.5);
       expect(
         () => E0PatchCompiler().compile(
           source: '''
 class PricingService {
   double calculate(double amount, double quantity) {
-    return amount + quantity + this.taxRate;
+    return amount + quantity + this.notSelected;
   }
 }
 ''',
@@ -221,26 +226,29 @@ class PricingService {
     });
 
     test('rejects setter writes pending staged atomic commit semantics', () {
-      expect(
-        () => _compile(
-          manifest,
-          source: '''
+      for (final body in <String>['this.taxRate = 9.0;', 'taxRate = 9.0;']) {
+        expect(
+          () => _compile(
+            manifest,
+            source:
+                '''
 class PricingService {
   double calculate(double amount, double quantity) {
-    this.taxRate = 9.0;
+    $body
     return amount;
   }
 }
 ''',
-        ),
-        throwsA(
-          isA<FormatException>().having(
-            (error) => error.message,
-            'message',
-            allOf(contains('setter writes'), contains('staged/atomic')),
           ),
-        ),
-      );
+          throwsA(
+            isA<FormatException>().having(
+              (error) => error.message,
+              'message',
+              allOf(contains('setter writes'), contains('staged/atomic')),
+            ),
+          ),
+        );
+      }
     });
 
     test('rejects collection mutation rooted in a receiver property', () {
