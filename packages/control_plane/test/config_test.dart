@@ -15,6 +15,28 @@ void main() {
     expect(config.auth, isNull);
   });
 
+  test('runtime acceptance environments are explicit and bounded', () {
+    final config = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS': 'env_dev, env_test,env_dev',
+    });
+    expect(config.runtimeAcceptanceEnvironmentIds, <String>{
+      'env_dev',
+      'env_test',
+    });
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS': 'env_dev,,env_test',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS': 'ENV_DEV',
+      }),
+      throwsArgumentError,
+    );
+  });
+
   test('human auth configuration is explicit and bounded', () {
     final config = ControlPlaneConfig.fromEnvironment(<String, String>{
       'HYFENS_AUTH_SIGNING_KEY': base64.encode(List<int>.filled(32, 3)),

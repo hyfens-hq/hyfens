@@ -301,6 +301,7 @@ final class ControlPlaneConfig {
     this.reconciliationPeriodic = const ReconciliationPeriodicConfig(),
     this.auth,
     this.allowInsecureAuth = false,
+    this.runtimeAcceptanceEnvironmentIds = const <String>{},
     this.discovery = const ControlPlaneDiscoveryConfig(),
   });
 
@@ -330,6 +331,10 @@ final class ControlPlaneConfig {
   /// HTTP requests. It is disabled by default; remote deployments must use
   /// HTTPS at the public edge.
   final bool allowInsecureAuth;
+
+  /// Explicit development-only environments for non-billable runtime
+  /// acceptance receipts. An empty set keeps receipt settlement disabled.
+  final Set<String> runtimeAcceptanceEnvironmentIds;
   final ControlPlaneDiscoveryConfig discovery;
 
   /// Convenience access to the server-selected public registration tenant.
@@ -353,6 +358,9 @@ final class ControlPlaneConfig {
       env,
       'HYFENS_AUTH_ALLOW_INSECURE_HTTP',
       false,
+    );
+    final runtimeAcceptanceEnvironmentIds = _parseRuntimeAcceptanceEnvironments(
+      env['HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS'],
     );
     final periodic = ReconciliationPeriodicConfig.fromEnvironment(env);
     final auth = HumanAuthConfig.fromEnvironment(env);
@@ -470,6 +478,7 @@ final class ControlPlaneConfig {
       reconciliationPeriodic: periodic,
       auth: auth,
       allowInsecureAuth: allowInsecureAuth,
+      runtimeAcceptanceEnvironmentIds: runtimeAcceptanceEnvironmentIds,
       discovery: discovery,
     );
   }
@@ -482,6 +491,21 @@ final class ControlPlaneConfig {
       'false' => false,
       _ => throw ArgumentError('$key must be true or false'),
     };
+  }
+
+  static Set<String> _parseRuntimeAcceptanceEnvironments(String? value) {
+    if (value == null || value.isEmpty) return const <String>{};
+    final result = <String>{};
+    for (final raw in value.split(',')) {
+      final id = raw.trim();
+      if (!RegExp(r'^[a-z][a-z0-9_]{1,63}$').hasMatch(id)) {
+        throw ArgumentError(
+          'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS contains an invalid environment ID',
+        );
+      }
+      result.add(id);
+    }
+    return Set.unmodifiable(result);
   }
 
   static Uri? _artifactAdmissionUrl(String? value) {

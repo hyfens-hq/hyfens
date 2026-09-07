@@ -19,6 +19,7 @@ import 'reconciliation_observability.dart';
 import 'reconciliation_periodic.dart';
 import 'release_bundle.dart';
 import 'rollout.dart';
+import 'runtime_receipts.dart';
 import 'service.dart';
 import 'support.dart';
 
@@ -223,6 +224,7 @@ final class ControlPlaneHttpServer {
     this.periodicRunner,
     this.auditRetentionDays = 365,
     this.allowInsecureAuth = false,
+    this.runtimeReceiptSettlement,
   }) : limits = limits,
        discovery =
            discovery ??
@@ -245,6 +247,7 @@ final class ControlPlaneHttpServer {
   final ControlPlaneDiscoveryConfig discovery;
   final int auditRetentionDays;
   final bool allowInsecureAuth;
+  final RuntimeReceiptSettlement? runtimeReceiptSettlement;
   final ReconciliationObservability? reconciliationObservability;
   final ReconciliationPeriodicRunner? periodicRunner;
   final OperatorOverviewProjection _operatorOverview;
@@ -1030,6 +1033,31 @@ final class ControlPlaneHttpServer {
             'release-promotions',
           ])) {
         await _promote(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'runtime',
+            'installations',
+            'challenge',
+          ])) {
+        await _runtimeReceiptChallenge(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'runtime',
+            'installations',
+            'register',
+          ])) {
+        await _runtimeReceiptRegister(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'runtime', 'install-success'])) {
+        await _runtimeReceiptSuccess(request, requestId);
         return;
       }
       if (request.method == 'POST' &&
@@ -3372,6 +3400,91 @@ final class ControlPlaneHttpServer {
       ...environment.toJson(),
       'request_id': requestId,
     });
+  }
+
+  Future<void> _runtimeReceiptChallenge(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    final scope = RuntimeReceiptScope.fromChallengeRequest(body);
+    final authorization = await service.authorizeRuntimeReceiptScope(
+      token: _bearer(request),
+      scope: scope,
+    );
+    final result = await _runtimeReceipts().issueChallenge(
+      organizationId: authorization.organizationId,
+      request: body,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _runtimeReceiptRegister(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    final enrollmentValue = body['enrollment'];
+    if (enrollmentValue is! Map) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enrollment must be a JSON object',
+      );
+    }
+    final enrollment = RuntimeEnrollment.fromJson(<String, Object?>{
+      for (final entry in enrollmentValue.entries)
+        if (entry.key is String) entry.key as String: entry.value,
+    });
+    final authorization = await service.authorizeRuntimeReceiptScope(
+      token: _bearer(request),
+      scope: enrollment.scope,
+    );
+    final result = await _runtimeReceipts().register(
+      organizationId: authorization.organizationId,
+      request: body,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _runtimeReceiptSuccess(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    final receiptBody = <String, Object?>{
+      for (final key in RuntimeReceiptScope.receiptKeys) key: body[key],
+    };
+    final scope = RuntimeReceiptScope.fromReceipt(receiptBody);
+    final authorization = await service.authorizeRuntimeReceiptScope(
+      token: _bearer(request),
+      scope: scope,
+    );
+    final result = await _runtimeReceipts().settleInstall(
+      organizationId: authorization.organizationId,
+      request: body,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  RuntimeReceiptSettlement _runtimeReceipts() {
+    final settlement = runtimeReceiptSettlement;
+    if (settlement == null) {
+      throw const ControlPlaneException(
+        'RUNTIME_RECEIPTS_UNAVAILABLE',
+        'Runtime receipt settlement is not configured',
+        statusCode: 503,
+      );
+    }
+    return settlement;
   }
 
   Future<void> _updateCheck(HttpRequest request, String requestId) async {

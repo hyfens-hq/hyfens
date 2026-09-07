@@ -12,6 +12,7 @@ dependencies:
   hyfens_patch_format:
     path: ../patch_format
   path: ^1.9.1
+  pointycastle: ^3.9.1
   postgres: ^3.5.9
 
 dev_dependencies:

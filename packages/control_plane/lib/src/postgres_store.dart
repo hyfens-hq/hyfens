@@ -153,7 +153,11 @@ enum PostgresRolloutTransitionFailurePoint { beforeCommit, afterCommit }
 /// keys and transactional migrations provide cross-process idempotency and
 /// startup safety that a single-process file queue cannot provide.
 final class PostgresControlPlaneStore
-    implements ControlPlaneStore, ArtifactInventory, ConditionalJsonStore {
+    implements
+        ControlPlaneStore,
+        ArtifactInventory,
+        ConditionalJsonStore,
+        RuntimeReceiptStore {
   PostgresControlPlaneStore(
     String connectionString, {
     ArtifactStore? artifacts,
@@ -383,6 +387,190 @@ final class PostgresControlPlaneStore
       }
       throw const StorageConflict('Immutable record already exists');
     }
+  }
+
+  @override
+  Future<void> createRuntimeAdmission(String id, Map<String, Object?> value) =>
+      _createRuntimeJson('runtime_admissions', id, value);
+
+  @override
+  Future<Map<String, Object?>?> readRuntimeAdmission(String id) =>
+      readJson('runtime_admissions', id);
+
+  @override
+  Future<void> createRuntimeInstallation(
+    String id,
+    Map<String, Object?> value,
+  ) => _createRuntimeJson('runtime_installations', id, value);
+
+  @override
+  Future<Map<String, Object?>?> readRuntimeInstallation(String id) =>
+      readJson('runtime_installations', id);
+
+  @override
+  Future<void> createRuntimeRegistration(
+    String id,
+    Map<String, Object?> value,
+  ) => _createRuntimeJson('runtime_registrations', id, value);
+
+  @override
+  Future<Map<String, Object?>?> readRuntimeRegistration(String id) =>
+      readJson('runtime_registrations', id);
+
+  @override
+  Future<void> createRuntimeRejection(String id, Map<String, Object?> value) =>
+      _createRuntimeJson('runtime_rejections', id, value);
+
+  @override
+  Future<Map<String, Object?>?> readRuntimeReceipt(String id) =>
+      readJson('runtime_receipts', id);
+
+  @override
+  Future<RuntimeReceiptCommitResult> commitRuntimeReceipt({
+    required String receiptId,
+    required Map<String, Object?> receipt,
+    required String usageEventId,
+    required Map<String, Object?> usageEvent,
+  }) => _pool.runTx((session) async {
+    final existingReceipt = await _readRuntimeJson(
+      session,
+      'runtime_receipts',
+      receiptId,
+      forUpdate: true,
+    );
+    if (existingReceipt != null) {
+      if (canonicalJson(existingReceipt) != canonicalJson(receipt)) {
+        throw const StorageConflict('Runtime receipt ID was reused');
+      }
+      final existingUsage = await _readRuntimeJson(
+        session,
+        'runtime_usage_events',
+        usageEventId,
+        forUpdate: true,
+      );
+      if (existingUsage == null) {
+        throw const StorageConflict(
+          'Runtime receipt exists without its usage event',
+        );
+      }
+      return const RuntimeReceiptCommitResult(
+        createdReceipt: false,
+        createdUsage: false,
+      );
+    }
+    final existingUsage = await _readRuntimeJson(
+      session,
+      'runtime_usage_events',
+      usageEventId,
+      forUpdate: true,
+    );
+    if (existingUsage != null) {
+      throw const StorageConflict('Runtime usage key was already settled');
+    }
+    final createdReceipt = await _insertRuntimeJson(
+      session,
+      'runtime_receipts',
+      receiptId,
+      receipt,
+    );
+    if (!createdReceipt) {
+      final persistedReceipt = await _readRuntimeJson(
+        session,
+        'runtime_receipts',
+        receiptId,
+        forUpdate: true,
+      );
+      if (persistedReceipt == null ||
+          canonicalJson(persistedReceipt) != canonicalJson(receipt)) {
+        throw const StorageConflict('Runtime receipt ID was reused');
+      }
+      final persistedUsage = await _readRuntimeJson(
+        session,
+        'runtime_usage_events',
+        usageEventId,
+        forUpdate: true,
+      );
+      if (persistedUsage == null) {
+        throw const StorageConflict(
+          'Runtime receipt exists without its usage event',
+        );
+      }
+      return const RuntimeReceiptCommitResult(
+        createdReceipt: false,
+        createdUsage: false,
+      );
+    }
+    final createdUsage = await _insertRuntimeJson(
+      session,
+      'runtime_usage_events',
+      usageEventId,
+      usageEvent,
+    );
+    if (!createdUsage) {
+      throw const StorageConflict('Runtime usage key was already settled');
+    }
+    return const RuntimeReceiptCommitResult(
+      createdReceipt: true,
+      createdUsage: true,
+    );
+  });
+
+  Future<void> _createRuntimeJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) => _pool.runTx((session) async {
+    await _insertRuntimeJson(session, collection, id, value);
+    final existing = await _readRuntimeJson(
+      session,
+      collection,
+      id,
+      forUpdate: true,
+    );
+    if (existing == null || canonicalJson(existing) != canonicalJson(value)) {
+      throw const StorageConflict('Runtime record insert did not persist');
+    }
+  });
+
+  Future<bool> _insertRuntimeJson(
+    Session session,
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) async {
+    final result = await session.execute(
+      Sql.named(
+        'INSERT INTO control_plane_records '
+        '(collection, record_id, organization_id, body) '
+        'VALUES (@collection:text, @id:text, @organization:text, @body:jsonb) '
+        'ON CONFLICT (collection, record_id) DO NOTHING',
+      ),
+      parameters: <String, Object?>{
+        'collection': collection,
+        'id': id,
+        'organization': value['organizationId'],
+        'body': value,
+      },
+    );
+    return result.affectedRows == 1;
+  }
+
+  Future<Map<String, Object?>?> _readRuntimeJson(
+    Session session,
+    String collection,
+    String id, {
+    required bool forUpdate,
+  }) async {
+    final result = await session.execute(
+      Sql.named(
+        'SELECT body::text AS body_json FROM control_plane_records '
+        'WHERE collection = @collection:text AND record_id = @id:text'
+        '${forUpdate ? ' FOR UPDATE' : ''}',
+      ),
+      parameters: <String, Object?>{'collection': collection, 'id': id},
+    );
+    if (result.isEmpty) return null;
+    return _decodeBody(result.first.toColumnMap()['body_json']);
   }
 
   @override

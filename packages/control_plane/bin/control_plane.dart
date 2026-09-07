@@ -59,6 +59,15 @@ Future<void> main(List<String> arguments) async {
     artifactDeliveryAdmission: artifactDeliveryAdmission,
     artifactDeliveryAdmissionRequired: config.artifactAdmissionRequired,
   );
+  final runtimeReceiptSettlement =
+      config.runtimeAcceptanceEnvironmentIds.isEmpty
+      ? null
+      : RuntimeReceiptSettlement(
+          store: store as RuntimeReceiptStore,
+          policy: DevelopmentRuntimeReceiptPolicy(
+            environmentIds: config.runtimeAcceptanceEnvironmentIds,
+          ),
+        );
   await configuredService.initialize();
   if (options.containsKey('seed-demo')) {
     if (options.containsKey('bootstrap') ||
@@ -189,6 +198,7 @@ Future<void> main(List<String> arguments) async {
     ),
     auditRetentionDays: config.auditRetentionDays,
     allowInsecureAuth: config.allowInsecureAuth,
+    runtimeReceiptSettlement: runtimeReceiptSettlement,
   );
   final bound = await server.bind(host: config.host, port: config.port);
   stdout.writeln(

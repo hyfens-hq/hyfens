@@ -31,6 +31,7 @@ const String environmentWriteScope = 'environment:write';
 const String supportReadScope = 'support:read';
 const String supportCreateScope = 'support:create';
 const String supportReplyScope = 'support:reply';
+const String runtimeInstallScope = 'runtime:install';
 
 const Set<String> controlScopes = <String>{
   'application:read',
@@ -72,6 +73,7 @@ const Set<String> controlScopes = <String>{
 const Set<String> deliveryScopes = <String>{
   'runtime:update:read',
   'runtime:artifact:read',
+  runtimeInstallScope,
 };
 
 const Set<String> observationScopes = <String>{observationWriteScope};

@@ -29,6 +29,8 @@ outside the public documentation tree.
   flavor, entrypoint, Melos, Pub Workspace, and CI selection.
 - [MCP](mcp.md) — the built-in stdio server for compatible AI coding agents.
 - [Diagnostics](diagnostics.md) — stable diagnostic codes and remediation.
+- [Trusted runtime receipts](runtime/trusted-install-receipts.md) — admission-
+  bound installation evidence, idempotent settlement, and trust boundaries.
 
 ## Product surfaces
 

@@ -27,6 +27,7 @@ import 'persistence.dart';
 import 'reconciliation.dart';
 import 'release_bundle.dart';
 import 'rollout.dart';
+import 'runtime_receipts.dart';
 import 'support.dart';
 
 final class ArtifactPayload {
@@ -112,6 +113,94 @@ final class ControlPlaneService {
     applicationId: applicationId,
     environmentId: environmentId,
   );
+
+  /// Authorizes a runtime receipt against the actual customer resource graph.
+  ///
+  /// A delivery credential alone is not sufficient to mint usage: the
+  /// application, environment, promoted release, ready patch, and content
+  /// digest must all agree with the receipt scope. The receipt service calls
+  /// this method before issuing or settling any admission.
+  Future<RuntimeReceiptAuthorization> authorizeRuntimeReceiptScope({
+    required String token,
+    required RuntimeReceiptScope scope,
+  }) async {
+    final actor = await _authorize(
+      token,
+      runtimeInstallScope,
+      kind: CredentialKind.delivery,
+      applicationId: scope.applicationId,
+      environmentId: scope.environmentId,
+    );
+    final application = await _application(scope.applicationId);
+    _requireTenant(application.organizationId, actor.organizationId);
+    final environment = await _environment(scope.environmentId);
+    _requireTenant(environment.organizationId, actor.organizationId);
+    if (environment.applicationId != application.id ||
+        application.runtimeApplicationId != scope.runtimeApplicationId) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+
+    ReleaseRecord? release;
+    for (final value in await store.listJson('releases')) {
+      final candidate = ReleaseRecord.fromJson(value);
+      if (candidate.id == environment.promotedReleaseId &&
+          candidate.runtimeReleaseId == scope.releaseId &&
+          candidate.applicationId == application.id &&
+          candidate.runtimeApplicationId == scope.runtimeApplicationId &&
+          (candidate.platformId == scope.platform ||
+              candidate.buildTarget == scope.platform) &&
+          candidate.organizationId == actor.organizationId) {
+        release = candidate;
+        break;
+      }
+    }
+    if (release == null) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+
+    PatchRecord? patch;
+    for (final value in await store.listJson('patches')) {
+      final candidate = PatchRecord.fromJson(value);
+      if (candidate.runtimePatchId == scope.patchId &&
+          candidate.releaseId == release.id &&
+          candidate.organizationId == actor.organizationId &&
+          candidate.state == 'READY') {
+        patch = candidate;
+        break;
+      }
+    }
+    if (patch == null) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final artifact = await _artifact(patch.artifactId);
+    if (artifact.organizationId != actor.organizationId ||
+        artifact.patchId != patch.id ||
+        artifact.state != 'READY' ||
+        artifact.sha256 != 'sha256:${scope.artifactDigest}') {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    return RuntimeReceiptAuthorization(
+      organizationId: actor.organizationId,
+      applicationId: application.id,
+      environmentId: environment.id,
+    );
+  }
 
   /// Appends a billing lifecycle event using the same immutable audit-chain
   /// seam as release and rollout mutations. The private Cloud provider adapter

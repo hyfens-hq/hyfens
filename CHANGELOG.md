@@ -6,6 +6,13 @@ not select a version or publish software.
 
 ## [Unreleased]
 
+### Added
+
+- Added admission-bound signed runtime install receipts with durable,
+  idempotent `successful_patch_install` settlement.
+- Added explicit development-acceptance and provider-neutral Android/Apple
+  attestation adapter seams for future production trust policy integration.
+
 ### Changed
 
 - Added a release-candidate and release-verification process so real-app,
@@ -13,6 +20,10 @@ not select a version or publish software.
   stable release whenever those surfaces are affected.
 - Made curated release notes, immutable release metadata, and task-owned
   cleanup part of the public contribution workflow.
+- Added an explicit opt-in environment setting for non-billable self-hosted
+  runtime acceptance; production billability remains disabled by default.
+- Existing delivery credentials must be reissued to receive the new
+  `runtime:install` scope.
 
 ## [0.1.9] - 2026-09-07
 

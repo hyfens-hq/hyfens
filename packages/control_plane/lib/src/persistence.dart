@@ -38,6 +38,49 @@ final class RolloutTransitionCommitResult {
   final bool applied;
 }
 
+/// Result of the one atomic runtime-receipt settlement operation.
+///
+/// A receipt and its canonical usage event are committed together. Retrying a
+/// previously committed receipt returns [createdReceipt] and [createdUsage]
+/// as false rather than creating another usage event.
+final class RuntimeReceiptCommitResult {
+  const RuntimeReceiptCommitResult({
+    required this.createdReceipt,
+    required this.createdUsage,
+  });
+
+  final bool createdReceipt;
+  final bool createdUsage;
+}
+
+/// Durable storage for the runtime trust boundary. Implementations must keep
+/// registration records immutable and settle a receipt plus its canonical
+/// usage event atomically.
+abstract interface class RuntimeReceiptStore {
+  Future<void> createRuntimeAdmission(String id, Map<String, Object?> value);
+
+  Future<Map<String, Object?>?> readRuntimeAdmission(String id);
+
+  Future<void> createRuntimeInstallation(String id, Map<String, Object?> value);
+
+  Future<Map<String, Object?>?> readRuntimeInstallation(String id);
+
+  Future<void> createRuntimeRegistration(String id, Map<String, Object?> value);
+
+  Future<Map<String, Object?>?> readRuntimeRegistration(String id);
+
+  Future<void> createRuntimeRejection(String id, Map<String, Object?> value);
+
+  Future<Map<String, Object?>?> readRuntimeReceipt(String id);
+
+  Future<RuntimeReceiptCommitResult> commitRuntimeReceipt({
+    required String receiptId,
+    required Map<String, Object?> receipt,
+    required String usageEventId,
+    required Map<String, Object?> usageEvent,
+  });
+}
+
 /// Storage operations whose correctness depends on a durable unique key.
 /// Implementations must compare an existing event's canonical body before
 /// acknowledging a retry; they must never silently overwrite an observation.
@@ -172,7 +215,11 @@ abstract interface class ControlPlaneStore
 /// artifact paths are content addressed and never selected from a caller's
 /// arbitrary filesystem path.
 final class FileControlPlaneStore
-    implements ControlPlaneStore, ArtifactInventory, ConditionalJsonStore {
+    implements
+        ControlPlaneStore,
+        ArtifactInventory,
+        ConditionalJsonStore,
+        RuntimeReceiptStore {
   FileControlPlaneStore(this.root);
 
   final Directory root;
@@ -205,6 +252,12 @@ final class FileControlPlaneStore
       'platform_staff_invitations',
       'support_cases',
       'support_messages',
+      'runtime_admissions',
+      'runtime_installations',
+      'runtime_registrations',
+      'runtime_rejections',
+      'runtime_receipts',
+      'runtime_usage_events',
     ]) {
       await Directory(p.join(root.path, name)).create(recursive: true);
     }
@@ -255,6 +308,80 @@ final class FileControlPlaneStore
     }
     await _writeAtomic(file, utf8.encode('${canonicalJson(value)}\n'));
   }
+
+  @override
+  Future<void> createRuntimeAdmission(String id, Map<String, Object?> value) =>
+      _metadataOperation(() => createJson('runtime_admissions', id, value));
+
+  @override
+  Future<Map<String, Object?>?> readRuntimeAdmission(String id) =>
+      readJson('runtime_admissions', id);
+
+  @override
+  Future<void> createRuntimeInstallation(
+    String id,
+    Map<String, Object?> value,
+  ) => _metadataOperation(() => createJson('runtime_installations', id, value));
+
+  @override
+  Future<Map<String, Object?>?> readRuntimeInstallation(String id) =>
+      readJson('runtime_installations', id);
+
+  @override
+  Future<void> createRuntimeRegistration(
+    String id,
+    Map<String, Object?> value,
+  ) => _metadataOperation(() => createJson('runtime_registrations', id, value));
+
+  @override
+  Future<Map<String, Object?>?> readRuntimeRegistration(String id) =>
+      readJson('runtime_registrations', id);
+
+  @override
+  Future<void> createRuntimeRejection(String id, Map<String, Object?> value) =>
+      _metadataOperation(() => createJson('runtime_rejections', id, value));
+
+  @override
+  Future<Map<String, Object?>?> readRuntimeReceipt(String id) =>
+      readJson('runtime_receipts', id);
+
+  @override
+  Future<RuntimeReceiptCommitResult> commitRuntimeReceipt({
+    required String receiptId,
+    required Map<String, Object?> receipt,
+    required String usageEventId,
+    required Map<String, Object?> usageEvent,
+  }) => _metadataOperation(() async {
+    final existingReceipt = await readJson('runtime_receipts', receiptId);
+    if (existingReceipt != null) {
+      if (canonicalJson(existingReceipt) != canonicalJson(receipt)) {
+        throw const StorageConflict('Runtime receipt ID was reused');
+      }
+      final existingUsage = await readJson(
+        'runtime_usage_events',
+        usageEventId,
+      );
+      if (existingUsage == null) {
+        throw const StorageConflict(
+          'Runtime receipt exists without its usage event',
+        );
+      }
+      return const RuntimeReceiptCommitResult(
+        createdReceipt: false,
+        createdUsage: false,
+      );
+    }
+    final existingUsage = await readJson('runtime_usage_events', usageEventId);
+    if (existingUsage != null) {
+      throw const StorageConflict('Runtime usage key was already settled');
+    }
+    await createJson('runtime_receipts', receiptId, receipt);
+    await createJson('runtime_usage_events', usageEventId, usageEvent);
+    return const RuntimeReceiptCommitResult(
+      createdReceipt: true,
+      createdUsage: true,
+    );
+  });
 
   @override
   Future<void> replaceJson(
