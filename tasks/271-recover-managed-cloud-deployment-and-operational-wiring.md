@@ -92,16 +92,18 @@ Completed in this task:
 - local and staged-wrapper shell syntax; and
 - tracked diff checks.
 
-The complete control-plane package test command was also run. It reported 27
+The complete control-plane package test command was also run on the clean PR
+branch after restoring the package dependencies: 315 tests passed, with 34
+environment-dependent integration skips and no failures. An earlier
+pre-integration run on the broader local working tree reported 27
 pre-existing failures in observation/P3E/reconciliation/credential-issuer
-coverage and 34 environment-dependent skips; the Task-271-relevant billing,
-refund, Enterprise, deletion, plan, onboarding, artifact, auth, and config
-slice passed independently.
+coverage; that historical result is retained here for traceability.
 
 ## Next Action
 
-The repository-owned wrappers and current source trees are corrected, validated,
-and staged. The next action is for a root operator to install the staged
+The repository-owned wrapper/build changes are corrected, validated, and
+committed on the deployment-recovery PR branch. The next action is for a root
+operator to install the staged
 wrappers, install protected configuration through the deployment secret
 mechanism, and run the no-secret preflight. Do not mutate production routing
 or provider state until that preflight passes.
