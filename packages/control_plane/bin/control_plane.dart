@@ -68,6 +68,12 @@ Future<void> main(List<String> arguments) async {
             environmentIds: config.runtimeAcceptanceEnvironmentIds,
           ),
         );
+  final cloudSignupDelivery = config.cloudOnboarding.deliveryEndpoint == null
+      ? const UnavailableCloudSignupVerificationDelivery()
+      : HttpCloudSignupVerificationDelivery(
+          endpoint: config.cloudOnboarding.deliveryEndpoint!,
+          serviceToken: config.cloudOnboarding.deliveryToken!,
+        );
   await configuredService.initialize();
   if (options.containsKey('seed-demo')) {
     if (options.containsKey('bootstrap') ||
@@ -199,6 +205,8 @@ Future<void> main(List<String> arguments) async {
     auditRetentionDays: config.auditRetentionDays,
     allowInsecureAuth: config.allowInsecureAuth,
     runtimeReceiptSettlement: runtimeReceiptSettlement,
+    cloudOnboarding: config.cloudOnboarding,
+    cloudSignupDelivery: cloudSignupDelivery,
   );
   final bound = await server.bind(host: config.host, port: config.port);
   stdout.writeln(

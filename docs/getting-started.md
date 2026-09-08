@@ -50,6 +50,13 @@ session file, token, or private signing key into the checkout.
 
 ## 2. Select an endpoint and authenticate
 
+For a new managed Cloud organization, start at
+[`app.hyfens.com/signup`](https://app.hyfens.com/signup). Verify the account,
+complete the first application/environment setup in the Customer Workspace,
+then return here for the public CLI handoff. Managed Cloud signup is separate
+from the self-hosted client-access registration flow and does not require
+payment details or SSH access.
+
 The managed default is the canonical Cloud API base:
 
 ```text

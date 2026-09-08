@@ -140,6 +140,48 @@ void main() {
     );
   });
 
+  test('managed Cloud signup requires explicit verification delivery', () {
+    final token = List<String>.filled(32, 'a').join();
+    final configured = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_CLOUD_SIGNUP_ENABLED': 'true',
+      'HYFENS_CLOUD_SIGNUP_VERIFICATION_URL':
+          'https://app.hyfens.com/verify-email',
+      'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_URL':
+          'https://mail.example.test/hyfens',
+      'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_TOKEN': token,
+      'HYFENS_CLOUD_SIGNUP_VERIFICATION_TTL_MINUTES': '45',
+    });
+    expect(configured.cloudOnboarding.enabled, isTrue);
+    expect(
+      configured.cloudOnboarding.verificationUrl,
+      Uri.parse('https://app.hyfens.com/verify-email'),
+    );
+    expect(
+      configured.cloudOnboarding.verificationTtl,
+      const Duration(minutes: 45),
+    );
+
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_CLOUD_SIGNUP_ENABLED': 'true',
+        'HYFENS_CLOUD_SIGNUP_VERIFICATION_URL':
+            'https://app.hyfens.com/verify-email',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_CLOUD_SIGNUP_ENABLED': 'true',
+        'HYFENS_CLOUD_SIGNUP_VERIFICATION_URL':
+            'https://app.hyfens.com/verify-email',
+        'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_URL':
+            'https://mail.example.test/hyfens',
+        'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_TOKEN': 'too-short',
+      }),
+      throwsArgumentError,
+    );
+  });
+
   test('database and object configuration are injectable', () {
     final config = ControlPlaneConfig.fromEnvironment(<String, String>{
       'HYFENS_HOST': '0.0.0.0',

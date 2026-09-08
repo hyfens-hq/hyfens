@@ -157,7 +157,8 @@ final class PostgresControlPlaneStore
         ControlPlaneStore,
         ArtifactInventory,
         ConditionalJsonStore,
-        RuntimeReceiptStore {
+        RuntimeReceiptStore,
+        ManagedCloudOnboardingStore {
   PostgresControlPlaneStore(
     String connectionString, {
     ArtifactStore? artifacts,
@@ -531,6 +532,92 @@ final class PostgresControlPlaneStore
       throw const StorageConflict('Runtime record insert did not persist');
     }
   });
+
+  @override
+  Future<ManagedCloudOnboardingCommitResult> commitManagedCloudOnboarding({
+    required String signupId,
+    required Map<String, Object?> expectedSignup,
+    required Map<String, Object?> verifiedSignup,
+    required Map<String, Object?> organization,
+    required Map<String, Object?> user,
+    required Map<String, Object?> onboarding,
+  }) => _pool.runTx((session) async {
+    final current = await _readRuntimeJson(
+      session,
+      'cloud_signups',
+      signupId,
+      forUpdate: true,
+    );
+    if (current == null) {
+      throw const StorageConflict('Cloud signup does not exist');
+    }
+    if (canonicalJson(current) == canonicalJson(verifiedSignup)) {
+      await _verifyManagedCloudRecord(session, 'organizations', organization);
+      await _verifyManagedCloudRecord(session, 'users', user);
+      await _verifyManagedCloudRecord(session, 'cloud_onboarding', onboarding);
+      return const ManagedCloudOnboardingCommitResult(created: false);
+    }
+    if (canonicalJson(current) != canonicalJson(expectedSignup)) {
+      throw const StorageConflict('Cloud signup changed during verification');
+    }
+    await _createManagedCloudRecord(session, 'organizations', organization);
+    await _createManagedCloudRecord(session, 'users', user);
+    await _createManagedCloudRecord(session, 'cloud_onboarding', onboarding);
+    final updated = await session.execute(
+      Sql.named(
+        'UPDATE control_plane_records SET organization_id = @organization:text, '
+        'body = @body:jsonb, updated_at = now() '
+        'WHERE collection = @collection:text AND record_id = @id:text',
+      ),
+      parameters: <String, Object?>{
+        'collection': 'cloud_signups',
+        'id': signupId,
+        'organization': verifiedSignup['organizationId'],
+        'body': verifiedSignup,
+      },
+    );
+    if (updated.affectedRows != 1) {
+      throw const StorageConflict('Cloud signup update did not persist');
+    }
+    return const ManagedCloudOnboardingCommitResult(created: true);
+  });
+
+  Future<void> _createManagedCloudRecord(
+    Session session,
+    String collection,
+    Map<String, Object?> value,
+  ) async {
+    final id = value['id'];
+    if (id is! String ||
+        !(await _insertRuntimeJson(session, collection, id, value))) {
+      if (id is! String) {
+        throw const StorageConflict('Managed Cloud record has no ID');
+      }
+      await _verifyManagedCloudRecord(session, collection, value);
+    }
+  }
+
+  Future<void> _verifyManagedCloudRecord(
+    Session session,
+    String collection,
+    Map<String, Object?> value,
+  ) async {
+    final id = value['id'];
+    if (id is! String) {
+      throw const StorageConflict('Managed Cloud record has no ID');
+    }
+    final current = await _readRuntimeJson(
+      session,
+      collection,
+      id,
+      forUpdate: true,
+    );
+    if (current == null || canonicalJson(current) != canonicalJson(value)) {
+      throw const StorageConflict(
+        'Managed Cloud onboarding record is incomplete',
+      );
+    }
+  }
 
   Future<bool> _insertRuntimeJson(
     Session session,

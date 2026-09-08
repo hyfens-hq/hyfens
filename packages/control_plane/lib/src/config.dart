@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'cloud_onboarding.dart';
 import 'human_auth.dart';
 import 'reconciliation_periodic.dart';
 
@@ -303,6 +304,7 @@ final class ControlPlaneConfig {
     this.allowInsecureAuth = false,
     this.runtimeAcceptanceEnvironmentIds = const <String>{},
     this.discovery = const ControlPlaneDiscoveryConfig(),
+    this.cloudOnboarding = const CloudOnboardingConfig(),
   });
 
   final String host;
@@ -336,6 +338,7 @@ final class ControlPlaneConfig {
   /// acceptance receipts. An empty set keeps receipt settlement disabled.
   final Set<String> runtimeAcceptanceEnvironmentIds;
   final ControlPlaneDiscoveryConfig discovery;
+  final CloudOnboardingConfig cloudOnboarding;
 
   /// Convenience access to the server-selected public registration tenant.
   String? get publicRegistrationOrganizationId =>
@@ -365,6 +368,7 @@ final class ControlPlaneConfig {
     final periodic = ReconciliationPeriodicConfig.fromEnvironment(env);
     final auth = HumanAuthConfig.fromEnvironment(env);
     final discovery = ControlPlaneDiscoveryConfig.fromEnvironment(env);
+    final cloudOnboarding = CloudOnboardingConfig.fromEnvironment(env);
     if (port == null || port < 1 || port > 65535) {
       throw ArgumentError('HYFENS_PORT must be between 1 and 65535');
     }
@@ -480,6 +484,7 @@ final class ControlPlaneConfig {
       allowInsecureAuth: allowInsecureAuth,
       runtimeAcceptanceEnvironmentIds: runtimeAcceptanceEnvironmentIds,
       discovery: discovery,
+      cloudOnboarding: cloudOnboarding,
     );
   }
 

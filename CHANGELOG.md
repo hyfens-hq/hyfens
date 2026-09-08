@@ -6,6 +6,19 @@ not select a version or publish software.
 
 ## [Unreleased]
 
+### Added
+
+- Added an explicit managed Cloud signup and email-verification contract that
+  creates a customer-owned organization and owner session without changing
+  the legacy self-hosted client-access registration flow.
+
+### Changed
+
+- Added managed Cloud onboarding handoff guidance for creating the first
+  application and environment and connecting the public CLI. Managed Cloud
+  deployments must enable the verification delivery configuration; signup is
+  fail-closed when it is unavailable.
+
 ## [0.1.10] - 2026-09-08
 
 ### Added
@@ -201,7 +214,7 @@ covers curl and direct archive installation.
   platform-signing and notarization gates, and initial installer/package/image
   distribution limitations documented in its release review.
 
-[Unreleased]: https://github.com/hyfens-hq/hyfens/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/hyfens-hq/hyfens/compare/v0.1.10...HEAD
 [0.1.9]: https://github.com/hyfens-hq/hyfens/releases/tag/v0.1.9
 [0.1.8]: https://github.com/hyfens-hq/hyfens/releases/tag/v0.1.8
 [0.1.7]: https://github.com/hyfens-hq/hyfens/releases/tag/v0.1.7

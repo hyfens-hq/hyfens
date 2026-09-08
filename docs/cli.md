@@ -129,6 +129,10 @@ version is negotiated through discovery (`v1`). The endpoint is not a promise
 of public signup, hosted release downloads, production availability, or a
 service-level guarantee.
 
+New managed Cloud users begin at the Customer Workspace signup page, verify
+their account, and then use the resulting organization/application/environment
+scope with `hyfens login` and `hyfens init`. See [Managed Cloud onboarding](product/cloud-onboarding.md).
+
 Choose a self-hosted control plane explicitly:
 
 ```bash

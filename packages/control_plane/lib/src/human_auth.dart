@@ -1542,6 +1542,17 @@ final class HumanAuthService {
     return _issueSessionForUser(user);
   });
 
+  /// Hashes a password for a verified managed-Cloud registration. The caller
+  /// receives only the Argon2id record and cannot choose the salt or hashing
+  /// parameters. This remains an internal service seam; HTTP callers never
+  /// receive a password hash.
+  Future<String> hashPasswordForRegistration(String password) =>
+      _serialized(() async {
+        await _ensureInitialized();
+        _validatePassword(password);
+        return _hashPassword(password);
+      });
+
   /// Returns an account record for trusted service-layer invitation flows.
   /// Callers receive the password hash only inside the control-plane process;
   /// HTTP projections never expose this method or the record directly.
@@ -3073,6 +3084,9 @@ final class HumanAuthService {
     }
     return normalized;
   }
+
+  static String userIdForEmail(String email) =>
+      'usr_${sha256Hex(utf8.encode(normalizeHumanEmail(email))).substring(0, 32)}';
 
   static void _validatePassword(String password) {
     if (password.length < 12 || password.length > 1024) {

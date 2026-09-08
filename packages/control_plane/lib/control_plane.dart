@@ -6,6 +6,7 @@ export 'src/audit.dart';
 export 'src/audit_export_signing.dart';
 export 'src/auth.dart' show CredentialService;
 export 'src/billing.dart';
+export 'src/cloud_onboarding.dart';
 export 'src/config.dart';
 export 'src/demo_seed.dart';
 export 'src/domain.dart';

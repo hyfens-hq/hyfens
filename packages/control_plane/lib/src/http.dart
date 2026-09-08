@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'artifact_delivery_admission.dart';
+import 'cloud_onboarding.dart';
 import 'config.dart';
 import 'domain.dart';
 import 'encoding.dart';
@@ -225,12 +226,23 @@ final class ControlPlaneHttpServer {
     this.auditRetentionDays = 365,
     this.allowInsecureAuth = false,
     this.runtimeReceiptSettlement,
+    CloudOnboardingConfig? cloudOnboarding,
+    CloudSignupVerificationDelivery? cloudSignupDelivery,
   }) : limits = limits,
        discovery =
            discovery ??
            ControlPlaneDiscoveryConfig.fromEnvironment(Platform.environment),
        _operatorOverview = OperatorOverviewProjection(service),
        _publicOnboarding = PublicOnboardingService(store: service.store),
+       _cloudOnboarding = cloudOnboarding?.enabled == true
+           ? CloudOnboardingService(
+               controlPlane: service,
+               config: cloudOnboarding!,
+               delivery:
+                   cloudSignupDelivery ??
+                   const UnavailableCloudSignupVerificationDelivery(),
+             )
+           : null,
        _platformConsole = PlatformConsoleProjection(
          service.store,
          platformMfaRequired:
@@ -252,6 +264,7 @@ final class ControlPlaneHttpServer {
   final ReconciliationPeriodicRunner? periodicRunner;
   final OperatorOverviewProjection _operatorOverview;
   final PublicOnboardingService _publicOnboarding;
+  final CloudOnboardingService? _cloudOnboarding;
   final PlatformConsoleProjection _platformConsole;
   final PlatformCommercialProjection _platformCommercial;
   final PlatformMetricsProjection _platformMetrics;
@@ -495,6 +508,20 @@ final class ControlPlaneHttpServer {
       }
       if (request.method == 'POST' && apiPath == '/auth/device/approve') {
         await _authDeviceApprove(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'cloud', 'signup'])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _cloudSignup(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'cloud', 'verify'])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _cloudVerify(request, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -3833,6 +3860,67 @@ final class ControlPlaneHttpServer {
     });
   }
 
+  Future<void> _cloudSignup(HttpRequest request, String requestId) async {
+    final onboarding = _cloudOnboarding;
+    if (onboarding == null) {
+      throw const ControlPlaneException(
+        'CLOUD_SIGNUP_UNAVAILABLE',
+        'Managed Cloud signup is not enabled',
+        statusCode: 503,
+      );
+    }
+    final body = await _publicJsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'email',
+      'password',
+      'organization_name',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Managed Cloud signup fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final result = await onboarding.beginSignup(
+      email: _string(body, 'email'),
+      password: _string(body, 'password'),
+      organizationName: _string(body, 'organization_name'),
+    );
+    await _json(request.response, HttpStatus.accepted, <String, Object?>{
+      ...result.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _cloudVerify(HttpRequest request, String requestId) async {
+    final onboarding = _cloudOnboarding;
+    if (onboarding == null) {
+      throw const ControlPlaneException(
+        'CLOUD_SIGNUP_UNAVAILABLE',
+        'Managed Cloud signup is not enabled',
+        statusCode: 503,
+      );
+    }
+    final body = await _publicJsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'email', 'token'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Managed Cloud verification fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final result = await onboarding.verifySignup(
+      email: _string(body, 'email'),
+      token: _string(body, 'token'),
+    );
+    await _json(request.response, HttpStatus.ok, <String, Object?>{
+      ...result.login.toJson(),
+      'organization_id': result.organizationId,
+      'onboarding_status': result.onboardingStatus,
+      'request_id': requestId,
+    });
+  }
+
   Future<void> _publicWaitlist(HttpRequest request, String requestId) async {
     final body = await _publicSubmissionBody(request);
     await _publicOnboarding.submitWaitlist(
@@ -4054,7 +4142,7 @@ final class ControlPlaneHttpServer {
       ..set('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, OPTIONS')
       ..set(
         'Access-Control-Allow-Headers',
-        'Authorization, Content-Type, X-Request-Id',
+        'Authorization, Content-Type, Idempotency-Key, X-Request-Id',
       )
       ..set('Access-Control-Expose-Headers', 'X-Request-Id')
       ..set('Vary', 'Origin');

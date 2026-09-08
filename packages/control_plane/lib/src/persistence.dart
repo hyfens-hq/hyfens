@@ -53,6 +53,49 @@ final class RuntimeReceiptCommitResult {
   final bool createdUsage;
 }
 
+/// Result of the one atomic managed-Cloud signup verification operation.
+///
+/// Verification creates the organization, owner account, onboarding marker,
+/// and verified signup record together. A repeated verification returns
+/// [created] false after comparing the existing records instead of creating a
+/// second organization or account.
+final class ManagedCloudOnboardingCommitResult {
+  const ManagedCloudOnboardingCommitResult({required this.created});
+
+  final bool created;
+}
+
+/// Persistence seam for managed Cloud self-service onboarding. It is kept
+/// separate from [ControlPlaneStore] so existing store implementations and
+/// test doubles do not acquire a new required capability merely by upgrading
+/// the public control-plane package.
+abstract interface class ManagedCloudOnboardingStore {
+  Future<Map<String, Object?>?> readJson(String collection, String id);
+
+  Future<void> createJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  );
+
+  Future<void> replaceJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  );
+
+  Future<void> appendAudit(String id, Map<String, Object?> value);
+
+  Future<ManagedCloudOnboardingCommitResult> commitManagedCloudOnboarding({
+    required String signupId,
+    required Map<String, Object?> expectedSignup,
+    required Map<String, Object?> verifiedSignup,
+    required Map<String, Object?> organization,
+    required Map<String, Object?> user,
+    required Map<String, Object?> onboarding,
+  });
+}
+
 /// Durable storage for the runtime trust boundary. Implementations must keep
 /// registration records immutable and settle a receipt plus its canonical
 /// usage event atomically.
@@ -219,7 +262,8 @@ final class FileControlPlaneStore
         ControlPlaneStore,
         ArtifactInventory,
         ConditionalJsonStore,
-        RuntimeReceiptStore {
+        RuntimeReceiptStore,
+        ManagedCloudOnboardingStore {
   FileControlPlaneStore(this.root);
 
   final Directory root;
@@ -258,6 +302,8 @@ final class FileControlPlaneStore
       'runtime_rejections',
       'runtime_receipts',
       'runtime_usage_events',
+      'cloud_signups',
+      'cloud_onboarding',
     ]) {
       await Directory(p.join(root.path, name)).create(recursive: true);
     }
@@ -340,6 +386,62 @@ final class FileControlPlaneStore
   @override
   Future<void> createRuntimeRejection(String id, Map<String, Object?> value) =>
       _metadataOperation(() => createJson('runtime_rejections', id, value));
+
+  @override
+  Future<ManagedCloudOnboardingCommitResult> commitManagedCloudOnboarding({
+    required String signupId,
+    required Map<String, Object?> expectedSignup,
+    required Map<String, Object?> verifiedSignup,
+    required Map<String, Object?> organization,
+    required Map<String, Object?> user,
+    required Map<String, Object?> onboarding,
+  }) => _metadataOperation(() async {
+    final current = await readJson('cloud_signups', signupId);
+    if (current == null) {
+      throw const StorageConflict('Cloud signup does not exist');
+    }
+    if (canonicalJson(current) == canonicalJson(verifiedSignup)) {
+      await _verifyManagedCloudRecord('organizations', organization);
+      await _verifyManagedCloudRecord('users', user);
+      await _verifyManagedCloudRecord('cloud_onboarding', onboarding);
+      return const ManagedCloudOnboardingCommitResult(created: false);
+    }
+    if (canonicalJson(current) != canonicalJson(expectedSignup)) {
+      throw const StorageConflict('Cloud signup changed during verification');
+    }
+    await _createManagedCloudRecord('organizations', organization);
+    await _createManagedCloudRecord('users', user);
+    await _createManagedCloudRecord('cloud_onboarding', onboarding);
+    await replaceJson('cloud_signups', signupId, verifiedSignup);
+    return const ManagedCloudOnboardingCommitResult(created: true);
+  });
+
+  Future<void> _createManagedCloudRecord(
+    String collection,
+    Map<String, Object?> value,
+  ) async {
+    final id = value['id'];
+    if (id is! String) {
+      throw const StorageConflict('Managed Cloud record has no ID');
+    }
+    await createJson(collection, id, value);
+  }
+
+  Future<void> _verifyManagedCloudRecord(
+    String collection,
+    Map<String, Object?> value,
+  ) async {
+    final id = value['id'];
+    if (id is! String) {
+      throw const StorageConflict('Managed Cloud record has no ID');
+    }
+    final current = await readJson(collection, id);
+    if (current == null || canonicalJson(current) != canonicalJson(value)) {
+      throw const StorageConflict(
+        'Managed Cloud onboarding record is incomplete',
+      );
+    }
+  }
 
   @override
   Future<Map<String, Object?>?> readRuntimeReceipt(String id) =>

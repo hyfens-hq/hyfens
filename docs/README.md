@@ -36,6 +36,8 @@ outside the public documentation tree.
 
 - [Customer Workspace](product/customer-workspace.md) — the tenant-scoped
   developer workspace at `app.hyfens.com` or a self-hosted origin.
+- [Managed Cloud onboarding](product/cloud-onboarding.md) — the separate
+  signup, organization, Developer project, and CLI handoff journey.
 - [Platform Console](product/platform-console.md) — the private Cloud-owned
   privileged Hyfens operator contract at `platform.hyfens.com`.
 - [Cloud and self-hosted boundary](HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md) — what
