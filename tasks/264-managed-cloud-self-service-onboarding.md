@@ -93,10 +93,15 @@ Hyfens managed Cloud product coordinator.
   secret-free project configuration.
 - [x] Add focused security, tenant, browser, API, and regression tests and
   documentation.
+- [x] Add the minimum fixed-argument private Cloud API deployment path with a
+  loopback-only service boundary, protected configuration checks, migration
+  execution, health/readiness verification, and runtime rollback handling.
 - [-] Validate staging/preflight and perform managed edge cutover only when the
-  target is deployable and the approved deployment path is available. The live
-  host has no deployed private Cloud API target on port 18192, and the current
-  edge still routes app.hyfens.com to the OSS workspace.
+  target is deployable and the approved deployment path is available. The
+  reviewed private branch now contains the deployment path, but the live host
+  has not received its one-time privileged installer/configuration; it still
+  has no deployed private Cloud API target on port 18192, and the current edge
+  still routes app.hyfens.com to the OSS workspace.
 - [-] Run the prerequisite onboarding acceptance only; record readiness to
   rerun Task 263, clean task-owned state, and commit/push intentional changes.
   This cannot begin until the live API/workspace and approved verification
@@ -117,6 +122,13 @@ Completed local validation:
   registration, customer authorization, entitlement, and tenant-boundary
   tests passed;
 - final `git diff --check` passed in both isolated worktrees.
+- the private deployment Compose model passed `docker compose config --quiet`,
+  both fixed deployment scripts passed `sh -n`, and an ephemeral host-layout
+  build compiled the Cloud API, migration, seed, and reconciliation binaries
+  into the reviewed image successfully;
+- repository inspection found no existing approved transactional-email
+  provider/adapter or production delivery secret; no provider was invented and
+  no capture/bypass transport was enabled.
 
 Live/preflight evidence:
 
@@ -151,12 +163,13 @@ rerun Task 263 from its first blocked gate.
 
 ## Blockers
 
-`CLOUD_DEPLOYMENT_GATE`: the live host has no deployed private Cloud API
-service or 18192 listener, and the installed public edge still points
-app.hyfens.com at the OSS dashboard. The available NOPASSWD deployment
-wrappers cover the public control plane, private web, and edge, but not the
-private Cloud API; protected Cloud API configuration could not be established
-through the available deployment surface.
+`CLOUD_DEPLOYMENT_GATE`: the reviewed private branch now provides a fixed
+Cloud API deployment wrapper and one-time installer, but the live host has no
+installed API wrapper, protected Cloud API environment, service, or 18192
+listener. The available NOPASSWD deployment allowlist still covers only the
+public control plane, private web, and edge, so the new root setup cannot be
+completed through the currently available deployment surface. The installed
+public edge still points app.hyfens.com at the OSS dashboard.
 
 `IDENTITY_EMAIL_PROVIDER_GATE`: the live public control plane is still the
 pre-Task 264 build and no approved production transactional-email endpoint and
@@ -167,12 +180,13 @@ browser bypass would violate the production verification contract.
 
 The managed signup contract, verified owner onboarding, idempotent application
 and environment setup, entitlement-checked private resource writes, Customer
-Workspace handoff, marketing CTA, documentation, and focused tests are
-implemented and locally validated in isolated public/private worktrees. The
-live product journey remains blocked before customer creation by the missing
-private Cloud API deployment and approved verification-email provisioning.
-No live edge cutover, disposable customer, manual organization, operator token,
-SQL mutation, or Task 263 rerun was performed.
+Workspace handoff, marketing CTA, documentation, focused tests, and a fixed
+private Cloud API deployment path are implemented and locally validated in
+isolated public/private worktrees. The live product journey remains blocked
+before customer creation by the unprovisioned privileged deployment target and
+approved verification-email delivery. No live edge cutover, disposable
+customer, manual organization, operator token, SQL mutation, or Task 263
+rerun was performed.
 
 ## References
 
@@ -196,6 +210,11 @@ SQL mutation, or Task 263 rerun was performed.
   configuration. Live probes showed the host is still pre-Task 264 with no
   private Cloud API target and no approved production email delivery; recorded
   bounded deployment/email gates and did not rerun Task 263.
+- 2026-09-08 — Added the reviewed private Cloud API deployment Compose model,
+  fixed no-argument root wrapper, one-time sudo installer, and rollback-aware
+  health/migration procedure. Local image build and script validation passed;
+  host installation remains blocked by missing protected configuration and the
+  unavailable privileged deployment setup. No live cutover or Task 263 rerun.
 
 ## Acceptance Matrix
 
