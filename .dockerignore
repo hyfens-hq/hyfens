@@ -1,7 +1,8 @@
-# The public image builds only need the checked-in dashboard, control-plane,
-# patch-format, and license/notice files. Keeping deploy/aws, device builds,
-# Flutter caches, and evidence artifacts out of the context prevents private
-# deployment material from entering a build context.
+# The public control-plane image needs only its checked-in control-plane
+# package and the local packages it resolves through path dependencies, plus
+# license/notice files. Keeping deployment, device-build, and evidence trees
+# out of the context prevents unrelated material from entering the image
+# build.
 *
 !LICENSE
 !THIRD_PARTY_NOTICES.md
@@ -10,5 +11,22 @@
 !packages/
 !packages/patch_format/
 !packages/patch_format/**
+!packages/runtime/
+!packages/runtime/**
 !packages/control_plane/
 !packages/control_plane/**
+!experiments/
+!experiments/instrumentation/
+!experiments/instrumentation/**
+!experiments/patch_loading/
+!experiments/patch_loading/**
+
+# Keep generated Dart/build evidence out of the context even when a required
+# source tree contains it locally.
+**/.dart_tool/
+**/.dart_tool/**
+**/build/
+**/build/**
+**/coverage/
+**/coverage/**
+**/*.log
