@@ -178,12 +178,33 @@ public control plane, private web, and edge, so the new root setup cannot be
 completed through the currently available deployment surface. The installed
 public edge still points app.hyfens.com at the OSS dashboard.
 
+The exact privilege boundary is now verified: the `hyfen` deployment account
+can write `/home/hyfen/p2-deploy-stage` and access Docker, but cannot write
+`/etc/hyfens`, `/usr/local/sbin`, or `/opt/hyfens`; the non-interactive sudo
+allowlist has no Cloud API entry. The one-time root bootstrap is therefore to
+install protected `/etc/hyfens/cloud-api.env` with the required non-secret
+names and billing flags, stage the reviewed Cloud API tree, and run
+`/home/hyfen/p2-deploy-stage/cloud-api/install-cloud-api-deploy-access.sh`.
+That installer adds only the fixed root-owned wrapper and its exact sudo rule;
+the deployment user can then invoke the wrapper without general root shell
+access. The private web also needs its protected runtime environment and the
+reviewed staging layout before its existing restricted deployment path can be
+used.
+
 `IDENTITY_EMAIL_PROVIDER_GATE`: the public control plane is now the reviewed
 Task 264 deployment, and `/v1/cloud/signup` reaches its handler, but protected
 runtime configuration keeps managed signup fail-closed because no approved
 production transactional-email endpoint and secret are available. Enabling
 signup with a local capture transport or a browser bypass would violate the
 production verification contract.
+
+The public DNS probe found `hyfens.com` pointing its MX to `smtp.google.com`
+but no SPF or DMARC TXT record and no approved authenticated sender
+credentials. This does not establish a production SMTP path. An operator
+must select an approved sender/provider, complete any required domain
+authentication, and provision the protected HTTPS delivery endpoint/token
+expected by the reviewed signup contract. No provider or verification bypass
+was invented.
 
 ## Outcome
 
@@ -234,6 +255,13 @@ SQL mutation, or Task 263 rerun was performed.
   not installed, app.hyfens.com still serves the legacy OSS workspace, and no
   approved production email transport is configured; no cutover or Task 263
   rerun was attempted.
+- 2026-09-08 — Re-probed the deployment boundary: the public route remained
+  healthy-but-disabled, app.hyfens.com remained on the OSS workspace, and the
+  host still had no 18192 listener or Cloud API wrapper. Confirmed that the
+  deployment user can stage files and use Docker but cannot perform the
+  required protected root setup. Public DNS exposed only a Google MX record,
+  not an approved authenticated transactional-email configuration. No customer,
+  cutover, or Task 263 rerun was attempted.
 
 ## Acceptance Matrix
 
