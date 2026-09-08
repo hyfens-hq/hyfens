@@ -134,13 +134,19 @@ Live/preflight evidence:
 
 - `https://api.hyfens.com/healthz`, `/readyz`, and `/.well-known/hyfens`
   returned HTTP 200;
-- `POST https://api.hyfens.com/v1/cloud/signup` returned HTTP 404
-  `NOT_FOUND`, proving the live public control plane is still the pre-Task 264
-  deployment;
+- before the public deployment, `POST https://api.hyfens.com/v1/cloud/signup`
+  returned HTTP 404 `NOT_FOUND`, proving the live public control plane was
+  still the pre-Task 264 deployment at that checkpoint;
+- after deploying public commit `127cef5`, the same route returns HTTP 503
+  `CLOUD_SIGNUP_UNAVAILABLE`, proving the reviewed route is live while signup
+  remains deliberately fail-closed without approved verification-email
+  delivery configuration;
 - `https://app.hyfens.com/`, `/signup`, and `/workspace` returned HTTP 200 but
   served the legacy OSS Customer/Instance Workspace;
-- the deployment host currently has control plane 18082, OSS dashboard 18083,
-  and private web 18084, but no private Cloud API container/listener on 18192;
+- `https://api.hyfens.com/healthz` and `/readyz` returned HTTP 200 after the
+  public deployment; the healthy host still has control plane 18082, OSS
+  dashboard 18083, and private web 18084, but no private Cloud API
+  container/listener on 18192;
 - the current live edge still routes app.hyfens.com to 18083. No customer was
   created and Task 263 was not rerun.
 
@@ -156,10 +162,11 @@ provider payloads, or infrastructure secrets.
 ## Next Action
 
 Provision the approved transactional-email endpoint and a protected
-deployment target/configuration for the private Cloud API, stage the reviewed
-public/private commits through the established deployment path, and validate
-both targets before edge cutover. Only then create a disposable customer and
-rerun Task 263 from its first blocked gate.
+deployment target/configuration for the private Cloud API, then stage the
+reviewed private source through the established deployment path. Deploy and
+validate the private API and Customer Workspace before edge cutover. Only
+then create a disposable customer and rerun Task 263 from its first blocked
+gate.
 
 ## Blockers
 
@@ -171,10 +178,12 @@ public control plane, private web, and edge, so the new root setup cannot be
 completed through the currently available deployment surface. The installed
 public edge still points app.hyfens.com at the OSS dashboard.
 
-`IDENTITY_EMAIL_PROVIDER_GATE`: the live public control plane is still the
-pre-Task 264 build and no approved production transactional-email endpoint and
-secret are available. Enabling signup with a local capture transport or a
-browser bypass would violate the production verification contract.
+`IDENTITY_EMAIL_PROVIDER_GATE`: the public control plane is now the reviewed
+Task 264 deployment, and `/v1/cloud/signup` reaches its handler, but protected
+runtime configuration keeps managed signup fail-closed because no approved
+production transactional-email endpoint and secret are available. Enabling
+signup with a local capture transport or a browser bypass would violate the
+production verification contract.
 
 ## Outcome
 
@@ -182,11 +191,13 @@ The managed signup contract, verified owner onboarding, idempotent application
 and environment setup, entitlement-checked private resource writes, Customer
 Workspace handoff, marketing CTA, documentation, focused tests, and a fixed
 private Cloud API deployment path are implemented and locally validated in
-isolated public/private worktrees. The live product journey remains blocked
-before customer creation by the unprovisioned privileged deployment target and
-approved verification-email delivery. No live edge cutover, disposable
-customer, manual organization, operator token, SQL mutation, or Task 263
-rerun was performed.
+isolated public/private worktrees. Public commit `127cef5` is integrated on
+`origin/main` and its control-plane deployment is healthy; private commit
+`4ef9eeb` is pushed to the reviewed/canonical private deployment branch. The
+live product journey remains blocked before customer creation by the missing
+privileged private API target and approved verification-email delivery. No
+live edge cutover, disposable customer, manual organization, operator token,
+SQL mutation, or Task 263 rerun was performed.
 
 ## References
 
@@ -215,6 +226,14 @@ rerun was performed.
   health/migration procedure. Local image build and script validation passed;
   host installation remains blocked by missing protected configuration and the
   unavailable privileged deployment setup. No live cutover or Task 263 rerun.
+- 2026-09-08 — Integrated public commit `127cef5` on `origin/main` and
+  deployed the reviewed control-plane packages through the existing public
+  deployment wrapper. Health/readiness remained HTTP 200 and the Cloud signup
+  route changed from the historical 404 to the intended fail-closed 503
+  `CLOUD_SIGNUP_UNAVAILABLE`. The private API wrapper/configuration is still
+  not installed, app.hyfens.com still serves the legacy OSS workspace, and no
+  approved production email transport is configured; no cutover or Task 263
+  rerun was attempted.
 
 ## Acceptance Matrix
 
