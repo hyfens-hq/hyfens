@@ -1,6 +1,6 @@
 # Task 274 — Transactional Email Runtime Corrections
 
-Status: `[-] Blocked`
+Status: `[x] Completed` — Hyfens-owned behavior verified; Keplars telemetry acceptance remains externally blocked
 
 ## Goal
 
@@ -55,15 +55,46 @@ Hyfens engineering
 
 ## Next Action
 
-Implement the smallest corrections, validate both branches, and re-run the managed acceptance that is possible without inventing provider evidence.
+Wait for Keplars to provide a supported send-response/webhook identifier mapping, then run a small provider-integration follow-up. Do not add a Hyfens heuristic workaround.
 
 ## Blockers
 
-The real Task 273 callback used a provider `email_id` that did not match the `msg_...` identifier returned by the live send response. Official Keplars documentation found so far documents a nested `data.id` send response and `email_id` callback field, but no metadata echo or mapping mechanism. This remains a blocker until a supported live correlation mechanism is confirmed. The implementation deliberately leaves the delivery at `accepted` rather than guessing from recipient, subject, timestamp, or message order.
+`KEPLARS_CALLBACK_CORRELATION_EXTERNAL_BLOCKER`
+
+The live send API returns/stores a `msg_...` identifier while the natural
+callback reports a different `email_id`. The documented status lookup using
+the `msg_...` value does not resolve it, and no supported metadata echo or
+identifier mapping mechanism has been identified. A synthetic callback with a
+known Hyfens identifier proves callback processing works; real callback
+signature verification works; and the actual email reaches the mailbox.
+Natural delivery-state correlation remains externally blocked while Keplars
+investigates. This is not classified as a Hyfens application defect.
+
+Hyfens preserves exact-ID correlation. A valid unmatched callback is safely
+ignored for business state and recorded as a sanitized
+`notification.provider_callback_unmatched` audit event. Provider acceptance
+remains `accepted`; it is never promoted to `delivered` without correlated
+provider evidence.
 
 ## Outcome
 
-Code and focused acceptance are complete, but the required natural Keplars callback acceptance remains blocked by the unresolved provider identifier mapping. The dedicated reset journey is locally rendered and build-verified; managed mailbox/mobile acceptance remains external.
+Application: `CODE_VERIFIED`
+
+Customer flow: `CUSTOMER_FLOW_VERIFIED` for the Hyfens-owned auth and
+notification paths covered by focused tests and the previously recorded
+approved-mailbox acceptance. The dedicated reset route, one-time token
+consumption, session revocation, password-changed notification seam, and
+human-readable responsive rendering are verified. A live mobile-client
+mailbox inspection was not available in this local session.
+
+Provider telemetry: `PROVIDER_TELEMETRY_EXTERNAL_BLOCKED`
+
+Razorpay runtime: `RAZORPAY_TEST_ENVIRONMENT_BLOCKED` (unchanged from Task
+273; no new provider evidence was fabricated).
+
+Customer email delivery does not depend on a `delivered` callback. Billing,
+account, and security operations use authoritative Hyfens state and can send
+while a provider delivery remains `accepted`.
 
 ## References
 
@@ -77,3 +108,4 @@ Code and focused acceptance are complete, but the required natural Keplars callb
 - 2026-09-09: Created as the scoped follow-up to the Task 273 runtime blocker and email UX findings.
 - 2026-09-09: Added documented Keplars response-shape support, exact-ID-only callback tests, shared customer date formatting, reset route/CTA, responsive summaries, canonical email mark, and Cloud conflict resolution. Focused checks passed; full control-plane suite retained unrelated pre-existing failures. Verdict remains `BLOCKED` because a natural Keplars callback still cannot correlate to the live send response.
 - 2026-09-09: Final Cloud merge correction committed as `b255aae`; current `apps/web` topology, provider boundary, typecheck, lint, build, and provider tests are clean. Both PRs remain open and unmerged. Natural Keplars callback correlation is still the acceptance blocker.
+- 2026-09-10: Keplars confirmed as an external investigation path. Added sanitized audit evidence for valid unmatched callbacks without changing exact-ID behavior or promoting `accepted` to `delivered`; corrected the legacy direct recovery delivery to use the dedicated reset route and hash one-time tokens in provider idempotency keys. Focused notification, onboarding/recovery, deletion, formatting, and Cloud validation remain clean. Merge recommendation is `READY_WITH_DOCUMENTED_EXTERNAL_ACCEPTANCE` while the provider correlation blocker remains open.

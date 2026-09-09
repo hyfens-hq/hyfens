@@ -1429,6 +1429,20 @@ final class NotificationService implements HumanAuthNotificationSink {
   final Duration processingLease;
   Future<void> _dispatchTail = Future<void>.value();
 
+  static Uri _configuredOrigin(
+    List<Uri> origins, {
+    required String host,
+    required int fallbackIndex,
+    required Uri fallback,
+  }) {
+    for (final origin in origins) {
+      if (origin.host == host) return origin;
+    }
+    if (fallbackIndex < origins.length) return origins[fallbackIndex];
+    if (origins.isNotEmpty) return origins.first;
+    return fallback;
+  }
+
   static NotificationService? fromEnvironment({
     required ControlPlaneStore store,
     required Map<String, String> values,
@@ -1442,13 +1456,17 @@ final class NotificationService implements HumanAuthNotificationSink {
         .where((item) => item.scheme == 'https' && item.host.isNotEmpty)
         .map((item) => item.replace(path: '', query: null, fragment: null))
         .toList(growable: false);
-    final dashboard = origins.firstWhere(
-      (origin) => origin.host == 'app.hyfens.com',
-      orElse: () => Uri.parse('https://app.hyfens.com'),
+    final dashboard = _configuredOrigin(
+      origins,
+      host: 'app.hyfens.com',
+      fallbackIndex: 0,
+      fallback: Uri.parse('https://app.hyfens.com'),
     );
-    final marketing = origins.firstWhere(
-      (origin) => origin.host == 'hyfens.com',
-      orElse: () => Uri.parse('https://hyfens.com'),
+    final marketing = _configuredOrigin(
+      origins,
+      host: 'hyfens.com',
+      fallbackIndex: 1,
+      fallback: Uri.parse('https://hyfens.com'),
     );
     return NotificationService(
       store: store,
@@ -1472,7 +1490,11 @@ final class NotificationService implements HumanAuthNotificationSink {
 
   Future<String> enqueue(NotificationEvent event) async {
     final definition = NotificationCatalog.forKey(event.key);
-    if (event.sensitive && payloadProtector == null) {
+    final requiresProtectedPayload =
+        event.sensitive ||
+        definition.requiredVariables.contains('token') ||
+        event.key.startsWith('account.deletion');
+    if (requiresProtectedPayload && payloadProtector == null) {
       throw StateError(
         'Sensitive notification ${definition.key} requires a protected payload key',
       );
@@ -1513,8 +1535,8 @@ final class NotificationService implements HumanAuthNotificationSink {
       'providerEventId': event.providerEventId,
       'occurredAt': event.occurredAt.toUtc().toIso8601String(),
       'createdAt': _clock().toUtc().toIso8601String(),
-      'sensitive': event.sensitive,
-      if (event.sensitive)
+      'sensitive': requiresProtectedPayload,
+      if (requiresProtectedPayload)
         'variablesCiphertext': await payloadProtector!.seal(event.variables)
       else
         'variables': event.variables,
@@ -2017,9 +2039,12 @@ final class NotificationService implements HumanAuthNotificationSink {
       throw const FormatException('Invalid notification provider event');
     }
     final rows = await store.listJson(notificationDeliveryCollection);
-    for (final row in rows.where(
+    final matchingRows = rows.where(
       (item) => item['providerMessageId'] == providerMessageId,
-    )) {
+    );
+    var matched = false;
+    for (final row in matchingRows) {
+      matched = true;
       final state = _providerDeliveryState(
         providerEvent,
         row['state'] as String?,
@@ -2059,6 +2084,61 @@ final class NotificationService implements HumanAuthNotificationSink {
         },
       );
     }
+    if (!matched) {
+      await _auditUnmatchedProviderCallback(
+        providerMessageId: providerMessageId,
+        providerEvent: providerEvent,
+        providerEventId: decoded['id'],
+      );
+    }
+  }
+
+  /// Records a valid callback that could not be correlated without exposing
+  /// provider identifiers, recipients, subjects, or raw callback payloads.
+  /// An unmatched callback is deliberately telemetry-only: it never mutates a
+  /// delivery and never attempts recipient/subject/time matching.
+  Future<void> _auditUnmatchedProviderCallback({
+    required String providerMessageId,
+    required String providerEvent,
+    required Object? providerEventId,
+  }) async {
+    final providerMessageIdHash = sha256Hex(utf8.encode(providerMessageId));
+    final providerEventIdHash = providerEventId == null
+        ? null
+        : sha256Hex(utf8.encode(providerEventId.toString()));
+    final eventHash = sha256Hex(utf8.encode(providerEvent));
+    final resourceId =
+        'keplars:$providerMessageIdHash:${eventHash.substring(0, 16)}';
+    final id =
+        'aud_notification_${sha256Hex(utf8.encode('system:notification.provider_callback_unmatched:$resourceId')).substring(0, 32)}';
+    final record = <String, Object?>{
+      'id': id,
+      'requestId': 'keplars_callback:$providerMessageIdHash',
+      'organizationId': 'system',
+      'actorId': 'keplars_webhook',
+      'action': 'notification.provider_callback_unmatched',
+      'resourceType': 'notification_provider_callback',
+      'resourceId': resourceId,
+      'result': 'IGNORED',
+      'metadata': <String, Object?>{
+        'provider': 'keplars',
+        'correlation_status': 'unmatched',
+        'provider_message_id_hash': providerMessageIdHash,
+        'provider_event': providerEvent.substring(
+          0,
+          providerEvent.length > 120 ? 120 : providerEvent.length,
+        ),
+        if (providerEventIdHash != null)
+          'provider_event_id_hash': providerEventIdHash,
+      },
+      'createdAt': _clock().toUtc().toIso8601String(),
+    };
+    try {
+      await store.appendAudit(id, record);
+    } on StorageConflict {
+      final existing = await store.readJson('audit', id);
+      if (existing == null) rethrow;
+    }
   }
 
   static NotificationDeliveryState _providerDeliveryState(
@@ -2079,14 +2159,14 @@ final class NotificationService implements HumanAuthNotificationSink {
       'cancelled' || 'email.cancelled' => NotificationDeliveryState.cancelled,
       _ => NotificationDeliveryState.accepted,
     };
-    // Provider callbacks can arrive out of order. A late queued/sent callback
-    // must not regress a terminal delivery result.
-    if (next == NotificationDeliveryState.accepted &&
-        (existing == NotificationDeliveryState.delivered.wireValue ||
-            existing == NotificationDeliveryState.bounced.wireValue ||
-            existing == NotificationDeliveryState.complained.wireValue ||
-            existing == NotificationDeliveryState.hardFailed.wireValue ||
-            existing == NotificationDeliveryState.cancelled.wireValue)) {
+    // Provider callbacks can arrive out of order. Once a terminal result is
+    // recorded, a later callback must not replace it with another terminal
+    // result or a weaker queued/accepted state.
+    if (existing == NotificationDeliveryState.delivered.wireValue ||
+        existing == NotificationDeliveryState.bounced.wireValue ||
+        existing == NotificationDeliveryState.complained.wireValue ||
+        existing == NotificationDeliveryState.hardFailed.wireValue ||
+        existing == NotificationDeliveryState.cancelled.wireValue) {
       return NotificationDeliveryState.values.firstWhere(
         (value) => value.wireValue == existing,
       );

@@ -201,7 +201,10 @@ Keplars callbacks may be posted to the authenticated control-plane route
 `KEPLARS_WEBHOOK_SECRET` is configured. Callback states are normalized to
 `accepted`, `delivered`, `bounced`, `complained`, `hard_failed`, or
 `cancelled` and are audited without allowing out-of-order callbacks to regress
-a terminal state.
+a terminal state. A valid callback whose exact provider identifier matches no
+delivery is recorded as a sanitized
+`notification.provider_callback_unmatched` audit event and ignored for
+business state; it does not fail the webhook or trigger heuristic matching.
 
 ### Runtime correlation boundary
 

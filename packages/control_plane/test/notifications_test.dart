@@ -545,6 +545,51 @@ void main() {
   );
 
   test(
+    'late terminal provider callbacks cannot regress a terminal state',
+    () async {
+      await notifications.enqueue(
+        NotificationEvent(
+          key: 'billing.payment.succeeded',
+          stableKey: 'callback-terminal-order-1',
+          recipientEmails: const <String>['owner@example.com'],
+          variables: const <String, Object?>{'message': 'Captured.'},
+          occurredAt: DateTime.utc(2026, 9, 9),
+          organizationId: 'org_notifications',
+        ),
+      );
+      await notifications.dispatchPending();
+
+      Future<void> callback(String eventType) async {
+        final body = utf8.encode(
+          jsonEncode(<String, Object?>{
+            'id': 'evt_terminal_$eventType',
+            'event_type': eventType,
+            'email_id': 'mail_1',
+          }),
+        );
+        final digest = Hmac(
+          sha256,
+          utf8.encode('callback-secret'),
+        ).convert(body).toString();
+        await notifications.applyProviderDeliveryWebhook(
+          rawBody: body,
+          signature: 'sha256=$digest',
+          secret: 'callback-secret',
+        );
+      }
+
+      await callback('email.delivered');
+      await callback('email.bounced');
+      await callback('email.sent');
+
+      expect(
+        (await store.listJson(notificationDeliveryCollection)).single['state'],
+        'delivered',
+      );
+    },
+  );
+
+  test(
     'provider callbacks require the exact provider message identifier',
     () async {
       await notifications.enqueue(
@@ -587,6 +632,63 @@ void main() {
       expect(
         (await store.listJson(notificationDeliveryCollection)).single['state'],
         'accepted',
+      );
+      final unmatchedAudit = (await store.listJson('audit')).where(
+        (record) =>
+            record['action'] == 'notification.provider_callback_unmatched',
+      );
+      expect(unmatchedAudit, hasLength(1));
+      final auditJson = jsonEncode(unmatchedAudit.single);
+      expect(auditJson, isNot(contains('provider-id-for-another-message')));
+      expect(auditJson, isNot(contains('owner@example.com')));
+      expect(auditJson, isNot(contains('Payment received for Hyfens Cloud')));
+    },
+  );
+
+  test('custom web origins are used for notification action links', () {
+    final configured = NotificationService.fromEnvironment(
+      store: store,
+      values: <String, String>{
+        'KEPLARS_API_KEY': 'test-key',
+        'HYFENS_WEB_ORIGINS':
+            'https://cloud.example.test,https://www.example.test',
+      },
+    );
+
+    expect(configured, isNotNull);
+    expect(
+      configured!.renderer.dashboardOrigin,
+      Uri.parse('https://cloud.example.test'),
+    );
+    expect(
+      configured.renderer.marketingOrigin,
+      Uri.parse('https://www.example.test'),
+    );
+  });
+
+  test(
+    'token-bearing notification keys require encrypted payload storage',
+    () async {
+      final unprotected = NotificationService(
+        store: store,
+        provider: provider,
+        renderer: notifications.renderer,
+      );
+
+      await expectLater(
+        unprotected.enqueue(
+          NotificationEvent(
+            key: 'auth.password.recovery_requested',
+            stableKey: 'unprotected-recovery-1',
+            recipientEmails: const <String>['owner@example.com'],
+            variables: const <String, Object?>{
+              'token': 'hfr_sensitive_token',
+              'expires_at': '2026-09-09T12:15:00Z',
+            },
+            occurredAt: DateTime.utc(2026, 9, 9),
+          ),
+        ),
+        throwsA(isA<StateError>()),
       );
     },
   );

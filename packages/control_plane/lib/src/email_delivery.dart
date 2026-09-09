@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'encoding.dart' show sha256Hex;
 import 'human_auth.dart';
 import 'notifications.dart';
 
@@ -45,20 +47,21 @@ final class KeplarsHumanMessageDelivery
   ) {
     final apiKey = _meaningful(values['KEPLARS_API_KEY']);
     if (apiKey == null) return null;
-    final from = _meaningful(values['HYFENS_EMAIL_FROM']);
-    if (from == null) {
-      throw ArgumentError(
-        'HYFENS_EMAIL_FROM is required when KEPLARS_API_KEY is configured',
-      );
-    }
+    final from =
+        _meaningful(values['HYFENS_EMAIL_FROM']) ??
+        HyfensSenderPolicy.transactional.from;
     final origins = _origins(values['HYFENS_WEB_ORIGINS']);
-    final dashboard = origins.firstWhere(
-      (origin) => origin.host == 'app.hyfens.com',
-      orElse: () => Uri.parse('https://app.hyfens.com'),
+    final dashboard = _configuredOrigin(
+      origins,
+      host: 'app.hyfens.com',
+      fallbackIndex: 0,
+      fallback: Uri.parse('https://app.hyfens.com'),
     );
-    final marketing = origins.firstWhere(
-      (origin) => origin.host == 'hyfens.com',
-      orElse: () => Uri.parse('https://hyfens.com'),
+    final marketing = _configuredOrigin(
+      origins,
+      host: 'hyfens.com',
+      fallbackIndex: 1,
+      fallback: Uri.parse('https://hyfens.com'),
     );
     return KeplarsHumanMessageDelivery(
       apiKey: apiKey,
@@ -77,7 +80,7 @@ final class KeplarsHumanMessageDelivery
   }) => _send(
     key: 'auth.email.verification_requested',
     stableKey:
-        'verification:$email:${expiresAt.toUtc().toIso8601String()}:$token',
+        'verification:$email:${expiresAt.toUtc().toIso8601String()}:${sha256Hex(utf8.encode(token))}',
     to: email,
     variables: <String, Object?>{
       'token': token,
@@ -94,13 +97,19 @@ final class KeplarsHumanMessageDelivery
     required DateTime expiresAt,
   }) => _send(
     key: 'auth.password.recovery_requested',
-    stableKey: 'recovery:$email:${expiresAt.toUtc().toIso8601String()}:$token',
+    stableKey:
+        'recovery:$email:${expiresAt.toUtc().toIso8601String()}:${sha256Hex(utf8.encode(token))}',
     to: email,
     variables: <String, Object?>{
       'token': token,
       'expires_at': expiresAt.toUtc().toIso8601String(),
-      'action_url': _renderer.dashboardOrigin.toString(),
-      'action_label': 'Open Hyfens Cloud',
+      'action_url': _renderer.marketingOrigin
+          .replace(
+            path: '/auth/reset-password',
+            queryParameters: <String, String>{'token': token},
+          )
+          .toString(),
+      'action_label': 'Reset password',
     },
   );
 
@@ -111,7 +120,8 @@ final class KeplarsHumanMessageDelivery
     required DateTime expiresAt,
   }) => _send(
     key: 'account.deletion.requested',
-    stableKey: 'deletion:$email:${expiresAt.toUtc().toIso8601String()}:$token',
+    stableKey:
+        'deletion:$email:${expiresAt.toUtc().toIso8601String()}:${sha256Hex(utf8.encode(token))}',
     to: email,
     variables: <String, Object?>{
       'token': token,
@@ -170,6 +180,20 @@ final class KeplarsHumanMessageDelivery
   static String? _meaningful(String? value) {
     final normalized = value?.trim();
     return normalized == null || normalized.isEmpty ? null : normalized;
+  }
+
+  static Uri _configuredOrigin(
+    List<Uri> origins, {
+    required String host,
+    required int fallbackIndex,
+    required Uri fallback,
+  }) {
+    for (final origin in origins) {
+      if (origin.host == host) return origin;
+    }
+    if (fallbackIndex < origins.length) return origins[fallbackIndex];
+    if (origins.isNotEmpty) return origins.first;
+    return fallback;
   }
 
   static List<Uri> _origins(String? value) => (value ?? '')
