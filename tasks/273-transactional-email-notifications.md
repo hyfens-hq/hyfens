@@ -129,3 +129,11 @@ used.
   systemd notification worker/timer to the existing deployment package as a
   post-completion correction; managed acceptance remains separate from
   repository code verification.
+- 2026-09-09: Runtime acceptance delivered real Hyfens verification, welcome,
+  checkout-ready, and recovery messages to the approved TEST mailbox. Keplars
+  accepted the sends and reported callback delivery to the deployed endpoint;
+  a signed provider-shaped callback for a known Hyfens message reconciled to
+  `delivered` and created `notification.provider_status_updated` audit
+  evidence. Real Keplars callbacks did not correlate to the send response
+  identifier, so final provider callback reconciliation remains blocked on the
+  provider identifier contract; no live payment was used.
