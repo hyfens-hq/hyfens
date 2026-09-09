@@ -1116,7 +1116,7 @@ Future<void> _launchBrowser(Uri uri) async {
     exitCode: ToolExitCode.environment,
     code: 'A1033',
     summary: 'Unable to open the browser for Hyfens login',
-    detail: uri.toString(),
+    detail: displayControlPlaneUri(uri),
     action: 'Open the authorization URL in a browser and retry with a supported desktop environment.',
   );
 }

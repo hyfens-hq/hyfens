@@ -42,10 +42,35 @@ products use the same CLI and core protocol; Cloud does not hide baseline
 self-host functionality. Hyfens names and brand assets are governed separately
 by [TRADEMARKS.md](TRADEMARKS.md).
 
+## Dashboard surfaces
+
+The authenticated web product has two explicit surfaces over the same
+authentication, API transport, and UI system:
+
+- **Customer Workspace** — the tenant-scoped developer workspace for an
+  organization’s applications, environments, delivery records, audit, team,
+  credentials, and settings.
+- **Platform Console** — the privileged Hyfens operator surface for platform
+  metrics, the bounded organization directory, organization inspection, and
+  platform-audience audit/operations views.
+
+The intended managed hosts are `app.hyfens.com` for the Customer Workspace and
+`platform.hyfens.com` for the Platform Console. Local development exposes the
+same split as `/` and `/platform`; a self-hosted instance exposes the Customer
+Workspace on its own instance origin. DNS and production routing remain
+deployment configuration, not a requirement for the shared static bundle.
+
+The customer organization selector contains only organizations the signed-in
+user belongs to. It is not a platform-wide directory. Platform routes use an
+explicit platform audience and server-side capability checks. See the
+[dashboard separation architecture](docs/architecture/dashboard-separation.md)
+for the route and authorization contract.
+
 ## Quick start
 
 The CLI package is not published to pub.dev because it uses repository path
-dependencies. Until the first tagged GitHub Release is published, use a source
+dependencies. For normal installation use the [CLI distribution guide](docs/cli-distribution.md).
+For contributors or environments without a native release, use a source
 checkout:
 
 ```bash
@@ -62,7 +87,9 @@ hyfens() {
 Run the function from the Flutter project you want to operate on. The source
 entry file is named `tool.dart` only for compatibility with the existing
 checkout; `hyfens` is the documented command name. Tagged releases build
-native macOS, Linux, and Windows archives with SHA-256 checksums. See
+native macOS, Linux, and Windows archives with SHA-256 checksums. Installed
+release binaries can update themselves with `hyfens upgrade`; source-checkout
+invocations should use the documented installer for upgrades. See
 [CLI distribution](docs/cli-distribution.md) for the release workflow and
 [Getting started](docs/getting-started.md) for the complete local flow.
 
@@ -78,21 +105,29 @@ hyfens patch android
 hyfens deploy
 ```
 
+For flavor-based Flutter apps, select the native flavor and its Dart
+entrypoint explicitly (or configure the mapping in `tool.yaml`):
+
+```bash
+hyfens release android --flavor local --entrypoint lib/src/flavors/local.dart
+hyfens patch android --flavor local
+```
+
+The CLI requires `flutter pub get` before release discovery and records the
+selected entrypoint in the release baseline. See the [CLI reference](docs/cli.md)
+for target/flavor mappings and the safe `hyfens detach` command, which removes
+only Hyfens project metadata and local evidence after explicit confirmation.
+
 The currently tested toolchain family is Flutter `3.47.x` with Dart `3.13.x`.
 Other versions are outside the declared evidence boundary until separately
 validated.
 
 ## Managed and self-hosted control planes
 
-With no host override, the managed profile uses the currently proven Cloud API
-base:
-
-```text
-https://api.hyfens.com/p2/
-```
-
-That URL is a versioned API base and health/readiness evidence, not a promise
-of public signup, production availability, or a hosted release download.
+With no host override, `hyfens login` uses the built-in Hyfens Cloud profile.
+The managed service endpoint is intentionally kept out of public CLI examples
+and display output; it is an implementation detail of that profile. Use the
+self-hosted form below when selecting an explicit server.
 
 For a self-hosted instance, select the endpoint once at login and keep it in a
 named profile:
@@ -109,6 +144,18 @@ private material. Credentials are bound to the normalized endpoint origin and
 API base path; a session from one host is not sent to another. Remote
 credential-bearing requests require HTTPS. HTTP is permitted only for an
 explicit loopback development endpoint such as `127.0.0.1`.
+
+For an installed CLI, check for and install the latest stable release with:
+
+```bash
+hyfens upgrade
+```
+
+Use `hyfens upgrade --check` to check without changing the installed binary.
+The command verifies the release archive checksum before activation and does
+not modify profiles or project files. `hyfens mcp` starts the local stdio MCP
+server for compatible AI coding agents; its startup message is written to
+stderr so protocol output remains valid.
 
 ## Authentication and CI
 
@@ -141,6 +188,24 @@ steps:
 
 SSH is an infrastructure/operator mechanism, never a developer
 authentication path.
+
+## AI agents / MCP
+
+The v0.1.1 CLI can serve the bounded Hyfens workflow to compatible coding
+agents over local MCP stdio. Authenticate outside the client, then launch the
+server:
+
+```bash
+hyfens login
+hyfens mcp
+```
+
+The server reuses the selected Hyfens profile/session and exposes structured
+project, release, patch, verification, deploy, rollback, and profile tools; it
+does not pass raw credentials to the agent. The generic client process mapping
+is `command: hyfens` with `args: [mcp]`. See the [MCP documentation](docs/mcp.md)
+for self-hosted profiles, isolation details, the exact tool catalog, and
+troubleshooting.
 
 ## What the workflow proves
 
@@ -199,12 +264,13 @@ The following are intentionally not claimed by the public workflow:
   recorded fixtures;
 - App Store/Google Play, legal, or compliance approval;
 - arbitrary Dart/native/dependency patching;
-- package-manager publication, code signing, or a global installer maintained
-  by a package registry.
+- WinGet publication, code signing, or a global registry installer. GitHub
+  Release archives, the curl installer, Homebrew, and Scoop are documented in
+  the [CLI distribution guide](docs/cli-distribution.md).
 
-The first distribution workflow is configured to publish direct GitHub Release
-archives; the source checkout remains the fallback until a tagged release
-exists.
+The public `v0.1.1` distribution publishes direct GitHub Release archives and
+supports the documented curl, Homebrew, and Scoop channels. The source
+checkout remains the contributor fallback.
 
 See [CLI reference](docs/cli.md), [Getting started](docs/getting-started.md),
 the [self-hosted deployment guide](deploy/self-hosted/README.md), and the

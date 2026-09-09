@@ -7,7 +7,21 @@ Installers:
     InstallerType: zip
     InstallerUrl: __WINDOWS_X64_URL__
     InstallerSha256: __WINDOWS_X64_SHA256__
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: hyfens-__VERSION__-windows-x64/bin/hyfens.exe
+        PortableCommandAlias: hyfens
+      - RelativeFilePath: hyfens-__VERSION__-windows-x64/bin/tool.exe
+        PortableCommandAlias: tool
   - Architecture: arm64
     InstallerType: zip
     InstallerUrl: __WINDOWS_ARM64_URL__
     InstallerSha256: __WINDOWS_ARM64_SHA256__
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: hyfens-__VERSION__-windows-arm64/bin/hyfens.exe
+        PortableCommandAlias: hyfens
+      - RelativeFilePath: hyfens-__VERSION__-windows-arm64/bin/tool.exe
+        PortableCommandAlias: tool
+ManifestType: installer
+ManifestVersion: 1.9.0

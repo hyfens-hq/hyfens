@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -13,6 +14,13 @@ abstract interface class ArtifactStore {
   Future<List<int>?> readArtifact(String digest);
 }
 
+/// Optional physical-deletion seam for lifecycle cleanup. A false result
+/// means the content-addressed object was already absent, which is a safe
+/// idempotent outcome for a terminal PURGED metadata transition.
+abstract interface class ArtifactDeletion {
+  Future<bool> deleteArtifact(String digest);
+}
+
 /// Optional dependency probe used by hosted readiness checks.
 abstract interface class ArtifactStoreReadiness {
   Future<void> checkReadiness();
@@ -23,6 +31,23 @@ abstract interface class ArtifactStoreReadiness {
 /// metadata or regenerating signed artifacts.
 abstract interface class ArtifactInventory {
   Future<Set<String>> listArtifactKeys();
+}
+
+/// Optional exact-record deletion for staged lifecycle cleanup. It is kept
+/// outside [ControlPlaneStore] so decorators and focused test stores do not
+/// need to implement destructive operations they do not support.
+abstract interface class JsonRecordDeletion {
+  Future<bool> deleteJson(String collection, String id);
+}
+
+/// Optional compare-and-set seam for one-time security tokens. A null result
+/// means that the token is missing or has already been consumed.
+abstract interface class OneTimeTokenConsumption {
+  Future<Map<String, Object?>?> consumeOneTimeTokenIfUnused({
+    required String collection,
+    required String id,
+    required DateTime consumedAt,
+  });
 }
 
 final class ObservationWriteResult {
@@ -64,6 +89,19 @@ abstract interface class ObservationStore {
   });
 }
 
+/// Optional bounded observation cleanup used by privacy workers. Keeping this
+/// separate preserves compatibility with focused decorators that only expose
+/// the original observation store contract.
+abstract interface class BoundedObservationDeletion {
+  Future<int> deleteObservationsBatch({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    required int limit,
+  });
+}
+
 /// The one rollout write that must be serialized across control-plane
 /// processes. PostgreSQL implements this as a transaction with a row lock;
 /// the file store provides the equivalent single-node queue.
@@ -79,6 +117,43 @@ abstract interface class RolloutTransitionStore {
     required String requestDigest,
     required Map<String, Object?> idempotencyResult,
   });
+}
+
+/// Transactional record access for billing refund decisions.
+///
+/// Refund approval and provider-attempt claims need to reserve a captured
+/// balance as one durable operation. This optional seam lets stores with a
+/// transaction implementation provide that guarantee without widening the
+/// general JSON store contract or making every test/decorator implement a
+/// billing-specific method.
+abstract interface class BillingRefundTransaction {
+  Future<Map<String, Object?>?> readJson(String collection, String id);
+
+  Future<List<Map<String, Object?>>> listJson(String collection);
+
+  Future<void> createJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  );
+
+  Future<void> replaceJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  );
+
+  Future<void> appendAudit(String id, Map<String, Object?> value);
+}
+
+/// Optional durable transaction support for refund balance reservation and
+/// provider-attempt idempotency. Implementations must serialize operations for
+/// the supplied lock key and commit the callback atomically where supported.
+abstract interface class BillingRefundTransactionStore {
+  Future<T> runBillingRefundTransaction<T>(
+    String lockKey,
+    Future<T> Function(BillingRefundTransaction transaction) action,
+  );
 }
 
 abstract interface class ControlPlaneStore
@@ -143,11 +218,20 @@ abstract interface class ControlPlaneStore
 /// artifact paths are content addressed and never selected from a caller's
 /// arbitrary filesystem path.
 final class FileControlPlaneStore
-    implements ControlPlaneStore, ArtifactInventory {
+    implements
+        ControlPlaneStore,
+        ArtifactInventory,
+        ArtifactDeletion,
+        JsonRecordDeletion,
+        OneTimeTokenConsumption,
+        BoundedObservationDeletion,
+        BillingRefundTransactionStore {
   FileControlPlaneStore(this.root);
 
   final Directory root;
   Future<void> _sessionOperationTail = Future<void>.value();
+  final Map<String, Future<void>> _billingRefundTails =
+      <String, Future<void>>{};
 
   static final RegExp _safeId = RegExp(r'^[A-Za-z0-9_.:-]{1,256}$');
 
@@ -165,6 +249,9 @@ final class FileControlPlaneStore
       'credentials',
       'users',
       'sessions',
+      'auth_verification_tokens',
+      'auth_recovery_tokens',
+      'auth_deletion_tokens',
       'auth_bootstrap_consumptions',
       'audit',
       'audit_chain',
@@ -172,6 +259,25 @@ final class FileControlPlaneStore
       'observations',
       'waitlist',
       'newsletter',
+      'billing_plan_catalog',
+      'billing_plans',
+      'billing_subscriptions',
+      'billing_events',
+      'billing_provider_mappings',
+      'billing_payments',
+      'billing_refund_requests',
+      'billing_refund_decisions',
+      'billing_provider_refunds',
+      'enterprise_quotes',
+      'enterprise_quote_versions',
+      'enterprise_contracts',
+      'enterprise_provider_mappings',
+      'cloud_usage_events',
+      'environment_runtime_states',
+      'account_deletion_requests',
+      'organization_deletion_requests',
+      'deletion_artifact_items',
+      'deletion_evidence',
     ]) {
       await Directory(p.join(root.path, name)).create(recursive: true);
     }
@@ -179,6 +285,25 @@ final class FileControlPlaneStore
 
   @override
   Future<void> close() async {}
+
+  @override
+  Future<T> runBillingRefundTransaction<T>(
+    String lockKey,
+    Future<T> Function(BillingRefundTransaction transaction) action,
+  ) async {
+    final previous = _billingRefundTails[lockKey] ?? Future<void>.value();
+    final gate = Completer<void>();
+    _billingRefundTails[lockKey] = gate.future;
+    await previous;
+    try {
+      return await action(_FileBillingRefundTransaction(this));
+    } finally {
+      gate.complete();
+      if (identical(_billingRefundTails[lockKey], gate.future)) {
+        _billingRefundTails.remove(lockKey);
+      }
+    }
+  }
 
   @override
   Future<void> checkReadiness() async {
@@ -234,6 +359,30 @@ final class FileControlPlaneStore
       throw const StorageConflict('Record does not exist');
     await _writeAtomic(file, utf8.encode('${canonicalJson(value)}\n'));
   }
+
+  @override
+  Future<bool> deleteJson(String collection, String id) async {
+    final file = _jsonFile(collection, id);
+    if (!await file.exists()) return false;
+    await file.delete();
+    return true;
+  }
+
+  @override
+  Future<Map<String, Object?>?> consumeOneTimeTokenIfUnused({
+    required String collection,
+    required String id,
+    required DateTime consumedAt,
+  }) => _sessionOperation(() async {
+    final current = await readJson(collection, id);
+    if (current == null || current['consumedAt'] != null) return null;
+    final updated = <String, Object?>{
+      ...current,
+      'consumedAt': consumedAt.toUtc().toIso8601String(),
+    };
+    await replaceJson(collection, id, updated);
+    return updated;
+  });
 
   @override
   Future<Map<String, Object?>?> touchSessionIfActive({
@@ -323,6 +472,17 @@ final class FileControlPlaneStore
   }
 
   @override
+  Future<bool> deleteArtifact(String digest) async {
+    final normalized = requireSha256Digest(digest);
+    final file = File(
+      p.join(root.path, 'artifacts', normalized.substring(7), 'bytes'),
+    );
+    if (!await file.exists()) return false;
+    await file.delete();
+    return true;
+  }
+
+  @override
   Future<void> createIdempotency(
     String scope,
     String key,
@@ -389,6 +549,37 @@ final class FileControlPlaneStore
     String? applicationId,
     String? environmentId,
     required DateTime olderThan,
+  }) => _deleteObservations(
+    organizationId: organizationId,
+    applicationId: applicationId,
+    environmentId: environmentId,
+    olderThan: olderThan,
+  );
+
+  @override
+  Future<int> deleteObservationsBatch({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    required int limit,
+  }) {
+    if (limit < 1) return Future<int>.value(0);
+    return _deleteObservations(
+      organizationId: organizationId,
+      applicationId: applicationId,
+      environmentId: environmentId,
+      olderThan: olderThan,
+      limit: limit,
+    );
+  }
+
+  Future<int> _deleteObservations({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    int? limit,
   }) async {
     final directory = Directory(p.join(root.path, 'observations'));
     if (!await directory.exists()) return 0;
@@ -409,6 +600,7 @@ final class FileControlPlaneStore
       if (received == null || !received.isBefore(olderThan.toUtc())) continue;
       await entry.delete();
       deleted++;
+      if (limit != null && deleted >= limit) break;
     }
     return deleted;
   }
@@ -558,4 +750,36 @@ final class FileControlPlaneStore
     }
     return true;
   }
+}
+
+final class _FileBillingRefundTransaction implements BillingRefundTransaction {
+  const _FileBillingRefundTransaction(this.store);
+
+  final FileControlPlaneStore store;
+
+  @override
+  Future<Map<String, Object?>?> readJson(String collection, String id) =>
+      store.readJson(collection, id);
+
+  @override
+  Future<List<Map<String, Object?>>> listJson(String collection) =>
+      store.listJson(collection);
+
+  @override
+  Future<void> createJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) => store.createJson(collection, id, value);
+
+  @override
+  Future<void> replaceJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) => store.replaceJson(collection, id, value);
+
+  @override
+  Future<void> appendAudit(String id, Map<String, Object?> value) =>
+      store.appendAudit(id, value);
 }

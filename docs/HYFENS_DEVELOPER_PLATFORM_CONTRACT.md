@@ -22,6 +22,71 @@ dashboard. Local Docker is the required validation environment for new server
 and web integration. Existing deployment evidence remains historical evidence;
 this milestone does not require a remote deployment.
 
+## Dashboard audience and route contract
+
+The authenticated web product has separate product shells over shared auth,
+API transport, design tokens, and UI primitives:
+
+```text
+app.hyfens.com or self-hosted instance origin
+  Customer Workspace
+
+platform.hyfens.com
+  Hyfens Platform Console
+
+api.hyfens.com or self-hosted control-plane origin
+  shared control-plane API
+```
+
+Local development maps the same topology to `/` for the Customer Workspace
+and `/platform` for the Platform Console. A platform host maps `/`,
+`/organizations`, `/audit`, `/operations`, and `/settings` to the Platform
+Console. The customer organization selector is membership-scoped; it must
+never be used as a platform-wide organization directory.
+
+Customer routes remain tenant-scoped under the selected organization:
+
+```text
+/                         Customer overview
+/applications             Applications
+/environments             Environments
+/releases                 Releases
+/patches                  Patches
+/artifacts                Artifacts
+/deployments              Deployment records
+/audit                    Customer audit
+/settings                 Customer/account settings
+```
+
+Platform routes are a separate audience and context:
+
+```text
+/platform                  Platform overview
+/platform/organizations    Platform organization directory
+/platform/organizations/:id
+                           Platform organization detail
+/platform/audit            Platform-audience audit
+/platform/operations       Metrics-backed operations view
+/platform/settings         Platform operator settings
+```
+
+The control plane enforces the boundary, independently of frontend route
+visibility. Customer access uses the `customer` authorization audience and
+tenant membership/capabilities. Platform access uses the `platform` audience
+plus explicit capabilities such as `platform:overview`,
+`platform:organizations:read`, `platform:organizations:inspect`, and
+`platform:audit:read`. A platform token is not accepted by customer routes
+merely because the same human account exists, and a customer session cannot
+call `/v1/platform/*`.
+
+The current platform projection is intentionally read-only and bounded. It
+returns organization metadata, counts, safe application/environment metadata,
+and explicitly platform-audience events; it does not return customer
+credentials or turn customer audit rows into platform events. Customer
+application/environment creation and browser-side delivery mutations remain
+CLI/API workflows until their backend authorization and audit contracts are
+implemented.
+
 ## Non-goals
 
 The milestone does not implement AWS support, physical-device acceptance,
@@ -81,14 +146,7 @@ Profile metadata is stored separately from credentials. The minimum fields
 are:
 
 ```toml
-active_profile = "hyfens-cloud"
-
-[profiles.hyfens-cloud]
-endpoint = "https://api.hyfens.com/p2/"
-managed = true
-organization = "org_..."
-application = "app_..."
-environment = "env_..."
+active_profile = "acme"
 
 [profiles.acme]
 endpoint = "https://hyfens.acme.com/"
@@ -108,9 +166,10 @@ A session obtained from one host must never be sent to another host.
 
 ## Managed and self-hosted endpoints
 
-The managed product host is `api.hyfens.com`. The currently proven managed
-API base is `https://api.hyfens.com/p2/`; the CLI Cloud default uses that exact
-base until a different versioned public route is deployed and documented.
+The managed product host and versioned API route are internal Cloud
+implementation details. The CLI Cloud default selects that managed profile
+without requiring users to copy an endpoint into commands or configuration;
+CLI and MCP display it as `Hyfens Cloud (managed)`.
 
 Self-hosted login accepts an explicit HTTPS API base or host:
 
@@ -236,7 +295,7 @@ The topology is:
 ```text
 hyfens.com          static marketing/landing
 configured dashboard authenticated dashboard and browser auth
-api.hyfens.com      managed control plane
+managed Cloud       managed control plane
 ```
 
 The landing site explains only supported capabilities: signed, exact-release,

@@ -1,5 +1,9 @@
 import 'dart:io';
 
+import 'auth.dart';
+import 'billing.dart';
+import 'cloud_plans.dart';
+import 'deletion.dart';
 import 'human_auth.dart';
 import 'reconciliation_periodic.dart';
 
@@ -145,6 +149,32 @@ final class ControlPlaneDiscoveryConfig {
           'device_verification_uri': _relativeOrAbsoluteUri(
             deviceVerificationUri,
           ),
+        'cloud_onboarding': <String, Object?>{
+          'register_endpoint': _joinApiPath(
+            apiBasePath,
+            'v1/public/cloud/register',
+          ),
+          'verify_endpoint': _joinApiPath(
+            apiBasePath,
+            'v1/public/cloud/verify',
+          ),
+          'verification_resend_endpoint': _joinApiPath(
+            apiBasePath,
+            'v1/public/cloud/verification/resend',
+          ),
+          'recovery_endpoint': _joinApiPath(
+            apiBasePath,
+            'v1/public/cloud/recovery',
+          ),
+          'recovery_complete_endpoint': _joinApiPath(
+            apiBasePath,
+            'v1/public/cloud/recovery/complete',
+          ),
+          'organization_endpoint': _joinApiPath(
+            apiBasePath,
+            'v1/organizations',
+          ),
+        },
       },
     };
   }
@@ -299,6 +329,10 @@ final class ControlPlaneConfig {
     this.auth,
     this.allowInsecureAuth = false,
     this.discovery = const ControlPlaneDiscoveryConfig(),
+    this.deploymentModel = DeploymentModel.selfHosted,
+    this.razorpayBilling,
+    this.billingProvider,
+    this.deletionPolicy = const DeletionPolicy(),
   });
 
   final String host;
@@ -326,6 +360,13 @@ final class ControlPlaneConfig {
   final bool allowInsecureAuth;
   final ControlPlaneDiscoveryConfig discovery;
 
+  /// Cloud is opt-in. The default protects existing OSS/self-hosted
+  /// deployments from accidentally receiving Cloud subscription semantics.
+  final DeploymentModel deploymentModel;
+  final RazorpayBillingConfig? razorpayBilling;
+  final BillingProviderBridgeConfig? billingProvider;
+  final DeletionPolicy deletionPolicy;
+
   /// Convenience access to the server-selected public registration tenant.
   String? get publicRegistrationOrganizationId =>
       discovery.publicRegistrationOrganizationId;
@@ -351,6 +392,12 @@ final class ControlPlaneConfig {
     final periodic = ReconciliationPeriodicConfig.fromEnvironment(env);
     final auth = HumanAuthConfig.fromEnvironment(env);
     final discovery = ControlPlaneDiscoveryConfig.fromEnvironment(env);
+    final deploymentModel = parseDeploymentModel(
+      env['HYFENS_DEPLOYMENT_MODEL'],
+    );
+    final razorpayBilling = RazorpayBillingConfig.fromEnvironment(env);
+    final billingProvider = BillingProviderBridgeConfig.fromEnvironment(env);
+    final deletionPolicy = DeletionPolicy.fromEnvironment(env);
     if (port == null || port < 1 || port > 65535) {
       throw ArgumentError('HYFENS_PORT must be between 1 and 65535');
     }
@@ -426,6 +473,10 @@ final class ControlPlaneConfig {
       auth: auth,
       allowInsecureAuth: allowInsecureAuth,
       discovery: discovery,
+      deploymentModel: deploymentModel,
+      razorpayBilling: razorpayBilling,
+      billingProvider: billingProvider,
+      deletionPolicy: deletionPolicy,
     );
   }
 

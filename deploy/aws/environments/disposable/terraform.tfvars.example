@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars locally. Never commit the copy.
+aws_region                 = "ap-south-1"
+environment_name           = "hyfens-task78-disposable"
+allowed_ingress_cidrs      = ["203.0.113.10/32"]
+image_uri                  = "ACCOUNT.dkr.ecr.ap-south-1.amazonaws.com/hyfens-task78-disposable/control-plane@sha256:REPLACE_WITH_64_HEX_DIGEST"
+expected_monthly_cost_usd  = 0
+test_run_budget_usd        = 75
+max_resource_lifetime_hours = 24
+cost_guardrail_acknowledged = false
+allow_destroy              = false
+
+# Set only after a disposable public DNS/certificate path is explicitly
+# approved. Leaving these null keeps TLS/DNS environment-gated.
+dns_domain_name       = null
+dns_zone_id           = null
+allow_dns_changes     = false
+certificate_arn       = null

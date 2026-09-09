@@ -39,6 +39,13 @@ HYFENS_AUTH_AUTHORIZATION_ENDPOINT=https://app.example.com/cli/authorize/
 HYFENS_AUTH_DEVICE_VERIFICATION_URI=https://app.example.com/device/
 ```
 
+To expose the read-only platform metrics page to a platform operator, set
+`HYFENS_PLATFORM_ADMIN_EMAILS` to a comma-separated list of normalized human
+emails. The selected membership must also be an `owner` with the
+`super-admin` profile. The endpoint returns aggregate counts, rolling record
+activity, active-session counts, and process-local request signals; it never
+returns tenant records, passwords, session secrets, or raw credentials.
+
 Configure the host reverse proxy using
 [`nginx.conf.example`](nginx.conf.example). The important boundary is:
 

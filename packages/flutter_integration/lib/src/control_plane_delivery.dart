@@ -148,6 +148,7 @@ final class HyfensControlPlaneConfiguration {
 enum HyfensDeliveryDecision {
   noUpdate,
   patchAvailable,
+  rollbackToBase,
   updateBlocked,
   storeReleaseRequired,
 }
@@ -159,6 +160,7 @@ final class HyfensControlPlaneDeliveryResult {
     required this.detail,
     this.sequence,
     this.artifactDigest,
+    this.requiresHealthConfirmation = false,
   });
 
   final HyfensDeliveryDecision decision;
@@ -166,14 +168,15 @@ final class HyfensControlPlaneDeliveryResult {
   final String detail;
   final int? sequence;
   final String? artifactDigest;
+  final bool requiresHealthConfirmation;
 }
 
 /// A bounded transport adapter for the authenticated product-service API.
 ///
 /// This class does not parse Patch Format v1, verify signatures, inspect
-/// capabilities, decide sequence/high-water admission, mark health, or roll
-/// back. It only authenticates lookup/fetch, checks transport metadata, and
-/// hands exact bytes to [E1PatchController].
+/// capabilities, decide sequence/high-water admission, or mark health. It
+/// authenticates lookup/fetch, checks transport metadata, and hands exact
+/// bytes or a signed rollback control to [E1PatchController].
 final class HyfensControlPlaneDelivery {
   HyfensControlPlaneDelivery(this.configuration);
 
@@ -233,6 +236,28 @@ final class HyfensControlPlaneDelivery {
         'Delivery response is bound to another platform',
       );
     }
+    final responseApplicationId = _optionalString(response, const <String>[
+      'applicationId',
+      'application_id',
+    ]);
+    if (responseApplicationId != null &&
+        responseApplicationId != configuration.applicationId) {
+      throw const HyfensControlPlaneDeliveryException(
+        'APPLICATION_ID_MISMATCH',
+        'Delivery response is bound to another application',
+      );
+    }
+    final responseEnvironmentId = _optionalString(response, const <String>[
+      'environmentId',
+      'environment_id',
+    ]);
+    if (responseEnvironmentId != null &&
+        responseEnvironmentId != configuration.environmentId) {
+      throw const HyfensControlPlaneDeliveryException(
+        'ENVIRONMENT_ID_MISMATCH',
+        'Delivery response is bound to another environment',
+      );
+    }
     switch (decision) {
       case HyfensDeliveryDecision.noUpdate:
         return const HyfensControlPlaneDeliveryResult(
@@ -251,6 +276,20 @@ final class HyfensControlPlaneDelivery {
           decision: HyfensDeliveryDecision.storeReleaseRequired,
           activated: false,
           detail: 'current runtime requires a store release',
+        );
+      case HyfensDeliveryDecision.rollbackToBase:
+        final encodedControl = _requiredString(response, const <String>[
+          'rollbackControl',
+          'rollback_control',
+        ], 'rollback control');
+        final controlBytes = _decodeRollbackControl(encodedControl);
+        final rolledBack = await controller.applyRollbackControl(controlBytes);
+        return HyfensControlPlaneDeliveryResult(
+          decision: HyfensDeliveryDecision.rollbackToBase,
+          activated: rolledBack,
+          detail: rolledBack
+              ? 'signed Cloud rollback control applied to the base release'
+              : controller.status.detail,
         );
       case HyfensDeliveryDecision.patchAvailable:
         break;
@@ -314,6 +353,7 @@ final class HyfensControlPlaneDelivery {
           : controller.status.detail,
       sequence: sequence,
       artifactDigest: expectedDigest,
+      requiresHealthConfirmation: true,
     );
   }
 
@@ -463,6 +503,7 @@ final class HyfensControlPlaneDelivery {
   HyfensDeliveryDecision _decision(String value) => switch (value) {
     'NO_UPDATE' => HyfensDeliveryDecision.noUpdate,
     'PATCH_AVAILABLE' => HyfensDeliveryDecision.patchAvailable,
+    'ROLLBACK_TO_BASE' => HyfensDeliveryDecision.rollbackToBase,
     'UPDATE_BLOCKED' => HyfensDeliveryDecision.updateBlocked,
     'STORE_RELEASE_REQUIRED' => HyfensDeliveryDecision.storeReleaseRequired,
     _ => throw HyfensControlPlaneDeliveryException(
@@ -470,6 +511,30 @@ final class HyfensControlPlaneDelivery {
       'Control plane returned an unsupported delivery decision',
     ),
   };
+
+  static List<int> _decodeRollbackControl(String value) {
+    try {
+      if (value.isEmpty ||
+          value.length > 32768 ||
+          value.contains(RegExp(r'[\r\n\s]'))) {
+        throw const FormatException('invalid rollback control encoding');
+      }
+      final bytes = base64.decode(value);
+      if (base64.encode(bytes) != value ||
+          bytes.length > RollbackControlCommand.maxBytes) {
+        throw const FormatException('invalid rollback control encoding');
+      }
+      // Decode at the transport boundary as well as in the controller so a
+      // malformed directive cannot reach lifecycle code as opaque bytes.
+      RollbackControlCommand.decode(bytes);
+      return bytes;
+    } on Object {
+      throw const HyfensControlPlaneDeliveryException(
+        'MALFORMED_ROLLBACK_CONTROL',
+        'Control plane returned an invalid rollback directive',
+      );
+    }
+  }
 
   static Map<String, Object?> _object(Map<String, Object?> value, String key) =>
       _objectValue(value[key], key);

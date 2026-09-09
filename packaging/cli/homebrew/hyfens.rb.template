@@ -26,6 +26,8 @@ class Hyfens < Formula
     end
   end
 
+  license "Apache-2.0"
+
   def install
     root_dir = Dir["hyfens-*"].first
     bin_dir = "#{root_dir}/bin"

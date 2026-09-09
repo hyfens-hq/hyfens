@@ -7,11 +7,13 @@
   "architecture": {
     "64bit": {
       "url": "__WINDOWS_X64_URL__",
-      "hash": "__WINDOWS_X64_SHA256__"
+      "hash": "__WINDOWS_X64_SHA256__",
+      "extract_dir": "hyfens-__VERSION__-windows-x64"
     },
     "arm64": {
       "url": "__WINDOWS_ARM64_URL__",
-      "hash": "__WINDOWS_ARM64_SHA256__"
+      "hash": "__WINDOWS_ARM64_SHA256__",
+      "extract_dir": "hyfens-__VERSION__-windows-arm64"
     }
   },
   "bin": [

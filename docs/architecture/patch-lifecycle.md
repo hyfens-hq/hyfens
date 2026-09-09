@@ -61,6 +61,8 @@ The runtime verifies size, canonical bytes, digest, signature, release/runtime
 compatibility, function signatures, capability authority, sequence, and
 resource bounds before staging. Staging uses a temporary artifact and an
 atomic activation record. A candidate becomes last-known-good only after the
-configured health confirmation. Explicit developer rollback is represented by
-a newly signed higher-sequence artifact; an attacker-provided older patch is a
-downgrade and is rejected.
+configured health confirmation. Explicit base rollback is represented by a
+separately signed rollback control bound to the current patch high-water; an
+attacker-provided older patch is a downgrade and is rejected. Local and
+managed-Cloud transports deliver that same verified control through their
+respective control paths.

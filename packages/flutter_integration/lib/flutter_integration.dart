@@ -261,7 +261,9 @@ final class HyfensFlutterIntegration {
           final result = await HyfensControlPlaneDelivery(configuration)
               .deliver(controller);
           _configureDiagnostics(functionContexts);
-          if (result.activated && !await controller.markHealthy()) {
+          if (result.activated &&
+              result.requiresHealthConfirmation &&
+              !await controller.markHealthy()) {
             stderr.writeln(
               'HYFENS_PATCH control-plane health confirmation failed',
             );

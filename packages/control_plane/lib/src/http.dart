@@ -1,14 +1,19 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'cloud_plans.dart';
 import 'config.dart';
+import 'deletion.dart';
 import 'domain.dart';
 import 'encoding.dart';
+import 'enterprise_billing.dart';
 import 'errors.dart';
 import 'human_auth.dart';
 import 'observation.dart';
 import 'operator_overview.dart';
 import 'p3e_evaluation.dart';
+import 'platform_console.dart';
+import 'platform_metrics.dart';
 import 'public_onboarding.dart';
 import 'reconciliation_domain.dart';
 import 'reconciliation_observability.dart';
@@ -44,12 +49,27 @@ final class _TrustedBundleKey {
   final List<int> publicKey;
 }
 
+final class _ArtifactResponseSlice {
+  const _ArtifactResponseSlice({
+    required this.bytes,
+    required this.statusCode,
+    this.contentRange,
+  });
+
+  final List<int> bytes;
+  final int statusCode;
+  final String? contentRange;
+}
+
 /// The trust boundary for the local HTTP adapter.
 ///
 /// Forwarded headers describe a proxy's view of a request; they are not an
 /// authentication signal. The adapter binds to loopback by default, and an
 /// explicitly configured reverse proxy must terminate TLS and enforce its own
-/// public-edge policy before forwarding to this process.
+/// public-edge policy before forwarding to this process. A private immediate
+/// proxy peer may provide the exact `X-Forwarded-Proto: https` signal needed to
+/// preserve the credential-transport check across TLS termination; that signal
+/// never changes authorization, rate limiting, or tenant scope.
 final class ControlPlaneIngressTrustPolicy {
   const ControlPlaneIngressTrustPolicy._();
 
@@ -57,6 +77,50 @@ final class ControlPlaneIngressTrustPolicy {
   static const bool forwardedHeadersAffectRateLimit = false;
   static const bool requestIdAffectsAuthorization = false;
   static const bool hostAffectsAuthorization = false;
+
+  /// Returns whether a TLS-terminating private proxy may be trusted for the
+  /// transport check. The proxy must overwrite the header rather than forward
+  /// an untrusted client value, and the control-plane upstream must not be
+  /// publicly reachable.
+  static bool isTrustedForwardedTls({
+    required String? remoteAddress,
+    required String? forwardedProto,
+  }) {
+    if (forwardedProto?.trim().toLowerCase() != 'https') return false;
+    final value = remoteAddress?.trim();
+    if (value == null || value.isEmpty || value == 'localhost') return false;
+    final address = InternetAddress.tryParse(value);
+    if (address == null) return false;
+    final bytes = address.rawAddress;
+    if (address.type == InternetAddressType.IPv4) {
+      return _isTrustedPrivateIpv4(bytes);
+    }
+    if (address.type != InternetAddressType.IPv6 || bytes.length != 16) {
+      return false;
+    }
+    if (_isIpv4Mapped(bytes)) {
+      return _isTrustedPrivateIpv4(bytes.sublist(12));
+    }
+    // Loopback and unique-local IPv6 are the private proxy ranges relevant to
+    // the supported host/container deployment topology.
+    return _isIpv6Loopback(bytes) || (bytes[0] & 0xfe) == 0xfc;
+  }
+
+  static bool _isTrustedPrivateIpv4(List<int> bytes) {
+    if (bytes.length != 4) return false;
+    return bytes[0] == 127 ||
+        bytes[0] == 10 ||
+        (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) ||
+        (bytes[0] == 192 && bytes[1] == 168);
+  }
+
+  static bool _isIpv4Mapped(List<int> bytes) =>
+      bytes.take(10).every((value) => value == 0) &&
+      bytes[10] == 0xff &&
+      bytes[11] == 0xff;
+
+  static bool _isIpv6Loopback(List<int> bytes) =>
+      bytes.take(15).every((value) => value == 0) && bytes[15] == 1;
 }
 
 /// Bounded operator metrics for one control-plane process.
@@ -116,6 +180,8 @@ final class ControlPlaneMetrics {
       final bounded = switch (segments[1]) {
         'organizations' =>
           segments.length >= 3 ? 'v1/organizations/*' : 'v1/organizations',
+        'platform' =>
+          segments.length >= 3 ? 'v1/platform/${segments[2]}' : 'v1/platform',
         'rollouts' => segments.length >= 3 ? 'v1/rollouts/*' : 'v1/rollouts',
         'runtime' =>
           segments.length >= 3 &&
@@ -163,6 +229,8 @@ final class ControlPlaneHttpServer {
            ControlPlaneDiscoveryConfig.fromEnvironment(Platform.environment),
        _operatorOverview = OperatorOverviewProjection(service),
        _publicOnboarding = PublicOnboardingService(store: service.store),
+       _platformConsole = PlatformConsoleProjection(service.store),
+       _platformMetrics = PlatformMetricsProjection(store: service.store),
        _readyCheck = readyCheck ?? service.checkReadiness;
 
   final ControlPlaneService service;
@@ -174,6 +242,8 @@ final class ControlPlaneHttpServer {
   final ReconciliationPeriodicRunner? periodicRunner;
   final OperatorOverviewProjection _operatorOverview;
   final PublicOnboardingService _publicOnboarding;
+  final PlatformConsoleProjection _platformConsole;
+  final PlatformMetricsProjection _platformMetrics;
   final ControlPlaneMetrics metrics = ControlPlaneMetrics();
   final Future<bool> Function() _readyCheck;
   final Map<String, List<DateTime>> _requestWindows =
@@ -280,6 +350,118 @@ final class ControlPlaneHttpServer {
         await _authMe(request, requestId);
         return;
       }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'metrics'])) {
+        await _readPlatformMetrics(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'organizations'])) {
+        await _readPlatformOrganizations(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'organizations', '*'])) {
+        await _readPlatformOrganization(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'audit'])) {
+        await _readPlatformAudit(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'users'])) {
+        await _readPlatformUsers(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'entitlements'])) {
+        await _readPlatformEntitlements(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'enterprise-inquiries'])) {
+        await _readPlatformEnterpriseInquiries(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'enterprise-quotes'])) {
+        await _readPlatformEnterpriseQuotes(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'billing',
+            'refund-requests',
+          ])) {
+        await _readPlatformRefundRequests(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'billing',
+            'refund-requests',
+            '*',
+            'approve',
+          ])) {
+        await _approvePlatformRefund(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'billing',
+            'refund-requests',
+            '*',
+            'reject',
+          ])) {
+        await _rejectPlatformRefund(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'platform', 'enterprise-quotes'])) {
+        await _createPlatformEnterpriseQuote(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'enterprise-quotes',
+            '*',
+            'issue',
+          ])) {
+        await _issuePlatformEnterpriseQuote(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'enterprise-quotes',
+            '*',
+            'revise',
+          ])) {
+        await _revisePlatformEnterpriseQuote(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'enterprise-quotes',
+            '*',
+            'withdraw',
+          ])) {
+        await _withdrawPlatformEnterpriseQuote(request, path, requestId);
+        return;
+      }
       if (request.method == 'GET' && apiPath == '/auth/authorize') {
         await _authAuthorize(request, requestId);
         return;
@@ -311,6 +493,246 @@ final class ControlPlaneHttpServer {
         return;
       }
       if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'public', 'cloud', 'register'])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _publicCloudRegister(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'public', 'cloud', 'verify'])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _publicCloudVerify(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'public',
+            'cloud',
+            'verification',
+            'resend',
+          ])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _publicCloudVerificationResend(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'public', 'cloud', 'recovery'])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _publicCloudRecovery(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'public',
+            'cloud',
+            'recovery',
+            'complete',
+          ])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _publicCloudRecoveryComplete(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'public', 'cloud', 'account-deletion'])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _publicAccountDeletionRequest(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'public',
+            'cloud',
+            'account-deletion',
+            'verify',
+          ])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _publicAccountDeletionVerify(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'account', 'deletion'])) {
+        await _readAccountDeletion(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'account', 'deletion'])) {
+        _enforceAuthRateLimit(request);
+        await _requestAccountDeletion(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'account', 'deletion', 'cancel'])) {
+        _enforceAuthRateLimit(request);
+        await _cancelAccountDeletion(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'organizations', '*', 'deletion'])) {
+        await _readOrganizationDeletion(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'deletion',
+            'authorize',
+          ])) {
+        _enforceAuthRateLimit(request);
+        await _authorizeOrganizationDeletion(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'organizations', '*', 'deletion'])) {
+        _enforceAuthRateLimit(request);
+        await _requestOrganizationDeletion(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'deletion',
+            'cancel',
+          ])) {
+        _enforceAuthRateLimit(request);
+        await _cancelOrganizationDeletion(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'organizations'])) {
+        _enforceAuthRateLimit(request);
+        await _createCustomerOrganization(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'billing',
+            'provider',
+            'checkouts',
+            '*',
+            'subscription',
+          ])) {
+        await _linkBillingProviderSubscription(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'billing',
+            'provider',
+            'enterprise-contracts',
+            '*',
+            'subscription',
+          ])) {
+        await _linkEnterpriseProviderSubscription(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'billing',
+            'provider',
+            'enterprise-contracts',
+            '*',
+            'plan',
+          ])) {
+        await _linkEnterpriseProviderPlan(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const [
+            'v1',
+            'billing',
+            'provider',
+            'enterprise-contracts',
+            '*',
+          ])) {
+        await _readEnterpriseProviderContract(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'billing',
+            'provider',
+            'subscriptions',
+            '*',
+            'scheduled-change',
+          ])) {
+        await _confirmBillingScheduledPlanChange(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'billing',
+            'provider',
+            'subscriptions',
+            '*',
+          ])) {
+        await _syncBillingProviderSubscription(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'billing',
+            'provider',
+            'enterprise-subscriptions',
+            '*',
+          ])) {
+        await _syncEnterpriseProviderSubscription(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'billing', 'provider', 'webhook'])) {
+        await _applyBillingProviderWebhook(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'billing',
+            'provider',
+            'refunds',
+            '*',
+            'prepare',
+          ])) {
+        await _prepareBillingProviderRefund(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'billing',
+            'provider',
+            'refunds',
+            '*',
+            'result',
+          ])) {
+        await _recordBillingProviderRefundResult(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'billing', 'webhooks', 'razorpay'])) {
+        await _applyRazorpayBillingWebhook(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
           _matches(path, const ['v1', 'public', 'register'])) {
         _enforceAuthRateLimit(request);
         _rejectPublicQuery(request);
@@ -329,6 +751,13 @@ final class ControlPlaneHttpServer {
         _enforceAuthRateLimit(request);
         _rejectPublicQuery(request);
         await _publicNewsletter(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'public', 'enterprise-inquiries'])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _publicEnterpriseInquiry(request, requestId);
         return;
       }
       if (request.method == 'GET' && apiPath == '/content') {
@@ -462,6 +891,11 @@ final class ControlPlaneHttpServer {
         return;
       }
       if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'organizations', '*', 'applications'])) {
+        await _createApplication(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
           _matches(path, const [
             'v1',
             'organizations',
@@ -527,6 +961,28 @@ final class ControlPlaneHttpServer {
         await _issueCredential(request, path, requestId);
         return;
       }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'applications',
+            '*',
+            'environments',
+          ])) {
+        await _createEnvironment(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'organizations', '*', 'credentials'])) {
+        await _readCredentials(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'organizations', '*', 'members'])) {
+        await _readOrganizationMembers(request, path, requestId);
+        return;
+      }
       if (request.method == 'GET' &&
           _matches(path, const ['v1', 'organizations', '*', 'audit'])) {
         await _exportAudit(request, path, requestId);
@@ -540,6 +996,125 @@ final class ControlPlaneHttpServer {
       if (request.method == 'GET' &&
           _matches(path, const ['v1', 'organizations', '*', 'billing'])) {
         await _readBilling(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'enterprise-quotes',
+            '*',
+          ])) {
+        await _readCustomerEnterpriseQuote(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'enterprise-quotes',
+            '*',
+            'accept',
+          ])) {
+        await _acceptCustomerEnterpriseQuote(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'enterprise-quotes',
+            '*',
+            'reject',
+          ])) {
+        await _rejectCustomerEnterpriseQuote(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'enterprise',
+            'cancel',
+          ])) {
+        await _requestEnterpriseCancellation(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'checkout',
+          ])) {
+        await _startBillingCheckout(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'refund-requests',
+          ])) {
+        await _requestBillingRefund(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'plan-change',
+          ])) {
+        await _requestBillingPlanChange(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'plan-change',
+            'cancel',
+          ])) {
+        await _cancelBillingPlanChange(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'cancel',
+          ])) {
+        await _requestBillingCancellation(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'billing',
+            'checkouts',
+            '*',
+            'cancel',
+          ])) {
+        await _cancelBillingCheckout(request, path, requestId);
         return;
       }
       if (request.method == 'POST' &&
@@ -652,6 +1227,20 @@ final class ControlPlaneHttpServer {
             'release-promotions',
           ])) {
         await _promote(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'organizations',
+            '*',
+            'applications',
+            '*',
+            'environments',
+            '*',
+            'rollback',
+          ])) {
+        await _rollback(request, path, requestId);
         return;
       }
       if (request.method == 'POST' &&
@@ -1016,7 +1605,7 @@ final class ControlPlaneHttpServer {
     } on FormatException {
       throw const ControlPlaneException(
         'INVALID_CONTENT',
-        'Content kind must be blog or news',
+        'Content kind must be blog, news, or policy',
         statusCode: 422,
       );
     }
@@ -1289,6 +1878,27 @@ final class ControlPlaneHttpServer {
     });
   }
 
+  Future<void> _createApplication(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    final application = await service.createApplication(
+      token: _bearer(request),
+      organizationId: path[2],
+      runtimeApplicationId: _string(body, 'runtime_application_id'),
+      name: _optionalString(body, 'name'),
+      platform: _optionalString(body, 'platform'),
+      idempotencyKey: _idempotency(request),
+      requestId: requestId,
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...application.toJson(),
+      'request_id': requestId,
+    });
+  }
+
   Future<void> _evaluateHealth(
     HttpRequest request,
     List<String> path,
@@ -1425,6 +2035,7 @@ final class ControlPlaneHttpServer {
     final issued = await service.issueCredential(
       token: _bearer(request),
       organizationId: path[2],
+      name: _optionalString(body, 'name'),
       kind: kind,
       scopes: _stringSet(body, 'scopes'),
       applicationId: _optionalString(body, 'application_id'),
@@ -1433,8 +2044,28 @@ final class ControlPlaneHttpServer {
       requestId: requestId,
     );
     await _json(request.response, 201, <String, Object?>{
-      ...issued.record.toJson(),
+      ...issued.record.toMetadataJson(),
       'token': issued.token,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _createEnvironment(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    final environment = await service.createEnvironment(
+      token: _bearer(request),
+      organizationId: path[2],
+      applicationId: path[4],
+      name: _string(body, 'name'),
+      idempotencyKey: _idempotency(request),
+      requestId: requestId,
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...environment.toJson(),
       'request_id': requestId,
     });
   }
@@ -1611,6 +2242,587 @@ final class ControlPlaneHttpServer {
     });
   }
 
+  Future<void> _readPlatformMetrics(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final queryKeys = request.uri.queryParameters.keys.toSet();
+    if (queryKeys.length > 1 ||
+        (queryKeys.isNotEmpty && !queryKeys.contains('profile'))) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform metrics supports only the optional profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformMetrics(
+      accessToken: _bearer(request),
+      profileName: request.uri.queryParameters['profile'],
+    );
+    final snapshot = await _platformMetrics.read();
+    await _json(request.response, 200, <String, Object?>{
+      ...snapshot,
+      'serviceMetrics': metrics.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformOrganizations(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile' && key != 'q')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform organizations supports only profile and q query parameters',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformOrganizationsReadCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformConsole.listOrganizations(
+      query: query['q'],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformOrganization(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform organization reads support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformOrganizationsInspectCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformConsole.readOrganization(path[3]);
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformAudit(HttpRequest request, String requestId) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile' && key != 'organization_id')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform audit supports only profile and organization_id query parameters',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformAuditReadCapability,
+      profileName: query['profile'],
+    );
+    final organizationId = query['organization_id'];
+    if (organizationId != null && organizationId.isEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'organization_id must not be empty',
+        statusCode: 422,
+      );
+    }
+    final projection = await _platformConsole.readAudit(
+      organizationId: organizationId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformUsers(HttpRequest request, String requestId) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform users supports only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformAccountsReadCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformConsole.listUsers();
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformEntitlements(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform entitlements supports only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformEntitlementsReadCapability,
+      profileName: query['profile'],
+    );
+    final projection = await _platformConsole.readEntitlements();
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformEnterpriseInquiries(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise inquiry reads do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformAccountsReadCapability,
+    );
+    final projection = await _platformConsole.readEnterpriseInquiries();
+    await _json(request.response, 200, <String, Object?>{
+      ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformEnterpriseQuotes(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise quote reads do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    await _authorizeEnterprisePlatform(
+      request,
+      platformEnterpriseQuotesReadCapability,
+    );
+    final quotes = await service.billing.enterprise.listOperatorQuotes();
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'quotes': quotes,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformRefundRequests(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Refund request reads do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformBillingRefundsReadCapability,
+    );
+    final requests = await service.billing.listRefundRequests();
+    await _json(request.response, 200, <String, Object?>{
+      'schema_version': 1,
+      'refund_requests': requests,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _approvePlatformRefund(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final identity = await _authorizeRefundReviewPlatform(
+      request,
+      manage: true,
+    );
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'approved_amount_minor',
+      'reason',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Refund approval requires approved_amount_minor and reason',
+        statusCode: 422,
+      );
+    }
+    final result = await service.billing.approveRefund(
+      refundRequestId: path[4],
+      approvedAmountMinor: _int(body, 'approved_amount_minor'),
+      actorId: identity.user.id,
+      decisionReason: _string(body, 'reason'),
+    );
+    final organizationId = result['organizationId'];
+    if (organizationId is! String) {
+      throw const ControlPlaneException(
+        'BILLING_STATE_CORRUPT',
+        'Refund approval is missing its organization',
+        statusCode: 500,
+      );
+    }
+    await service.auditEnterpriseCommercialOperation(
+      actorId: identity.user.id,
+      actorType: 'platform_billing_operator',
+      audience: platformAuthorizationAudience,
+      organizationId: organizationId,
+      requestId: requestId,
+      action: 'billing.refund.approved',
+      resourceType: 'billing_refund_request',
+      resourceId: result['id']! as String,
+      metadata: <String, Object?>{
+        'approved_amount_minor': result['approvedAmountMinor'],
+        'currency': result['currency'],
+      },
+      stableKey: result['decisionId']! as String,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _rejectPlatformRefund(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final identity = await _authorizeRefundReviewPlatform(
+      request,
+      manage: true,
+    );
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'reason'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Refund rejection requires reason',
+        statusCode: 422,
+      );
+    }
+    final result = await service.billing.rejectRefund(
+      refundRequestId: path[4],
+      actorId: identity.user.id,
+      decisionReason: _string(body, 'reason'),
+    );
+    final organizationId = result['organizationId'];
+    if (organizationId is! String) {
+      throw const ControlPlaneException(
+        'BILLING_STATE_CORRUPT',
+        'Refund rejection is missing its organization',
+        statusCode: 500,
+      );
+    }
+    await service.auditEnterpriseCommercialOperation(
+      actorId: identity.user.id,
+      actorType: 'platform_billing_operator',
+      audience: platformAuthorizationAudience,
+      organizationId: organizationId,
+      requestId: requestId,
+      action: 'billing.refund.rejected',
+      resourceType: 'billing_refund_request',
+      resourceId: result['id']! as String,
+      metadata: <String, Object?>{'reason': body['reason']},
+      stableKey: result['decisionId']! as String,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<HumanIdentity> _authorizeRefundReviewPlatform(
+    HttpRequest request, {
+    required bool manage,
+  }) async {
+    final token = _bearer(request);
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: token,
+      capability: manage
+          ? platformBillingRefundsManageCapability
+          : platformBillingRefundsReadCapability,
+    );
+    return _humanAuth().me(accessToken: token);
+  }
+
+  Future<void> _createPlatformEnterpriseQuote(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final identity = await _authorizeEnterprisePlatform(
+      request,
+      platformEnterpriseQuotesManageCapability,
+    );
+    final body = await _jsonBody(request);
+    const required = <String>{'organization_id', 'entitlement_limits'};
+    const allowed = <String>{
+      'organization_id',
+      'inquiry_id',
+      'currency',
+      'recurring_amount_minor',
+      'interval',
+      'valid_until',
+      'term_months',
+      'total_count',
+      'upfront_amount_minor',
+      'contact_name',
+      'contact_email',
+      'support_level',
+      'customer_notes',
+      'internal_notes',
+      'entitlement_limits',
+    };
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(required)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise quote fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final terms = _enterpriseQuoteTerms(body);
+    final quote = await service.billing.enterprise.createQuote(
+      organizationId: _string(body, 'organization_id'),
+      terms: terms,
+      inquiryId: _optionalString(body, 'inquiry_id'),
+      idempotencyKey: _idempotency(request),
+    );
+    final organizationId = quote['organizationId'];
+    if (organizationId is! String) {
+      throw const ControlPlaneException(
+        'ENTERPRISE_BILLING_STATE_CORRUPT',
+        'Created Enterprise quote has no organization',
+        statusCode: 500,
+      );
+    }
+    await service.auditEnterpriseCommercialOperation(
+      actorId: identity.user.id,
+      actorType: 'platform_commercial_operator',
+      audience: platformAuthorizationAudience,
+      organizationId: organizationId,
+      requestId: requestId,
+      action: 'enterprise.quote.created',
+      resourceType: 'enterprise_quote',
+      resourceId: quote['id']! as String,
+      metadata: <String, Object?>{'quote_version': quote['currentVersion']},
+      stableKey: _idempotency(request),
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...quote,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _issuePlatformEnterpriseQuote(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final identity = await _authorizeEnterprisePlatform(
+      request,
+      platformEnterpriseQuotesManageCapability,
+    );
+    final body = await _jsonBody(request);
+    if (body.isNotEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Issuing an Enterprise quote does not accept request fields',
+        statusCode: 422,
+      );
+    }
+    final quote = await service.billing.enterprise.issueQuote(quoteId: path[3]);
+    await _auditEnterpriseQuoteResult(
+      identity: identity,
+      requestId: requestId,
+      action: 'enterprise.quote.issued',
+      quote: quote,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...quote,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _revisePlatformEnterpriseQuote(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final identity = await _authorizeEnterprisePlatform(
+      request,
+      platformEnterpriseQuotesManageCapability,
+    );
+    final body = await _jsonBody(request);
+    final terms = _enterpriseQuoteTerms(body);
+    final quote = await service.billing.enterprise.reviseQuote(
+      quoteId: path[3],
+      terms: terms,
+    );
+    await _auditEnterpriseQuoteResult(
+      identity: identity,
+      requestId: requestId,
+      action: 'enterprise.quote.revised',
+      quote: quote,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...quote,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _withdrawPlatformEnterpriseQuote(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final identity = await _authorizeEnterprisePlatform(
+      request,
+      platformEnterpriseQuotesManageCapability,
+    );
+    final body = await _jsonBody(request);
+    if (body.isNotEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Withdrawing an Enterprise quote does not accept request fields',
+        statusCode: 422,
+      );
+    }
+    final quote = await service.billing.enterprise.withdrawQuote(
+      quoteId: path[3],
+    );
+    await _auditEnterpriseQuoteResult(
+      identity: identity,
+      requestId: requestId,
+      action: 'enterprise.quote.withdrawn',
+      quote: quote,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...quote,
+      'request_id': requestId,
+    });
+  }
+
+  Future<HumanIdentity> _authorizeEnterprisePlatform(
+    HttpRequest request,
+    String capability,
+  ) async {
+    final accessToken = _bearer(request);
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: accessToken,
+      capability: capability,
+    );
+    return _humanAuth().me(accessToken: accessToken);
+  }
+
+  Future<void> _auditEnterpriseQuoteResult({
+    required HumanIdentity identity,
+    required String requestId,
+    required String action,
+    required Map<String, Object?> quote,
+  }) async {
+    final organizationId = quote['organizationId'];
+    final quoteId = quote['id'];
+    if (organizationId is! String || quoteId is! String) {
+      throw const ControlPlaneException(
+        'ENTERPRISE_BILLING_STATE_CORRUPT',
+        'Enterprise quote response is missing its identity',
+        statusCode: 500,
+      );
+    }
+    await service.auditEnterpriseCommercialOperation(
+      actorId: identity.user.id,
+      actorType: 'platform_commercial_operator',
+      audience: platformAuthorizationAudience,
+      organizationId: organizationId,
+      requestId: requestId,
+      action: action,
+      resourceType: 'enterprise_quote',
+      resourceId: quoteId,
+    );
+  }
+
+  Future<void> _readCredentials(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Credential metadata does not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    final credentials = await service.listCredentials(
+      token: _bearer(request),
+      organizationId: path[2],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': true,
+      'credentials': credentials,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readOrganizationMembers(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Organization member reads do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    final members = await service.listOrganizationMembers(
+      token: _bearer(request),
+      organizationId: path[2],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': true,
+      'members': members,
+      'request_id': requestId,
+    });
+  }
+
   Future<void> _readBilling(
     HttpRequest request,
     List<String> path,
@@ -1626,6 +2838,1057 @@ final class ControlPlaneHttpServer {
     );
     await _json(request.response, 200, <String, Object?>{
       ...snapshot.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readCustomerEnterpriseQuote(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingReadScope,
+      organizationId: path[2],
+    );
+    final quote = await service.billing.enterprise.readCustomerQuote(
+      organizationId: actor.organizationId,
+      quoteId: path[5],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...quote,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _acceptCustomerEnterpriseQuote(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'version_id'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise quote acceptance requires version_id',
+        statusCode: 422,
+      );
+    }
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingManageScope,
+      organizationId: path[2],
+    );
+    final result = await service.billing.enterprise.acceptQuote(
+      organizationId: actor.organizationId,
+      quoteId: path[5],
+      versionId: _string(body, 'version_id'),
+      actorId: actor.id,
+    );
+    final quote = result['quote']! as Map<String, Object?>;
+    final contract = result['contract']! as Map<String, Object?>;
+    await service.auditEnterpriseCommercialOperation(
+      actorId: actor.id,
+      actorType: 'customer_owner',
+      audience: customerAuthorizationAudience,
+      organizationId: actor.organizationId,
+      requestId: requestId,
+      action: 'enterprise.quote.accepted',
+      resourceType: 'enterprise_quote',
+      resourceId: quote['id']! as String,
+      metadata: <String, Object?>{
+        'quote_version_id': quote['currentVersionId'],
+        'contract_id': contract['id'],
+      },
+      stableKey: quote['currentVersionId']! as String,
+    );
+    await service.auditEnterpriseCommercialOperation(
+      actorId: actor.id,
+      actorType: 'customer_owner',
+      audience: customerAuthorizationAudience,
+      organizationId: actor.organizationId,
+      requestId: requestId,
+      action: 'enterprise.contract.created',
+      resourceType: 'enterprise_contract',
+      resourceId: contract['id']! as String,
+      metadata: <String, Object?>{
+        'quote_id': quote['id'],
+        'quote_version_id': quote['currentVersionId'],
+        'status': contract['status'],
+      },
+      stableKey: contract['id']! as String,
+    );
+    await _json(request.response, 201, <String, Object?>{
+      'quote': quote,
+      'contract': contract,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _rejectCustomerEnterpriseQuote(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'version_id'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise quote rejection requires version_id',
+        statusCode: 422,
+      );
+    }
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingManageScope,
+      organizationId: path[2],
+    );
+    final quote = await service.billing.enterprise.rejectQuote(
+      organizationId: actor.organizationId,
+      quoteId: path[5],
+      versionId: _string(body, 'version_id'),
+    );
+    await service.auditEnterpriseCommercialOperation(
+      actorId: actor.id,
+      actorType: 'customer_owner',
+      audience: customerAuthorizationAudience,
+      organizationId: actor.organizationId,
+      requestId: requestId,
+      action: 'enterprise.quote.rejected',
+      resourceType: 'enterprise_quote',
+      resourceId: quote['id']! as String,
+      metadata: <String, Object?>{
+        'quote_version_id': quote['currentVersionId'],
+      },
+      stableKey: quote['currentVersionId']! as String,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...quote,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _requestEnterpriseCancellation(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (body.isNotEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise cancellation does not accept request fields',
+        statusCode: 422,
+      );
+    }
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingManageScope,
+      organizationId: path[2],
+    );
+    final contract = await service.billing.enterprise.requestCancellation(
+      organizationId: actor.organizationId,
+    );
+    if (contract['id'] is String &&
+        contract['status'] == 'cancellation_scheduled') {
+      await service.auditEnterpriseCommercialOperation(
+        actorId: actor.id,
+        actorType: 'customer_owner',
+        audience: customerAuthorizationAudience,
+        organizationId: actor.organizationId,
+        requestId: requestId,
+        action: 'enterprise.cancellation.requested',
+        resourceType: 'enterprise_contract',
+        resourceId: contract['id']! as String,
+      );
+    }
+    await _json(request.response, 200, <String, Object?>{
+      'contract': contract,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _startBillingCheckout(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'plan_key'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Billing checkout requires a plan_key',
+        statusCode: 422,
+      );
+    }
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingManageScope,
+      organizationId: path[2],
+    );
+    final checkout = await service.billing.startCheckout(
+      organizationId: actor.organizationId,
+      planKey: _string(body, 'plan_key'),
+      idempotencyKey: _idempotency(request),
+    );
+    if (checkout['id'] is String) {
+      await service.auditBilling(
+        actor: actor,
+        requestId: requestId,
+        action: 'billing.checkout.initiated',
+        resourceId: checkout['id']! as String,
+        metadata: <String, Object?>{
+          'plan': checkout['planKey'],
+          'provider': checkout['provider'],
+          'amount_minor': checkout['amountMinor'],
+          'currency': checkout['currency'],
+        },
+        stableKey: _idempotency(request),
+      );
+    }
+    await _json(
+      request.response,
+      checkout['status'] == 'already_active' ? 200 : 201,
+      <String, Object?>{...checkout, 'request_id': requestId},
+    );
+  }
+
+  Future<void> _requestBillingRefund(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    const required = <String>{'payment_id', 'reason_category', 'explanation'};
+    const allowed = <String>{...required, 'requested_amount_minor'};
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(required)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Refund request fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingManageScope,
+      organizationId: path[2],
+    );
+    final result = await service.billing.requestRefund(
+      organizationId: actor.organizationId,
+      paymentId: _string(body, 'payment_id'),
+      reasonCategory: _string(body, 'reason_category'),
+      explanation: _string(body, 'explanation'),
+      requestedAmountMinor: _nullableInt(body, 'requested_amount_minor'),
+      idempotencyKey: _idempotency(request),
+      actorId: actor.id,
+    );
+    await service.auditBilling(
+      actor: actor,
+      requestId: requestId,
+      action: 'billing.refund.requested',
+      resourceId: result['id']! as String,
+      metadata: <String, Object?>{
+        'payment_id': result['paymentId'],
+        'reason_category': result['reasonCategory'],
+        'requested_amount_minor': result['requestedAmountMinor'],
+        'currency': result['currency'],
+      },
+      stableKey: _idempotency(request),
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ..._customerRefundResponse(result),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _requestBillingPlanChange(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    const required = <String>{'target_plan_key'};
+    if (body.keys.any((key) => !required.contains(key)) ||
+        !body.keys.toSet().containsAll(required)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Scheduled plan change fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingManageScope,
+      organizationId: path[2],
+    );
+    final target = _string(body, 'target_plan_key');
+    if (target == cloudPlanFreeKey) {
+      throw const ControlPlaneException(
+        'INVALID_PLAN_TRANSITION',
+        'Use the billing cancellation operation to stop renewal and return to Free',
+        statusCode: 422,
+      );
+    }
+    final change = await service.billing.prepareScheduledPlanChange(
+      organizationId: actor.organizationId,
+      targetPlanKey: target,
+      actorId: actor.id,
+    );
+    final resourceId = change['id'];
+    if (resourceId is! String) {
+      throw const ControlPlaneException(
+        'BILLING_STATE_CORRUPT',
+        'Scheduled plan change is missing its identity',
+        statusCode: 500,
+      );
+    }
+    await service.auditBilling(
+      actor: actor,
+      requestId: requestId,
+      action: 'billing.plan_change.requested',
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        'current_plan': change['currentPlanKey'],
+        'target_plan': change['targetPlanKey'],
+        'status': change['status'],
+        'effective_at': change['effectiveAt'],
+      },
+      stableKey: '${resourceId}:${change['revision']}',
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...change,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _cancelBillingPlanChange(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (body.isNotEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Scheduled plan change cancellation does not accept request fields',
+        statusCode: 422,
+      );
+    }
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingManageScope,
+      organizationId: path[2],
+    );
+    final change = await service.billing.cancelScheduledPlanChange(
+      organizationId: actor.organizationId,
+    );
+    final resourceId = change['id'];
+    if (change['status'] == 'cancelled' && resourceId is String) {
+      await service.auditBilling(
+        actor: actor,
+        requestId: requestId,
+        action: 'billing.plan_change.cancelled',
+        resourceId: resourceId,
+        metadata: <String, Object?>{
+          'target_plan': change['targetPlanKey'],
+          'status': change['status'],
+        },
+        stableKey: '${resourceId}:${change['revision']}',
+      );
+    }
+    await _json(request.response, 200, <String, Object?>{
+      ...change,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _requestBillingCancellation(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (body.isNotEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Billing cancellation does not accept request fields',
+        statusCode: 422,
+      );
+    }
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingManageScope,
+      organizationId: path[2],
+    );
+    final cancellation = await service.billing.requestCancellation(
+      organizationId: actor.organizationId,
+      actorId: actor.id,
+    );
+    if (cancellation['status'] == 'scheduled') {
+      await service.auditBilling(
+        actor: actor,
+        requestId: requestId,
+        action: 'billing.cancellation.requested',
+        resourceId: cancellation['subscriptionId']! as String,
+        metadata: <String, Object?>{
+          'status': cancellation['status'],
+          'effective_at': cancellation['effectiveAt'],
+          'scheduled_plan_change_id': cancellation['scheduledPlanChangeId'],
+        },
+        stableKey: cancellation['subscriptionId']! as String,
+      );
+    }
+    await _json(request.response, 200, <String, Object?>{
+      ...cancellation,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _confirmBillingScheduledPlanChange(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeBillingProvider(
+      token: _bearer(request),
+    );
+    final body = await _jsonBody(request);
+    const allowed = <String>{
+      'provider_plan_id',
+      'provider_status',
+      'has_scheduled_changes',
+      'schedule_change_at',
+      'change_scheduled_at',
+      'current_end_at',
+    };
+    const required = <String>{'provider_plan_id', 'has_scheduled_changes'};
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(required)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Provider scheduled change fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    if (body['has_scheduled_changes'] is! bool) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'has_scheduled_changes must be a boolean',
+        statusCode: 422,
+      );
+    }
+    final change = await service.billing.confirmScheduledPlanChange(
+      providerSubscriptionId: path[4],
+      providerPlanId: _string(body, 'provider_plan_id'),
+      providerStatus: _nullableString(body, 'provider_status'),
+      hasScheduledChanges: body['has_scheduled_changes']! as bool,
+      scheduleChangeAt: _nullableString(body, 'schedule_change_at'),
+      changeScheduledAt: _nullableString(body, 'change_scheduled_at'),
+      currentEndAt: _nullableString(body, 'current_end_at'),
+    );
+    final organizationId = change['organizationId'];
+    final resourceId = change['id'];
+    if (organizationId is! String || resourceId is! String) {
+      throw const ControlPlaneException(
+        'BILLING_STATE_CORRUPT',
+        'Provider scheduled change is missing its identity',
+        statusCode: 500,
+      );
+    }
+    await service.auditBillingProviderOperation(
+      actor: actor,
+      organizationId: organizationId,
+      requestId: requestId,
+      action: 'billing.provider_plan_change.scheduled',
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        'provider_subscription_id': change['providerSubscriptionId'],
+        'provider_plan_id': change['targetProviderPlanId'],
+        'target_plan': change['targetPlanKey'],
+        'status': change['status'],
+        'effective_at': change['effectiveAt'],
+      },
+      stableKey: '${change['providerSubscriptionId']}:${change['revision']}',
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...change,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _cancelBillingCheckout(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (body.isNotEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Billing checkout cancellation does not accept request fields',
+        statusCode: 422,
+      );
+    }
+    final actor = await service.authorizeControlCredential(
+      token: _bearer(request),
+      requiredScope: billingManageScope,
+      organizationId: path[2],
+    );
+    final checkout = await service.billing.cancelCheckout(
+      organizationId: actor.organizationId,
+      checkoutId: path[5],
+    );
+    await service.auditBilling(
+      actor: actor,
+      requestId: requestId,
+      action: 'billing.checkout.cancelled',
+      resourceId: checkout['id']! as String,
+      metadata: <String, Object?>{
+        'plan': checkout['planKey'],
+        'status': checkout['status'],
+      },
+      stableKey: checkout['id']! as String,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...checkout,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _applyRazorpayBillingWebhook(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final signature = request.headers.value('x-razorpay-signature');
+    if (signature == null || signature.isEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_BILLING_SIGNATURE',
+        'Razorpay webhook signature is required',
+        statusCode: 401,
+      );
+    }
+    final rawBody = await _bytesBody(
+      request,
+      maxBytes: limits.maxJsonBodyBytes,
+      tooLargeCode: 'REQUEST_TOO_LARGE',
+    );
+    final result = await service.billing.applyRazorpayWebhook(
+      rawBody: rawBody,
+      signature: signature,
+      eventIdOverride: request.headers.value('x-razorpay-event-id'),
+    );
+    await service.auditBillingProviderEvent(
+      result: result,
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _linkBillingProviderSubscription(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeBillingProvider(
+      token: _bearer(request),
+    );
+    final body = await _jsonBody(request);
+    const allowed = <String>{
+      'provider_subscription_id',
+      'provider_plan_id',
+      'provider_status',
+      'user_id',
+      'total_count',
+      'paid_count',
+      'remaining_count',
+      'current_start_at',
+      'current_end_at',
+      'cancel_at_cycle_end',
+    };
+    const required = <String>{'provider_subscription_id', 'provider_plan_id'};
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(required)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Provider subscription link fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    if (body['cancel_at_cycle_end'] != null &&
+        body['cancel_at_cycle_end'] is! bool) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'cancel_at_cycle_end must be a boolean',
+        statusCode: 422,
+      );
+    }
+    final subscription = await service.billing.linkProviderSubscription(
+      checkoutId: path[4],
+      providerSubscriptionId: _string(body, 'provider_subscription_id'),
+      providerPlanId: _string(body, 'provider_plan_id'),
+      providerStatus: _nullableString(body, 'provider_status'),
+      userId: _nullableString(body, 'user_id'),
+      totalCount: _nullableInt(body, 'total_count'),
+      paidCount: _nullableInt(body, 'paid_count'),
+      remainingCount: _nullableInt(body, 'remaining_count'),
+      currentStartAt: _nullableString(body, 'current_start_at'),
+      currentEndAt: _nullableString(body, 'current_end_at'),
+      cancelAtCycleEnd: body['cancel_at_cycle_end'] as bool?,
+    );
+    await service.auditBillingProviderOperation(
+      actor: actor,
+      organizationId: subscription['organizationId']! as String,
+      requestId: requestId,
+      action: 'billing.provider_subscription.linked',
+      resourceId: subscription['id']! as String,
+      metadata: <String, Object?>{
+        'provider': subscription['provider'],
+        'provider_subscription_id': subscription['providerSubscriptionId'],
+        'provider_plan_id': subscription['providerPlanId'],
+        'status': subscription['status'],
+      },
+      stableKey: subscription['providerSubscriptionId']! as String,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...subscription,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _syncBillingProviderSubscription(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeBillingProvider(
+      token: _bearer(request),
+    );
+    final body = await _jsonBody(request);
+    const allowed = <String>{
+      'provider_plan_id',
+      'provider_status',
+      'user_id',
+      'total_count',
+      'paid_count',
+      'remaining_count',
+      'current_start_at',
+      'current_end_at',
+      'cancel_at_cycle_end',
+    };
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.containsKey('provider_plan_id')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Provider subscription sync fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    if (body['cancel_at_cycle_end'] != null &&
+        body['cancel_at_cycle_end'] is! bool) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'cancel_at_cycle_end must be a boolean',
+        statusCode: 422,
+      );
+    }
+    final subscription = await service.billing.syncProviderSubscription(
+      providerSubscriptionId: path[4],
+      providerPlanId: _string(body, 'provider_plan_id'),
+      providerStatus: _nullableString(body, 'provider_status'),
+      userId: _nullableString(body, 'user_id'),
+      totalCount: _nullableInt(body, 'total_count'),
+      paidCount: _nullableInt(body, 'paid_count'),
+      remainingCount: _nullableInt(body, 'remaining_count'),
+      currentStartAt: _nullableString(body, 'current_start_at'),
+      currentEndAt: _nullableString(body, 'current_end_at'),
+      cancelAtCycleEnd: body['cancel_at_cycle_end'] as bool?,
+    );
+    await service.auditBillingProviderOperation(
+      actor: actor,
+      organizationId: subscription['organizationId']! as String,
+      requestId: requestId,
+      action: 'billing.provider_subscription.synced',
+      resourceId: subscription['id']! as String,
+      metadata: <String, Object?>{
+        'provider': subscription['provider'],
+        'provider_subscription_id': subscription['providerSubscriptionId'],
+        'provider_plan_id': subscription['providerPlanId'],
+        'status': subscription['status'],
+      },
+      stableKey:
+          '${subscription['providerSubscriptionId']}:${subscription['cancelAtCycleEnd']}',
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...subscription,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _prepareBillingProviderRefund(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeBillingProvider(
+      token: _bearer(request),
+    );
+    final body = await _jsonBody(request);
+    if (body.isNotEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Provider refund preparation does not accept request fields',
+        statusCode: 422,
+      );
+    }
+    final result = await service.billing.prepareProviderRefund(
+      refundRequestId: path[4],
+    );
+    final organizationId = result['organizationId'];
+    final attemptId = result['providerRefundRecordId'];
+    if (organizationId is! String || attemptId is! String) {
+      throw const ControlPlaneException(
+        'BILLING_STATE_CORRUPT',
+        'Provider refund preparation is missing its identity',
+        statusCode: 500,
+      );
+    }
+    await service.auditBillingProviderOperation(
+      actor: actor,
+      organizationId: organizationId,
+      requestId: requestId,
+      action: 'billing.refund.provider_prepared',
+      resourceId: attemptId,
+      metadata: <String, Object?>{
+        'refund_request_id': result['refundRequestId'],
+        'amount_minor': result['amountMinor'],
+        'currency': result['currency'],
+        'status': result['status'],
+      },
+      stableKey: attemptId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _recordBillingProviderRefundResult(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeBillingProvider(
+      token: _bearer(request),
+    );
+    final body = await _jsonBody(request);
+    const required = <String>{'provider_refund_record_id', 'status'};
+    const allowed = <String>{
+      ...required,
+      'provider_refund_id',
+      'amount_minor',
+      'currency',
+      'error_code',
+    };
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(required)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Provider refund result fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final result = await service.billing.recordProviderRefundResult(
+      refundRequestId: path[4],
+      providerRefundRecordId: _string(body, 'provider_refund_record_id'),
+      status: _string(body, 'status'),
+      providerRefundId: _nullableString(body, 'provider_refund_id'),
+      amountMinor: _nullableInt(body, 'amount_minor'),
+      currency: _nullableString(body, 'currency'),
+      errorCode: _nullableString(body, 'error_code'),
+    );
+    final organizationId = result['organizationId'];
+    final providerRefund = result['providerRefund'];
+    final resourceId = providerRefund is Map
+        ? providerRefund['id']
+        : body['provider_refund_record_id'];
+    if (organizationId is! String || resourceId is! String) {
+      throw const ControlPlaneException(
+        'BILLING_STATE_CORRUPT',
+        'Provider refund result is missing its identity',
+        statusCode: 500,
+      );
+    }
+    await service.auditBillingProviderOperation(
+      actor: actor,
+      organizationId: organizationId,
+      requestId: requestId,
+      action: 'billing.refund.provider_result',
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        'refund_request_id': result['id'],
+        'status': result['status'],
+        'provider_status': providerRefund is Map
+            ? providerRefund['status']
+            : null,
+      },
+      stableKey: '$resourceId:${body['status']}',
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _linkEnterpriseProviderSubscription(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeBillingProvider(
+      token: _bearer(request),
+    );
+    final body = await _jsonBody(request);
+    const allowed = <String>{
+      'provider_subscription_id',
+      'provider_plan_id',
+      'provider_status',
+      'amount_minor',
+      'currency',
+      'interval',
+      'total_count',
+      'paid_count',
+      'remaining_count',
+      'current_start_at',
+      'current_end_at',
+      'cancel_at_cycle_end',
+    };
+    const required = <String>{
+      'provider_subscription_id',
+      'provider_plan_id',
+      'provider_status',
+      'amount_minor',
+      'currency',
+      'interval',
+    };
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(required)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise provider link fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final subscription = await service.billing.enterprise
+        .linkProviderSubscription(
+          contractId: path[4],
+          providerSubscriptionId: _string(body, 'provider_subscription_id'),
+          providerPlanId: _string(body, 'provider_plan_id'),
+          providerStatus: _string(body, 'provider_status'),
+          amountMinor: _int(body, 'amount_minor'),
+          currency: _string(body, 'currency'),
+          interval: _string(body, 'interval'),
+          totalCount: _nullableInt(body, 'total_count'),
+          paidCount: _nullableInt(body, 'paid_count'),
+          remainingCount: _nullableInt(body, 'remaining_count'),
+          currentStartAt: _nullableString(body, 'current_start_at'),
+          currentEndAt: _nullableString(body, 'current_end_at'),
+          cancelAtCycleEnd: body['cancel_at_cycle_end'] as bool?,
+        );
+    final value = subscription['subscription']! as Map<String, Object?>;
+    await service.auditBillingProviderOperation(
+      actor: actor,
+      organizationId: value['organizationId']! as String,
+      requestId: requestId,
+      action: 'enterprise.provider_subscription.linked',
+      resourceId: value['id']! as String,
+      metadata: <String, Object?>{
+        'provider_subscription_id': value['providerSubscriptionId'],
+        'provider_plan_id': value['providerPlanId'],
+        'status': value['status'],
+      },
+      stableKey: value['providerSubscriptionId']! as String,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...subscription,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _linkEnterpriseProviderPlan(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeBillingProvider(
+      token: _bearer(request),
+    );
+    final body = await _jsonBody(request);
+    const allowed = <String>{
+      'provider_plan_id',
+      'amount_minor',
+      'currency',
+      'interval',
+    };
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(allowed)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise provider plan fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final contract = await service.billing.enterprise.linkProviderPlan(
+      contractId: path[4],
+      providerPlanId: _string(body, 'provider_plan_id'),
+      amountMinor: _int(body, 'amount_minor'),
+      currency: _string(body, 'currency'),
+      interval: _string(body, 'interval'),
+    );
+    final organizationId = contract['organizationId'];
+    final contractId = contract['id'];
+    if (organizationId is! String || contractId is! String) {
+      throw const ControlPlaneException(
+        'ENTERPRISE_BILLING_STATE_CORRUPT',
+        'Enterprise provider plan link has no contract identity',
+        statusCode: 500,
+      );
+    }
+    await service.auditBillingProviderOperation(
+      actor: actor,
+      organizationId: organizationId,
+      requestId: requestId,
+      action: 'enterprise.provider_plan.linked',
+      resourceId: contractId,
+      metadata: <String, Object?>{
+        'provider_plan_id': contract['providerPlanId'],
+        'amount_minor': contract['providerAmountMinor'],
+        'currency': contract['providerCurrency'],
+        'interval': contract['providerInterval'],
+      },
+      stableKey: contract['providerPlanId']! as String,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...contract,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readEnterpriseProviderContract(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    await service.authorizeBillingProvider(token: _bearer(request));
+    if (request.uri.hasQuery) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise provider contract reads do not accept query parameters',
+        statusCode: 422,
+      );
+    }
+    final contract = await service.billing.enterprise.providerContract(path[4]);
+    await _json(request.response, 200, <String, Object?>{
+      ...contract,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _syncEnterpriseProviderSubscription(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeBillingProvider(
+      token: _bearer(request),
+    );
+    final body = await _jsonBody(request);
+    const allowed = <String>{
+      'provider_plan_id',
+      'provider_status',
+      'total_count',
+      'paid_count',
+      'remaining_count',
+      'current_start_at',
+      'current_end_at',
+      'cancel_at_cycle_end',
+    };
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.containsKey('provider_plan_id')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise provider sync fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final subscription = await service.billing.enterprise
+        .syncProviderSubscription(
+          providerSubscriptionId: path[4],
+          providerPlanId: _string(body, 'provider_plan_id'),
+          providerStatus: _nullableString(body, 'provider_status'),
+          totalCount: _nullableInt(body, 'total_count'),
+          paidCount: _nullableInt(body, 'paid_count'),
+          remainingCount: _nullableInt(body, 'remaining_count'),
+          currentStartAt: _nullableString(body, 'current_start_at'),
+          currentEndAt: _nullableString(body, 'current_end_at'),
+          cancelAtCycleEnd: body['cancel_at_cycle_end'] as bool?,
+        );
+    await service.auditBillingProviderOperation(
+      actor: actor,
+      organizationId: subscription['organizationId']! as String,
+      requestId: requestId,
+      action: 'enterprise.provider_subscription.synced',
+      resourceId: subscription['id']! as String,
+      metadata: <String, Object?>{
+        'provider_subscription_id': subscription['providerSubscriptionId'],
+        'provider_plan_id': subscription['providerPlanId'],
+        'status': subscription['status'],
+      },
+      stableKey:
+          '${subscription['providerSubscriptionId']}:${subscription['cancelAtCycleEnd']}',
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...subscription,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _applyBillingProviderWebhook(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final actor = await service.authorizeBillingProvider(
+      token: _bearer(request),
+    );
+    final body = await _jsonBody(request);
+    const allowed = <String>{'raw_body', 'signature', 'event_id'};
+    const required = <String>{'raw_body', 'signature'};
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(required)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Provider webhook fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final rawBody = _string(body, 'raw_body');
+    final signature = _string(body, 'signature');
+    final result = await service.billing.applyRazorpayWebhook(
+      rawBody: utf8.encode(rawBody),
+      signature: signature,
+      eventIdOverride: _nullableString(body, 'event_id'),
+    );
+    await service.auditBillingProviderEvent(
+      result: result,
+      requestId: requestId,
+      actorId: actor.id,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result.toJson(),
       'request_id': requestId,
     });
   }
@@ -1739,6 +4002,7 @@ final class ControlPlaneHttpServer {
       'status',
       'plan_id',
       'user_id',
+      'checkout_id',
       'total_count',
       'paid_count',
       'remaining_count',
@@ -1768,6 +4032,13 @@ final class ControlPlaneHttpServer {
         statusCode: 422,
       );
     }
+    if (body['checkout_id'] != null && body['checkout_id'] is! String) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'checkout_id must be a string',
+        statusCode: 422,
+      );
+    }
     final actor = await service.authorizeControlCredential(
       token: _bearer(request),
       requiredScope: billingWriteScope,
@@ -1781,6 +4052,7 @@ final class ControlPlaneHttpServer {
       status: _string(body, 'status'),
       planId: _optionalString(body, 'plan_id'),
       userId: _optionalString(body, 'user_id'),
+      checkoutId: _optionalString(body, 'checkout_id'),
       totalCount: _nullableInt(body, 'total_count'),
       paidCount: _nullableInt(body, 'paid_count'),
       remainingCount: _nullableInt(body, 'remaining_count'),
@@ -1930,8 +4202,36 @@ final class ControlPlaneHttpServer {
     });
   }
 
+  Future<void> _rollback(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    final result = await service.requestRollback(
+      token: _bearer(request),
+      organizationId: path[2],
+      applicationId: path[4],
+      environmentId: path[6],
+      rollbackControl: _string(body, 'rollback_control'),
+      idempotencyKey: _idempotency(request),
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result.toJson(),
+      'request_id': requestId,
+    });
+  }
+
   Future<void> _updateCheck(HttpRequest request, String requestId) async {
     final body = await _jsonBody(request);
+    final highWater = body['high_water'];
+    if (highWater != null && highWater is! Map<String, Object?>) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'high_water must be a JSON object',
+      );
+    }
     final result = await service.updateCheck(
       token: _bearer(request),
       request: UpdateCheckRequest(
@@ -1945,6 +4245,10 @@ final class ControlPlaneHttpServer {
         ),
         patchFormatVersion: _int(body, 'patch_format_version'),
         highWaterSequence: _int(body, 'high_water_sequence'),
+        highWaterDigest: highWater is Map<String, Object?>
+            ? _optionalString(highWater, 'digest')
+            : null,
+        platformId: _optionalString(body, 'platform_id'),
         installationId: _optionalString(body, 'installation_id'),
       ),
     );
@@ -1974,14 +4278,106 @@ final class ControlPlaneHttpServer {
       applicationId: applicationId,
       environmentId: environmentId,
     );
+    final responseBody = _artifactResponseSlice(request, result.bytes);
+    await service.recordArtifactDelivery(
+      payload: result,
+      bytes: responseBody.bytes.length,
+    );
     request.response
-      ..statusCode = 200
+      ..statusCode = responseBody.statusCode
       ..headers.contentType = ContentType('application', 'octet-stream')
-      ..headers.contentLength = result.bytes.length
+      ..headers.contentLength = responseBody.bytes.length
+      ..headers.set('Accept-Ranges', 'bytes')
       ..headers.set('ETag', '"${result.record.sha256}"')
       ..headers.set('Digest', result.record.sha256);
-    request.response.add(result.bytes);
+    if (responseBody.contentRange != null) {
+      request.response.headers.set('Content-Range', responseBody.contentRange!);
+    }
+    request.response.add(responseBody.bytes);
     await request.response.close();
+  }
+
+  _ArtifactResponseSlice _artifactResponseSlice(
+    HttpRequest request,
+    List<int> bytes,
+  ) {
+    final range = request.headers.value('range');
+    if (range == null || range.trim().isEmpty) {
+      return _ArtifactResponseSlice(bytes: bytes, statusCode: HttpStatus.ok);
+    }
+    final value = range.trim();
+    if (!value.startsWith('bytes=') || value.substring(6).contains(',')) {
+      throw const ControlPlaneException(
+        'RANGE_NOT_SATISFIABLE',
+        'Only one byte range is supported for artifact delivery',
+        statusCode: 416,
+      );
+    }
+    final expression = value.substring(6).trim();
+    final separator = expression.indexOf('-');
+    if (separator < 0) {
+      throw const ControlPlaneException(
+        'RANGE_NOT_SATISFIABLE',
+        'Artifact byte range is malformed',
+        statusCode: 416,
+      );
+    }
+    final startText = expression.substring(0, separator).trim();
+    final endText = expression.substring(separator + 1).trim();
+    if (bytes.isEmpty) {
+      throw const ControlPlaneException(
+        'RANGE_NOT_SATISFIABLE',
+        'Artifact byte range is outside the response',
+        statusCode: 416,
+      );
+    }
+
+    int start;
+    int end;
+    if (startText.isEmpty) {
+      final suffixLength = int.tryParse(endText);
+      if (suffixLength == null) {
+        throw const ControlPlaneException(
+          'RANGE_NOT_SATISFIABLE',
+          'Artifact byte range is malformed',
+          statusCode: 416,
+        );
+      }
+      if (suffixLength <= 0) {
+        throw const ControlPlaneException(
+          'RANGE_NOT_SATISFIABLE',
+          'Artifact byte range is outside the response',
+          statusCode: 416,
+        );
+      }
+      start = suffixLength >= bytes.length ? 0 : bytes.length - suffixLength;
+      end = bytes.length - 1;
+    } else {
+      final parsedStart = int.tryParse(startText);
+      final parsedEnd = endText.isEmpty ? null : int.tryParse(endText);
+      if (parsedStart == null || (endText.isNotEmpty && parsedEnd == null)) {
+        throw const ControlPlaneException(
+          'RANGE_NOT_SATISFIABLE',
+          'Artifact byte range is malformed',
+          statusCode: 416,
+        );
+      }
+      start = parsedStart;
+      end = parsedEnd ?? bytes.length - 1;
+      if (start >= bytes.length || end < start) {
+        throw const ControlPlaneException(
+          'RANGE_NOT_SATISFIABLE',
+          'Artifact byte range is outside the response',
+          statusCode: 416,
+        );
+      }
+      if (end >= bytes.length) end = bytes.length - 1;
+    }
+    return _ArtifactResponseSlice(
+      bytes: bytes.sublist(start, end + 1),
+      statusCode: HttpStatus.partialContent,
+      contentRange: 'bytes $start-$end/${bytes.length}',
+    );
   }
 
   Future<void> _discovery(HttpRequest request, String requestId) async {
@@ -2266,6 +4662,378 @@ final class ControlPlaneHttpServer {
     });
   }
 
+  Future<void> _publicCloudRegister(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _publicJsonBody(request);
+    const required = <String>{'email', 'password'};
+    const optional = <String>{'organization_name'};
+    if (!body.keys.toSet().containsAll(required) ||
+        body.keys.any(
+          (key) => !required.contains(key) && !optional.contains(key),
+        )) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Cloud registration fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final result = await service.registerCloudCustomer(
+      email: _string(body, 'email'),
+      password: _string(body, 'password'),
+      organizationName: _publicOptionalString(body, 'organization_name') ?? '',
+    );
+    await _json(request.response, 202, <String, Object?>{
+      ...result.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _publicCloudVerify(HttpRequest request, String requestId) async {
+    final body = await _publicJsonBody(request);
+    const allowed = <String>{'token', 'organization_name'};
+    if (!body.containsKey('token') ||
+        body.keys.any((key) => !allowed.contains(key))) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Cloud verification fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final result = await service.verifyCloudCustomer(
+      token: _string(body, 'token'),
+      organizationName: _publicOptionalString(body, 'organization_name'),
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _publicCloudVerificationResend(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _publicJsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'email'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Cloud verification fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final result = await _humanAuth().resendCustomerVerification(
+      email: _string(body, 'email'),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _publicCloudRecovery(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _publicJsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'email'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Recovery fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final result = await _humanAuth().requestPasswordRecovery(
+      email: _string(body, 'email'),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _publicCloudRecoveryComplete(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _publicJsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'token', 'password'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Recovery completion fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().resetPassword(
+      token: _string(body, 'token'),
+      password: _string(body, 'password'),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'status': 'password_reset',
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _publicAccountDeletionRequest(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _publicJsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'email'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Deletion request fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final result = await _humanAuth().requestAccountDeletion(
+      email: _string(body, 'email'),
+    );
+    await _json(request.response, 202, <String, Object?>{
+      ...result.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _publicAccountDeletionVerify(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _publicJsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'token'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Deletion verification fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final userId = await _humanAuth().consumeAccountDeletionToken(
+      token: _string(body, 'token'),
+    );
+    final deletion = _deletion();
+    final result = await deletion.verifyAccountDeletionToken(
+      userId: userId,
+      actorId: 'email:account-deletion',
+      requestId: requestId,
+    );
+    await _json(request.response, 202, <String, Object?>{
+      'status': result['status'],
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readAccountDeletion(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final user = await _humanAuth().verifiedCustomerForAccessToken(
+      accessToken: _bearer(request),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...await _deletion().accountStatus(userId: user.id),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _requestAccountDeletion(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'confirmation',
+      'password',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Account deletion confirmation fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final user = await _confirmCustomerDeletion(request, body);
+    final result = await _deletion().requestAccountDeletion(
+      userId: user.id,
+      actorId: user.id,
+      requestId: requestId,
+    );
+    await _json(request.response, 202, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _cancelAccountDeletion(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'confirmation',
+      'password',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Account deletion cancellation fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final user = await _confirmCustomerDeletion(request, body);
+    final result = await _deletion().cancelAccountDeletion(
+      userId: user.id,
+      actorId: user.id,
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readOrganizationDeletion(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final user = await _humanAuth().verifiedCustomerForAccessToken(
+      accessToken: _bearer(request),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...await _deletion().organizationStatus(
+        userId: user.id,
+        organizationId: path[2],
+      ),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _requestOrganizationDeletion(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'confirmation',
+      'password',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Organization deletion confirmation fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final user = await _confirmCustomerDeletion(request, body);
+    final result = await _deletion().requestOrganizationDeletion(
+      userId: user.id,
+      organizationId: path[2],
+      requestId: requestId,
+    );
+    await _json(request.response, 202, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _authorizeOrganizationDeletion(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'confirmation',
+      'password',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Organization deletion confirmation fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final user = await _confirmCustomerDeletion(request, body);
+    await _deletion().authorizeOrganizationDeletion(
+      userId: user.id,
+      organizationId: path[2],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'status': 'authorized',
+      'organization_id': path[2],
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _cancelOrganizationDeletion(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'confirmation',
+      'password',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Organization deletion cancellation fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final user = await _confirmCustomerDeletion(request, body);
+    final result = await _deletion().cancelOrganizationDeletion(
+      userId: user.id,
+      organizationId: path[2],
+      actorId: user.id,
+      requestId: requestId,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<HumanUserRecord> _confirmCustomerDeletion(
+    HttpRequest request,
+    Map<String, Object?> body,
+  ) async {
+    if (body['confirmation'] != 'DELETE') {
+      throw const ControlPlaneException(
+        'CONFIRMATION_REQUIRED',
+        'Type DELETE to confirm this action',
+        statusCode: 422,
+      );
+    }
+    return _humanAuth().confirmCustomerPassword(
+      accessToken: _bearer(request),
+      password: _string(body, 'password'),
+    );
+  }
+
+  Future<void> _createCustomerOrganization(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'name'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Organization creation fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final result = await service.createCustomerOrganization(
+      token: _bearer(request),
+      organizationName: _string(body, 'name'),
+      idempotencyKey: _idempotency(request),
+      requestId: requestId,
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
   Future<void> _publicWaitlist(HttpRequest request, String requestId) async {
     final body = await _publicSubmissionBody(request);
     await _publicOnboarding.submitWaitlist(
@@ -2288,6 +5056,38 @@ final class ControlPlaneHttpServer {
     );
     await _json(request.response, 200, <String, Object?>{
       'status': 'accepted',
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _publicEnterpriseInquiry(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _publicJsonBody(request);
+    const required = <String>{'email', 'message'};
+    const optional = <String>{'name', 'organization', 'source'};
+    if (!body.keys.toSet().containsAll(required) ||
+        body.keys.any(
+          (key) => !required.contains(key) && !optional.contains(key),
+        )) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise inquiry fields are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final inquiry = await _publicOnboarding.submitEnterpriseInquiry(
+      email: _string(body, 'email'),
+      message: _string(body, 'message'),
+      idempotencyKey: _idempotency(request),
+      name: _publicOptionalString(body, 'name'),
+      organization: _publicOptionalString(body, 'organization'),
+      source: _publicOptionalString(body, 'source'),
+    );
+    await _json(request.response, 202, <String, Object?>{
+      'status': inquiry['status'],
+      'destination': inquiry['destination'],
       'request_id': requestId,
     });
   }
@@ -2447,7 +5247,15 @@ final class ControlPlaneHttpServer {
         remote == '127.0.0.1' ||
         remote == '::1' ||
         remote == '::ffff:127.0.0.1';
-    if (!loopback && request.uri.scheme != 'https' && !allowInsecureAuth) {
+    final proxyTerminatedTls =
+        ControlPlaneIngressTrustPolicy.isTrustedForwardedTls(
+          remoteAddress: remote,
+          forwardedProto: request.headers.value('x-forwarded-proto'),
+        );
+    if (!loopback &&
+        !proxyTerminatedTls &&
+        request.uri.scheme != 'https' &&
+        !allowInsecureAuth) {
       throw const ControlPlaneException(
         'INSECURE_TRANSPORT',
         'Credential-bearing authentication requires HTTPS',
@@ -2471,7 +5279,7 @@ final class ControlPlaneHttpServer {
       ..set('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, OPTIONS')
       ..set(
         'Access-Control-Allow-Headers',
-        'Authorization, Content-Type, X-Request-Id',
+        'Authorization, Content-Type, Idempotency-Key, X-Request-Id',
       )
       ..set('Access-Control-Expose-Headers', 'X-Request-Id')
       ..set('Vary', 'Origin');
@@ -2489,7 +5297,10 @@ final class ControlPlaneHttpServer {
   Future<void> _authLogin(HttpRequest request, String requestId) async {
     _enforceCredentialTransport(request);
     final body = await _jsonBody(request);
-    if (!setEquals(body.keys.toSet(), const <String>{'email', 'password'})) {
+    if (!body.keys.toSet().every(
+          const <String>{'email', 'password', 'audience'}.contains,
+        ) ||
+        !body.keys.toSet().containsAll(const <String>{'email', 'password'})) {
       throw const ControlPlaneException(
         'INVALID_REQUEST',
         'Authentication request fields are unsupported',
@@ -2498,6 +5309,8 @@ final class ControlPlaneHttpServer {
     final result = await _humanAuth().login(
       email: _string(body, 'email'),
       password: _string(body, 'password'),
+      audience:
+          _optionalString(body, 'audience') ?? customerAuthorizationAudience,
     );
     await _json(request.response, 200, <String, Object?>{
       ...result.toJson(),
@@ -2558,6 +5371,18 @@ final class ControlPlaneHttpServer {
       );
     }
     return auth;
+  }
+
+  AccountDeletionService _deletion() {
+    final deletion = service.deletion;
+    if (deletion == null) {
+      throw const ControlPlaneException(
+        'DELETION_UNAVAILABLE',
+        'Account deletion is not configured for this deployment',
+        statusCode: 503,
+      );
+    }
+    return deletion;
   }
 
   Future<Map<String, Object?>> _jsonBody(
@@ -2848,6 +5673,47 @@ final class ControlPlaneHttpServer {
     return value;
   }
 
+  Map<String, Object?> _customerRefundResponse(Map<String, Object?> value) {
+    final payment = value['payment'];
+    final decision = value['decision'];
+    final providerRefund = value['providerRefund'];
+    return <String, Object?>{
+      'id': value['id'],
+      'paymentId': value['paymentId'],
+      'reasonCategory': value['reasonCategory'],
+      'explanation': value['explanation'],
+      'requestedAmountMinor': value['requestedAmountMinor'],
+      'approvedAmountMinor': value['approvedAmountMinor'],
+      'currency': value['currency'],
+      'status': value['status'],
+      'createdAt': value['createdAt'],
+      'updatedAt': value['updatedAt'],
+      if (payment is Map)
+        'payment': <String, Object?>{
+          'id': payment['id'],
+          'amountMinor': payment['amountMinor'],
+          'currency': payment['currency'],
+          'status': payment['status'],
+          'capturedAt': payment['capturedAt'],
+        },
+      if (decision is Map)
+        'decision': <String, Object?>{
+          'status': decision['status'],
+          'approvedAmountMinor': decision['approvedAmountMinor'],
+          'currency': decision['currency'],
+          'createdAt': decision['createdAt'],
+        },
+      if (providerRefund is Map)
+        'providerRefund': <String, Object?>{
+          'status': providerRefund['status'],
+          'amountMinor': providerRefund['amountMinor'],
+          'currency': providerRefund['currency'],
+          'createdAt': providerRefund['createdAt'],
+          'updatedAt': providerRefund['updatedAt'],
+        },
+    };
+  }
+
   int? _nullableInt(Map<String, Object?> body, String key) {
     final value = body[key];
     if (value == null) return null;
@@ -2898,6 +5764,101 @@ final class ControlPlaneHttpServer {
       throw FormatException('Invalid $key');
     }
     return value;
+  }
+
+  EnterpriseQuoteTerms _enterpriseQuoteTerms(Map<String, Object?> body) {
+    const required = <String>{
+      'currency',
+      'recurring_amount_minor',
+      'interval',
+      'valid_until',
+      'entitlement_limits',
+    };
+    const allowed = <String>{
+      'currency',
+      'recurring_amount_minor',
+      'interval',
+      'valid_until',
+      'term_months',
+      'total_count',
+      'upfront_amount_minor',
+      'contact_name',
+      'contact_email',
+      'support_level',
+      'customer_notes',
+      'internal_notes',
+      'entitlement_limits',
+    };
+    if (body.keys.any((key) => !allowed.contains(key)) ||
+        !body.keys.toSet().containsAll(required)) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise quote terms are unsupported or incomplete',
+        statusCode: 422,
+      );
+    }
+    final rawLimits = body['entitlement_limits'];
+    if (rawLimits is! Map) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise entitlement limits must be an object',
+        statusCode: 422,
+      );
+    }
+    final limits = <String, CloudLimit>{};
+    for (final entry in rawLimits.entries) {
+      if (entry.key is! String ||
+          !const <String>{
+            cloudApplicationsLimitKey,
+            cloudEnvironmentsPerApplicationLimitKey,
+            cloudMembersLimitKey,
+          }.contains(entry.key)) {
+        throw const ControlPlaneException(
+          'INVALID_REQUEST',
+          'Enterprise entitlement key is unsupported',
+          statusCode: 422,
+        );
+      }
+      try {
+        limits[entry.key as String] = CloudLimit.fromJson(entry.value);
+      } on FormatException {
+        throw const ControlPlaneException(
+          'INVALID_REQUEST',
+          'Enterprise entitlement limit is invalid',
+          statusCode: 422,
+        );
+      }
+    }
+    if (limits.isEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'At least one Enterprise entitlement limit is required',
+        statusCode: 422,
+      );
+    }
+    final validUntil = _optionalDateTime(body, 'valid_until');
+    if (validUntil == null) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Enterprise quote validity is required',
+        statusCode: 422,
+      );
+    }
+    return EnterpriseQuoteTerms(
+      currency: _string(body, 'currency'),
+      recurringAmountMinor: _int(body, 'recurring_amount_minor'),
+      interval: _string(body, 'interval'),
+      validUntil: validUntil,
+      entitlements: EnterpriseEntitlementSnapshot(limits),
+      termMonths: _nullableInt(body, 'term_months'),
+      totalCount: _nullableInt(body, 'total_count'),
+      upfrontAmountMinor: _nullableInt(body, 'upfront_amount_minor'),
+      contactName: _optionalString(body, 'contact_name'),
+      contactEmail: _optionalString(body, 'contact_email'),
+      supportLevel: _optionalString(body, 'support_level'),
+      customerNotes: _optionalString(body, 'customer_notes'),
+      internalNotes: _optionalString(body, 'internal_notes'),
+    );
   }
 
   bool _matches(List<String> actual, List<String> pattern) {

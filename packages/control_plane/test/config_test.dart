@@ -13,6 +13,99 @@ void main() {
     expect(config.artifactAuthorization, isNull);
     expect(config.fileRoot, isA<Directory>());
     expect(config.auth, isNull);
+    expect(config.deploymentModel, DeploymentModel.selfHosted);
+    expect(config.billingProvider, isNull);
+  });
+
+  test('empty optional billing environment remains disabled', () {
+    final config = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_BILLING_PROVIDER_TOKEN_HASH': '',
+      'HYFENS_RAZORPAY_STARTER_PLAN_ID': '',
+      'HYFENS_RAZORPAY_TEAM_PLAN_ID': '',
+      'HYFENS_RAZORPAY_WEBHOOK_SECRET': '',
+      'HYFENS_RAZORPAY_CURRENCY': '',
+      'HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR': '',
+      'HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR': '',
+    });
+    expect(config.billingProvider, isNull);
+    expect(config.razorpayBilling, isNull);
+  });
+
+  test('billing provider bridge uses a hashed deployment credential', () {
+    const token = 'billing-bridge-test-token';
+    final hash = CredentialService.tokenHash(token);
+    final bridge = BillingProviderBridgeConfig.fromEnvironment(<String, String>{
+      'HYFENS_BILLING_PROVIDER_TOKEN_HASH': hash,
+    });
+    expect(bridge, isNotNull);
+    expect(bridge!.matches(token), isTrue);
+    expect(bridge.matches('another-token'), isFalse);
+    expect(bridge.principal.id, 'billing-provider');
+    expect(bridge.principal.scopes, contains(billingProviderScope));
+    expect(
+      () => BillingProviderBridgeConfig.fromEnvironment(<String, String>{
+        'HYFENS_BILLING_PROVIDER_TOKEN_HASH': 'not-a-sha256',
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('Cloud deployment mode is explicit and bounded', () {
+    final config = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_DEPLOYMENT_MODEL': 'cloud',
+    });
+    expect(config.deploymentModel, DeploymentModel.cloud);
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_DEPLOYMENT_MODEL': 'self-hosted',
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('Razorpay checkout requires explicit currency configuration', () {
+    expect(
+      () => RazorpayBillingConfig.fromEnvironment(<String, String>{
+        'HYFENS_RAZORPAY_STARTER_PLAN_ID': 'rzp_plan_starter',
+        'HYFENS_RAZORPAY_TEAM_PLAN_ID': 'rzp_plan_team',
+        'HYFENS_RAZORPAY_WEBHOOK_SECRET': 'secret',
+      }),
+      throwsArgumentError,
+    );
+    final config = RazorpayBillingConfig.fromEnvironment(<String, String>{
+      'HYFENS_RAZORPAY_STARTER_PLAN_ID': 'rzp_plan_starter',
+      'HYFENS_RAZORPAY_TEAM_PLAN_ID': 'rzp_plan_team',
+      'HYFENS_RAZORPAY_WEBHOOK_SECRET': 'secret',
+      'HYFENS_RAZORPAY_CURRENCY': 'USD',
+      'HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR': '4900',
+      'HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR': '19900',
+    });
+    expect(config, isNotNull);
+    expect(config!.currency, 'USD');
+    expect(config.starterAmountMinor, 4900);
+    expect(config.teamAmountMinor, 19900);
+    expect(
+      () => RazorpayBillingConfig.fromEnvironment(<String, String>{
+        'HYFENS_RAZORPAY_STARTER_PLAN_ID': 'rzp_plan_starter',
+        'HYFENS_RAZORPAY_TEAM_PLAN_ID': 'rzp_plan_team',
+        'HYFENS_RAZORPAY_WEBHOOK_SECRET': 'secret',
+        'HYFENS_RAZORPAY_CURRENCY': 'INR',
+        'HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR': '4900',
+        'HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR': '19900',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => RazorpayBillingConfig(
+        starterPlanId: 'rzp_plan_starter',
+        teamPlanId: 'rzp_plan_team',
+        webhookSecret: 'secret',
+        currency: 'INR',
+        starterAmountMinor: 4900,
+        teamAmountMinor: 19900,
+      ),
+      throwsArgumentError,
+    );
   });
 
   test('human auth configuration is explicit and bounded', () {

@@ -36,6 +36,80 @@ void main() {
 
   tearDown(() => directory.delete(recursive: true));
 
+  test('creates customer applications and environments idempotently', () async {
+    final application = await service.createApplication(
+      token: bootstrap.controlCredential.token,
+      organizationId: bootstrap.organization.id,
+      runtimeApplicationId: 'com.example.new-app',
+      name: 'New Android app',
+      platform: 'android',
+      idempotencyKey: 'application-create-1',
+    );
+    expect(application.name, 'New Android app');
+    expect(application.platform, 'android');
+
+    final replay = await service.createApplication(
+      token: bootstrap.controlCredential.token,
+      organizationId: bootstrap.organization.id,
+      runtimeApplicationId: 'com.example.new-app',
+      name: 'New Android app',
+      platform: 'android',
+      idempotencyKey: 'application-create-1',
+    );
+    expect(replay.id, application.id);
+
+    final environment = await service.createEnvironment(
+      token: bootstrap.controlCredential.token,
+      organizationId: bootstrap.organization.id,
+      applicationId: application.id,
+      name: 'staging',
+      idempotencyKey: 'environment-create-1',
+    );
+    expect(environment.version, 0);
+    expect(environment.promotedReleaseId, isNull);
+
+    final environmentReplay = await service.createEnvironment(
+      token: bootstrap.controlCredential.token,
+      organizationId: bootstrap.organization.id,
+      applicationId: application.id,
+      name: 'staging',
+      idempotencyKey: 'environment-create-1',
+    );
+    expect(environmentReplay.id, environment.id);
+
+    await expectLater(
+      service.createApplication(
+        token: bootstrap.controlCredential.token,
+        organizationId: bootstrap.organization.id,
+        runtimeApplicationId: 'com.example.new-app',
+        idempotencyKey: 'application-create-2',
+      ),
+      throwsA(
+        isA<ControlPlaneException>().having(
+          (error) => error.code,
+          'code',
+          'APPLICATION_CONFLICT',
+        ),
+      ),
+    );
+    await expectLater(
+      service.createEnvironment(
+        token: bootstrap.controlCredential.token,
+        organizationId: bootstrap.organization.id,
+        applicationId: application.id,
+        name: 'STAGING',
+        idempotencyKey: 'environment-create-2',
+      ),
+      throwsA(
+        isA<ControlPlaneException>().having(
+          (error) => error.code,
+          'code',
+          'ENVIRONMENT_CONFLICT',
+        ),
+      ),
+    );
+  });
+
   test(
     'registers, verifies, promotes, and delivers exact signed bytes',
     () async {

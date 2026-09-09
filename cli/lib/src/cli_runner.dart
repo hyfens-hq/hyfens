@@ -13,22 +13,27 @@ import 'auth_storage.dart';
 import 'canonical.dart';
 import 'configuration.dart';
 import 'diagnostics.dart';
+import 'mcp/mcp_server.dart';
 import 'profile.dart';
 import 'server.dart';
 import 'signing.dart';
 import 'toolchain.dart';
+import 'upgrade.dart';
 
 final class HyfensCommandRunner extends CommandRunner<void> {
   HyfensCommandRunner({
+    bool deprecatedToolShim = false,
     HyfensToolchain? toolchain,
     AuthClient? authClient,
     AuthStorage? authStorage,
     AuthPrompt? authPrompt,
     AuthBrowserLauncher? authBrowserLauncher,
     AuthSleeper? authSleeper,
+    HyfensUpgradeService? upgradeService,
     IOSink? out,
     IOSink? err,
-  }) : toolchain = toolchain ?? HyfensToolchain(),
+  }) : _deprecatedToolShim = deprecatedToolShim,
+       toolchain = toolchain ?? HyfensToolchain(),
        authClient =
            authClient ??
            AuthClient(
@@ -37,6 +42,7 @@ final class HyfensCommandRunner extends CommandRunner<void> {
              sleeper: authSleeper,
            ),
        authPrompt = authPrompt ?? defaultAuthPrompt,
+       upgradeService = upgradeService ?? HyfensUpgradeService(),
        out = out ?? stdout,
        err = err ?? stderr,
        super('hyfens', 'Hyfens developer platform CLI.', usageLineLength: 100) {
@@ -48,9 +54,13 @@ final class HyfensCommandRunner extends CommandRunner<void> {
       ..addFlag('non-interactive', help: 'Fail instead of prompting.')
       ..addFlag(
         'version',
+        abbr: 'v',
         help: 'Print the Hyfens CLI version.',
         negatable: false,
       );
+    addCommand(VersionCommand(this));
+    addCommand(UpgradeCommand(this));
+    addCommand(McpCommand(this));
     addCommand(DoctorCommand(this));
     addCommand(StatusCommand(this));
     addCommand(LoginCommand(this));
@@ -63,6 +73,7 @@ final class HyfensCommandRunner extends CommandRunner<void> {
     addCommand(PatchCommand(this));
     addCommand(RollbackCommand(this));
     addCommand(CleanupCommand(this));
+    addCommand(DetachCommand(this));
     addCommand(InspectCommand(this));
     addCommand(VerifyCommand(this));
     addCommand(KeysCommand(this));
@@ -72,9 +83,11 @@ final class HyfensCommandRunner extends CommandRunner<void> {
     addCommand(BundleCommand(this));
   }
 
+  final bool _deprecatedToolShim;
   final HyfensToolchain toolchain;
   final AuthClient authClient;
   final AuthPrompt authPrompt;
+  final HyfensUpgradeService upgradeService;
   final IOSink out;
   final IOSink err;
 
@@ -86,14 +99,30 @@ final class HyfensCommandRunner extends CommandRunner<void> {
 
   @override
   Future<void> run(Iterable<String> arguments) async {
-    _verbose = arguments.contains('--verbose');
-    _json = arguments.contains('--json');
-    await super.run(arguments);
+    final normalizedArguments = arguments.toList(growable: false);
+    _verbose = normalizedArguments.contains('--verbose');
+    _json = normalizedArguments.contains('--json');
+    if (normalizedArguments.length == 1 &&
+        (normalizedArguments.single == '--version' ||
+            normalizedArguments.single == '-v')) {
+      writeVersion();
+      return;
+    }
+    await super.run(normalizedArguments);
   }
 
   void write(Object value) => out.writeln(value);
 
   void writeJson(Object value) => out.writeln(jsonEncode(value));
+
+  void writeVersion() {
+    write(
+      _deprecatedToolShim ? hyfensToolVersion : 'hyfens $hyfensToolVersion',
+    );
+  }
+
+  @override
+  void printUsage() => write(usage);
 
   void writeDiagnosticReport(DiagnosticReport report) {
     if (jsonMode) {
@@ -117,14 +146,11 @@ Future<void> runHyfensCli(
   if (deprecatedToolShim) {
     errors.writeln('tool is deprecated; use hyfens');
   }
-  if (arguments.length == 1 &&
-      (arguments.single == '--version' || arguments.single == '-v')) {
-    output.writeln(
-      deprecatedToolShim ? hyfensToolVersion : 'hyfens $hyfensToolVersion',
-    );
-    return;
-  }
-  final runner = HyfensCommandRunner(out: output, err: errors);
+  final runner = HyfensCommandRunner(
+    deprecatedToolShim: deprecatedToolShim,
+    out: output,
+    err: errors,
+  );
   try {
     await runner.run(arguments);
   } on ToolFailure catch (error) {
@@ -157,9 +183,139 @@ abstract base class _ToolCommand extends Command<void> {
 
   final HyfensCommandRunner runner;
 
+  @override
+  void printUsage() => runner.write(usage);
+
   bool get jsonMode => runner.jsonMode || argResults?['json'] == true;
   String? get projectPath =>
       argResults?['project'] as String? ?? globalResults?['project'] as String?;
+}
+
+final class VersionCommand extends Command<void> {
+  VersionCommand(this.runner);
+
+  final HyfensCommandRunner runner;
+
+  @override
+  String get name => 'version';
+
+  @override
+  String get description => 'Print the Hyfens CLI version.';
+
+  @override
+  void printUsage() => runner.write(usage);
+
+  @override
+  Future<void> run() async => runner.writeVersion();
+}
+
+final class UpgradeCommand extends Command<void> {
+  UpgradeCommand(this.runner) {
+    argParser
+      ..addFlag('json', help: 'Emit machine-readable JSON.')
+      ..addFlag(
+        'check',
+        help: 'Check for a newer stable release without installing it.',
+        negatable: false,
+      )
+      ..addOption(
+        'version',
+        help: 'Install one explicit release instead of the latest stable release.',
+      );
+  }
+
+  final HyfensCommandRunner runner;
+
+  @override
+  String get name => 'upgrade';
+
+  @override
+  String get description => 'Install the latest stable Hyfens CLI release.';
+
+  @override
+  void printUsage() => runner.write(usage);
+
+  @override
+  Future<void> run() async {
+    final result = await runner.upgradeService.upgrade(
+      requestedVersion: argResults?['version'] as String?,
+      checkOnly: argResults?['check'] == true,
+    );
+    if (runner.jsonMode || argResults?['json'] == true) {
+      runner.writeJson(result.toJson());
+      return;
+    }
+    runner.write('Current version: ${result.currentVersion}');
+    runner.write('Latest version:  ${result.latestVersion}');
+    if (!result.updateAvailable) {
+      runner.write('Hyfens is already up to date.');
+    } else if (result.checkOnly) {
+      runner.write('An update is available. Run hyfens upgrade to install it.');
+    } else {
+      runner.write('Hyfens upgraded to ${result.latestVersion}.');
+      if (result.installedPath != null) {
+        runner.write('  Binary: ${result.installedPath}');
+      }
+      if (Platform.isWindows) {
+        runner.write(
+          'Restart the terminal before running the upgraded binary.',
+        );
+      }
+    }
+  }
+}
+
+final class McpCommand extends Command<void> {
+  McpCommand(this.runner) {
+    argParser
+      ..addOption(
+        'profile',
+        help: 'Use a named host-bound profile instead of the active profile.',
+      )
+      ..addFlag(
+        'debug',
+        help: 'Write MCP diagnostics to stderr while serving.',
+        negatable: false,
+      );
+  }
+
+  final HyfensCommandRunner runner;
+
+  @override
+  String get name => 'mcp';
+
+  @override
+  String get description =>
+      'Start the Hyfens MCP server over stdio for compatible AI coding agents.';
+
+  @override
+  void printUsage() {
+    runner.write(usage);
+    runner.write('');
+    runner.write(
+      'Uses the active authenticated profile; use --profile for a named profile.',
+    );
+    runner.write(
+      'The server waits for an agent on stdio. Startup and debug messages use stderr.',
+    );
+  }
+
+  @override
+  Future<void> run() async {
+    final profileName = argResults?['profile'] as String?;
+    if (profileName != null &&
+        !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$').hasMatch(profileName)) {
+      throw UsageException('Invalid --profile name.', usage);
+    }
+    runner.err.writeln(hyfensMcpStartupMessage);
+    await runHyfensMcp(
+      toolchain: runner.toolchain,
+      authStorage: runner.authClient.storage,
+      profileName: profileName,
+      debug: argResults?['debug'] == true,
+      log: runner.err,
+    );
+  }
 }
 
 final class DoctorCommand extends _ToolCommand {
@@ -263,7 +419,7 @@ final class StatusCommand extends _ToolCommand {
       endpoint: profile.endpoint,
     );
     final auth = <String, Object?>{
-      'profile': profile.toJson(),
+      'profile': profile.toPublicJson(),
       'session': <String, Object?>{
         'status': session == null
             ? 'NOT_LOGGED_IN'
@@ -304,7 +460,9 @@ final class StatusCommand extends _ToolCommand {
       'Dart:         ${environment.dartVersion} ${environment.dartStatus}',
     );
     runner.write('Runtime pkg:  ${environment.runtimeStatus}');
-    runner.write('Profile:      ${profile.name} (${profile.endpoint})');
+    runner.write(
+      'Profile:      ${profile.name} (${displayControlPlaneEndpoint(profile.endpoint)})',
+    );
     runner.write('Auth session: ${auth['session']! as Map<String, Object?>}');
     runner.write(
       'App runtime:  ${status.applicationRuntimeStatus} (local tool only; introspection unavailable)',
@@ -332,7 +490,7 @@ final class StatusCommand extends _ToolCommand {
       endpoint: profile.endpoint,
     );
     final auth = <String, Object?>{
-      'profile': profile.toJson(),
+      'profile': profile.toPublicJson(),
       'session': session == null
           ? 'NOT_LOGGED_IN'
           : session.isSessionExpired
@@ -350,7 +508,9 @@ final class StatusCommand extends _ToolCommand {
     } else {
       runner.write('Hyfens status');
       runner.write('Result:       NOT_INITIALIZED');
-      runner.write('Profile:      ${profile.name} (${profile.endpoint})');
+      runner.write(
+        'Profile:      ${profile.name} (${displayControlPlaneEndpoint(profile.endpoint)})',
+      );
       runner.write('Auth session: ${auth['session']}');
       runner.write('Project:      no Flutter project found');
     }
@@ -421,7 +581,7 @@ final class InitCommand extends _ToolCommand {
       'dryRun': result.dryRun,
       'flutterVersion': result.environment.flutterVersion,
       'dartVersion': result.environment.dartVersion,
-      'profile': activeProfile.toJson(),
+      'profile': activeProfile.toPublicJson(),
       'binding': binding.toJson(),
       'actions': actions,
     };
@@ -451,7 +611,16 @@ final class InitCommand extends _ToolCommand {
 
 final class AnalyzeCommand extends _ToolCommand {
   AnalyzeCommand(super.runner) {
-    argParser.addOption('release', help: 'Exact release baseline ID.');
+    argParser
+      ..addOption('release', help: 'Exact release baseline ID.')
+      ..addOption(
+        'flavor',
+        help: 'Native flavor used by the selected release baseline.',
+      )
+      ..addOption(
+        'entrypoint',
+        help: 'Project-relative Dart entrypoint used by the selected baseline.',
+      );
   }
 
   @override
@@ -466,6 +635,8 @@ final class AnalyzeCommand extends _ToolCommand {
     final result = runner.toolchain.analyze(
       projectPath: projectPath,
       releaseId: argResults!['release'] as String?,
+      flavor: argResults!['flavor'] as String?,
+      entrypointPath: argResults!['entrypoint'] as String?,
     );
     if (jsonMode) {
       runner.writeJson(result.toJson());
@@ -532,7 +703,15 @@ final class ReleaseCommand extends _ToolCommand {
         help: 'Create a baseline without running Flutter build.',
       )
       ..addOption('architecture', defaultsTo: 'arm64')
-      ..addOption('mode', defaultsTo: 'release');
+      ..addOption('mode', defaultsTo: 'release')
+      ..addOption(
+        'flavor',
+        help: 'Native flavor to build, for example local or staging.',
+      )
+      ..addOption(
+        'entrypoint',
+        help: 'Project-relative Dart entrypoint containing main().',
+      );
   }
 
   @override
@@ -553,12 +732,16 @@ final class ReleaseCommand extends _ToolCommand {
       architecture: argResults!['architecture'] as String,
       buildMode: argResults!['mode'] as String,
       metadataOnly: argResults!['metadata-only'] as bool,
+      flavor: argResults!['flavor'] as String?,
+      entrypointPath: argResults!['entrypoint'] as String?,
     );
     final data = <String, Object?>{
       'releaseId': record.releaseId,
       'applicationId': record.applicationId,
       'target': record.target,
       'architecture': record.architecture,
+      'entrypoint': record.entrypointPath,
+      'flavor': record.flavor,
       'buildFingerprint': record.buildFingerprint,
       'functions': record.functions.length,
       'sourceUnits': record.sources.length,
@@ -582,6 +765,9 @@ final class ReleaseCommand extends _ToolCommand {
     runner.write(
       '  Target:        ${record.target}-${record.architecture}-${record.buildMode}',
     );
+    runner.write('  Entrypoint:    ${record.entrypointPath}');
+    if (record.flavor != null)
+      runner.write('  Flavor:        ${record.flavor}');
     runner.write('  Functions:     ${record.functions.length}');
     runner.write('  Source units:  ${record.sources.length}');
     runner.write('  Build:         ${record.build['status']}');
@@ -624,7 +810,16 @@ final class ReleaseCommand extends _ToolCommand {
 
 final class PatchCommand extends _ToolCommand {
   PatchCommand(super.runner) {
-    argParser.addOption('release', help: 'Exact release baseline ID.');
+    argParser
+      ..addOption('release', help: 'Exact release baseline ID.')
+      ..addOption(
+        'flavor',
+        help: 'Native flavor used by the selected release baseline.',
+      )
+      ..addOption(
+        'entrypoint',
+        help: 'Project-relative Dart entrypoint used by the selected baseline.',
+      );
   }
 
   @override
@@ -642,6 +837,14 @@ final class PatchCommand extends _ToolCommand {
       throw UsageException('patch accepts only android or ios', usage);
     }
     var releaseId = argResults!['release'] as String?;
+    final requestedFlavor = argResults!['flavor'] as String?;
+    final normalizedFlavor = requestedFlavor == null
+        ? null
+        : normalizeFlavorName(requestedFlavor);
+    final requestedEntrypoint = argResults!['entrypoint'] as String?;
+    final normalizedEntrypoint = requestedEntrypoint == null
+        ? null
+        : normalizeEntrypointPath(requestedEntrypoint);
     if (targets.isNotEmpty) {
       final target = targets.single;
       final project = runner.toolchain.project(projectPath: projectPath);
@@ -661,7 +864,14 @@ final class PatchCommand extends _ToolCommand {
       } else {
         final matches = store
             .listReleases()
-            .where((release) => release.target == target)
+            .where(
+              (release) =>
+                  release.target == target &&
+                  (normalizedFlavor == null ||
+                      release.flavor == normalizedFlavor) &&
+                  (normalizedEntrypoint == null ||
+                      release.entrypointPath == normalizedEntrypoint),
+            )
             .toList(growable: false);
         if (matches.isEmpty) {
           throw ToolFailure.single(
@@ -688,6 +898,8 @@ final class PatchCommand extends _ToolCommand {
     final result = await runner.toolchain.patch(
       projectPath: projectPath,
       releaseId: releaseId,
+      flavor: requestedFlavor,
+      entrypointPath: requestedEntrypoint,
     );
     final data = <String, Object?>{
       'output': result.output.path,
@@ -721,6 +933,39 @@ final class RollbackCommand extends _ToolCommand {
         'to',
         defaultsTo: 'base',
         help: 'Rollback target; only the trusted store-installed AOT base is supported.',
+      )
+      ..addFlag(
+        'cloud',
+        help: 'Request rollback from the authenticated managed Cloud environment.',
+        negatable: false,
+      )
+      ..addOption(
+        'endpoint',
+        help: 'Cloud or self-hosted control-plane URL or HYFENS_CONTROL_PLANE_URL.',
+      )
+      ..addOption(
+        'token',
+        help: 'Customer token or HYFENS_TOKEN (never written to disk).',
+      )
+      ..addOption(
+        'organization-id',
+        help: 'Customer organization ID or HYFENS_ORGANIZATION_ID.',
+      )
+      ..addOption(
+        'application-id',
+        help: 'Control-plane application ID or HYFENS_APPLICATION_ID.',
+      )
+      ..addOption(
+        'environment-id',
+        help: 'Control-plane environment ID or HYFENS_ENVIRONMENT_ID.',
+      )
+      ..addOption(
+        'idempotency-key',
+        help: 'Request idempotency key or HYFENS_IDEMPOTENCY_KEY.',
+      )
+      ..addOption(
+        'ca-cert',
+        help: 'PEM CA certificate for a private HTTPS control plane or HYFENS_TLS_CA_CERT.',
       );
   }
 
@@ -729,10 +974,28 @@ final class RollbackCommand extends _ToolCommand {
 
   @override
   String get description =>
-      'Record an explicit rollback to the trusted store-installed AOT base.';
+      'Rollback locally or request a trusted base rollback from managed Cloud.';
 
   @override
   Future<void> run() async {
+    final endpointValue = _rolloutOptionOrEnvironment(
+      argResults,
+      globalResults,
+      'endpoint',
+      'HYFENS_CONTROL_PLANE_URL',
+    );
+    final profile = endpointValue == null || argResults!['cloud'] == true
+        ? await runner.authClient.readProfile()
+        : null;
+    final cloudRequested =
+        argResults!['cloud'] == true ||
+        endpointValue != null ||
+        profile?.managed == true;
+    if (cloudRequested) {
+      await _runCloudRollback(endpointValue: endpointValue, profile: profile);
+      return;
+    }
+
     final result = await runner.toolchain.rollback(
       projectPath: projectPath,
       releaseId: argResults!['release'] as String?,
@@ -761,6 +1024,111 @@ final class RollbackCommand extends _ToolCommand {
       '  Signature:     verified by the release trust key ${result.keyId}',
     );
     runner.write('  Patch files and sequence evidence were preserved.');
+  }
+
+  Future<void> _runCloudRollback({
+    required String? endpointValue,
+    required Profile? profile,
+  }) async {
+    final auth = await _resolveControlPlaneRequest(
+      runner: runner,
+      endpoint: endpointValue == null
+          ? profile?.managed == true
+                ? profile!.endpoint
+                : Uri.parse(managedCloudApiBase)
+          : _rolloutEndpoint(endpointValue, usage),
+      token: _rolloutOptionOrEnvironment(
+        argResults,
+        globalResults,
+        'token',
+        'HYFENS_TOKEN',
+      ),
+      organizationId: _rolloutOptionOrEnvironment(
+        argResults,
+        globalResults,
+        'organization-id',
+        'HYFENS_ORGANIZATION_ID',
+      ),
+      applicationId: _rolloutOptionOrEnvironment(
+        argResults,
+        globalResults,
+        'application-id',
+        'HYFENS_APPLICATION_ID',
+      ),
+      environmentId: _rolloutOptionOrEnvironment(
+        argResults,
+        globalResults,
+        'environment-id',
+        'HYFENS_ENVIRONMENT_ID',
+      ),
+      missingSummary: 'Cloud rollback configuration is incomplete',
+      missingCode: 'R8901',
+      requireApplication: true,
+      requireEnvironment: true,
+    );
+    final releaseId = argResults!['release'] as String?;
+    final command = await runner.toolchain.signRollbackControl(
+      projectPath: projectPath,
+      releaseId: releaseId,
+      target: argResults!['to'] as String,
+    );
+    final commandBytes = command.encodeBytes();
+    final idempotencyKey =
+        _rolloutOptionOrEnvironment(
+          argResults,
+          globalResults,
+          'idempotency-key',
+          'HYFENS_IDEMPOTENCY_KEY',
+        ) ??
+        'rollback-${sha256Hex(commandBytes).substring(0, 32)}';
+    final caCertPath = _rolloutOptionOrEnvironment(
+      argResults,
+      globalResults,
+      'ca-cert',
+      'HYFENS_TLS_CA_CERT',
+    );
+    final response = await _deployJson(
+      method: 'POST',
+      uri: _deployUri(
+        auth.endpoint,
+        'v1/organizations/${Uri.encodeComponent(auth.organizationId)}'
+        '/applications/${Uri.encodeComponent(auth.applicationId!)}'
+        '/environments/${Uri.encodeComponent(auth.environmentId!)}'
+        '/rollback',
+      ),
+      token: auth.token,
+      securityContext: _securityContext(caCertPath),
+      idempotencyKey: idempotencyKey,
+      body: <String, Object?>{'rollback_control': base64.encode(commandBytes)},
+    );
+    final result = <String, Object?>{
+      ...response,
+      'result': response['status'] ?? 'ROLLBACK_REQUESTED',
+      'releaseId': command.releaseId,
+      'highWaterSequence': command.highWaterSequence,
+      'keyId': command.keyId,
+      'mode': 'managed_cloud',
+    };
+    if (jsonMode) {
+      runner.writeJson(result);
+      return;
+    }
+    runner.write('Cloud rollback requested');
+    runner.write('  Organization: ${auth.organizationId}');
+    runner.write('  Application:  ${auth.applicationId}');
+    runner.write('  Environment:  ${auth.environmentId}');
+    runner.write('  Release:      ${command.releaseId}');
+    runner.write('  Target:       base');
+    runner.write('  High-water:   ${command.highWaterSequence} (retained)');
+    runner.write(
+      '  Result:       ${response['status'] ?? 'ROLLBACK_REQUESTED'}',
+    );
+    runner.write(
+      '  Signature:    verified by the release trust key ${command.keyId}',
+    );
+    runner.write(
+      '  Runtime:      will apply the directive on its next Cloud poll.',
+    );
   }
 }
 
@@ -805,6 +1173,64 @@ final class CleanupCommand extends _ToolCommand {
     for (final path in result.removedPaths) runner.write('    $path');
     runner.write('  Retained protected state/evidence:');
     for (final path in result.retainedPaths) runner.write('    $path');
+  }
+}
+
+final class DetachCommand extends _ToolCommand {
+  DetachCommand(super.runner) {
+    argParser
+      ..addFlag(
+        'dry-run',
+        help: 'Show the project files that would be removed.',
+        negatable: false,
+      )
+      ..addFlag(
+        'keep-keys',
+        help: 'Retain the local .tool/keys directory and signing material.',
+        negatable: false,
+      )
+      ..addOption(
+        'confirm',
+        help: 'Type DETACH to remove the Hyfens project integration state.',
+      );
+  }
+
+  @override
+  String get name => 'detach';
+
+  @override
+  String get description =>
+      'Remove confirmed Hyfens project metadata without touching Flutter source.';
+
+  @override
+  Future<void> run() async {
+    final result = await runner.toolchain.detach(
+      projectPath: projectPath,
+      dryRun: argResults!['dry-run'] as bool,
+      keepKeys: argResults!['keep-keys'] as bool,
+      confirmation: argResults!['confirm'] as String?,
+    );
+    if (jsonMode) {
+      runner.writeJson(result.toJson());
+      return;
+    }
+    runner.write(result.dryRun ? 'Detach plan' : 'Hyfens project detached');
+    runner.write('  Project: ${result.project.root.path}');
+    if (result.removedPaths.isEmpty) {
+      runner.write('  Removed: none');
+    } else {
+      runner.write('  Removed:');
+      for (final path in result.removedPaths) runner.write('    $path');
+    }
+    if (result.retainedPaths.isNotEmpty) {
+      runner.write('  Retained:');
+      for (final path in result.retainedPaths) runner.write('    $path');
+    }
+    if (!result.dryRun) {
+      runner.write(
+        '  Flutter source and native project files were not changed.',
+      );
+    }
   }
 }
 
@@ -2360,7 +2786,7 @@ Future<Map<String, Object?>> _deployJson({
         exitCode: ToolExitCode.environment,
         code: 'D8004',
         summary: 'Control-plane response is malformed',
-        detail: uri.toString(),
+        detail: displayControlPlaneUri(uri),
       );
     }
     return decoded;
@@ -2568,7 +2994,7 @@ Future<Map<String, Object?>> _bundleHttpRequest({
         exitCode: ToolExitCode.environment,
         code: 'B9009',
         summary: 'Control-plane bundle response is malformed',
-        detail: uri.toString(),
+        detail: displayControlPlaneUri(uri),
       );
     }
     return responseBody;

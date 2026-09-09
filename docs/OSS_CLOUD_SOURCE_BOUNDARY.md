@@ -46,7 +46,7 @@ The deployment topology is therefore:
 ```text
 hyfens.com         → Cloud marketing web
 managed dashboard → OSS dashboard build
-api.hyfens.com     → managed control plane
+managed Cloud      → managed control plane
 self-hosted        → OSS control plane + OSS dashboard
 ```
 

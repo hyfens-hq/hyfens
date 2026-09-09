@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 0 ] || {
+  echo 'hyfens-dashboard-deploy accepts no arguments' >&2
+  exit 2
+}
+
+stage=/home/hyfen/p2-deploy-stage/dashboard
+target=/var/www/hyfens/dashboard
+nginx_site=/etc/nginx/sites-available/hyfens-dashboard-local.conf
+
+[ -d "$stage" ] || {
+  echo 'dashboard staging directory is missing' >&2
+  exit 1
+}
+[ "$(readlink -f "$stage")" = "$stage" ] || {
+  echo 'dashboard staging directory must not be a symlink' >&2
+  exit 1
+}
+[ -r "$nginx_site" ] || {
+  echo 'dashboard nginx configuration is missing' >&2
+  exit 1
+}
+
+files='index.html app.js tokens.css styles.css auth-flow.css auth-flow.js brand-mark.svg cli/authorize/index.html device/index.html'
+for file in $files; do
+  source="$stage/$file"
+  [ -f "$source" ] || {
+    echo "dashboard file is missing: $file" >&2
+    exit 1
+  }
+  [ "$(readlink -f "$source")" = "$source" ] || {
+    echo "dashboard file must not be a symlink: $file" >&2
+    exit 1
+  }
+done
+
+if find "$stage" -type l -print -quit | grep -q .; then
+  echo 'dashboard staging files must not contain symlinks' >&2
+  exit 1
+fi
+
+for directory in "$target" "$target/cli" "$target/cli/authorize" "$target/device"; do
+  [ ! -L "$directory" ] || {
+    echo "dashboard target directory must not be a symlink: $directory" >&2
+    exit 1
+  }
+done
+
+install -d -o root -g root -m 0755 \
+  "$target" \
+  "$target/cli" \
+  "$target/cli/authorize" \
+  "$target/device"
+
+for file in $files; do
+  install -o root -g root -m 0644 "$stage/$file" "$target/$file"
+done
+
+/usr/sbin/nginx -t
+/usr/bin/systemctl reload nginx
+echo 'hyfens dashboard deployed'

@@ -965,6 +965,8 @@ final class ReleaseRecord {
     required List<ToolDiagnostic> diagnostics,
     required this.configFingerprint,
     required this.nativeFingerprints,
+    this.entrypointPath = 'lib/main.dart',
+    this.flavor,
   }) : sources = List.unmodifiable(sources),
        functions = List.unmodifiable(functions),
        diagnostics = List.unmodifiable(diagnostics);
@@ -990,6 +992,8 @@ final class ReleaseRecord {
   final List<ToolDiagnostic> diagnostics;
   final String configFingerprint;
   final Map<String, Object?> nativeFingerprints;
+  final String entrypointPath;
+  final String? flavor;
 
   String encode() => canonicalJson(toJson());
 
@@ -1010,7 +1014,12 @@ final class ReleaseRecord {
     'graph': graph,
     'sourceFingerprints': sourceFingerprints,
     'instrumentation': instrumentation,
-    'build': build,
+    'build': <String, Object?>{
+      ...build,
+      if (!build.containsKey('entrypoint') && entrypointPath != 'lib/main.dart')
+        'entrypoint': entrypointPath,
+      if (!build.containsKey('flavor') && flavor != null) 'flavor': flavor,
+    },
     'sources': sources.map((item) => item.toJson()).toList(),
     'functions': functions.map((item) => item.toJson()).toList(),
     'diagnostics': diagnostics.map((item) => item.toJson()).toList(),
@@ -1058,6 +1067,15 @@ final class ReleaseRecord {
     final diagnostics = (raw['diagnostics']! as List<Object?>)
         .map(_diagnosticFromJson)
         .toList(growable: false);
+    final rawBuild = raw['build']! as Map<String, Object?>;
+    final encodedEntrypoint = rawBuild['entrypoint'];
+    final entrypointPath = encodedEntrypoint == null
+        ? 'lib/main.dart'
+        : _decodeReleaseEntrypoint(encodedEntrypoint);
+    final encodedFlavor = rawBuild['flavor'];
+    final flavor = encodedFlavor == null
+        ? null
+        : _decodeReleaseFlavor(encodedFlavor);
     final result = ReleaseRecord(
       applicationId: raw['applicationId']! as String,
       releaseId: raw['releaseId']! as String,
@@ -1074,17 +1092,41 @@ final class ReleaseRecord {
       graph: raw['graph']! as Map<String, Object?>,
       sourceFingerprints: raw['sourceFingerprints']! as Map<String, Object?>,
       instrumentation: raw['instrumentation']! as Map<String, Object?>,
-      build: raw['build']! as Map<String, Object?>,
+      build: rawBuild,
       sources: sources,
       functions: functions,
       diagnostics: diagnostics,
       configFingerprint: raw['configFingerprint']! as String,
       nativeFingerprints: raw['nativeFingerprints']! as Map<String, Object?>,
+      entrypointPath: entrypointPath,
+      flavor: flavor,
     );
     if (result.encode() != source) {
       throw const FormatException('Release metadata is not canonical');
     }
     return result;
+  }
+}
+
+String _decodeReleaseEntrypoint(Object value) {
+  if (value is! String) {
+    throw const FormatException('Invalid release entrypoint');
+  }
+  try {
+    return normalizeEntrypointPath(value);
+  } on ToolFailure {
+    throw const FormatException('Invalid release entrypoint');
+  }
+}
+
+String _decodeReleaseFlavor(Object value) {
+  if (value is! String) {
+    throw const FormatException('Invalid release flavor');
+  }
+  try {
+    return normalizeFlavorName(value);
+  } on ToolFailure {
+    throw const FormatException('Invalid release flavor');
   }
 }
 
@@ -1496,6 +1538,8 @@ final class AnalysisResult {
     'releaseId': release.releaseId,
     'applicationId': release.applicationId,
     'target': release.target,
+    'entrypoint': release.entrypointPath,
+    'flavor': release.flavor,
     'result': canPatch ? 'PATCHABLE' : 'PATCH_BLOCKED',
     'currentSourceFingerprint': currentSourceFingerprint,
     'currentGraphFingerprint': currentGraphFingerprint,
@@ -1532,6 +1576,82 @@ final class HyfensToolchain {
 
   ToolConfig config(FlutterProject project) =>
       ToolConfig.load(project.configFile);
+
+  EntrypointSelection _resolveEntrypoint({
+    required FlutterProject project,
+    required ToolConfig config,
+    required String target,
+    String? flavor,
+    String? entrypointPath,
+  }) {
+    final selection = config.resolveEntrypoint(
+      target: target,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
+    final entrypoint = File(
+      p.join(project.root.path, selection.entrypointPath),
+    );
+    if (!isWithin(project.root, entrypoint) ||
+        FileSystemEntity.typeSync(entrypoint.path, followLinks: false) !=
+            FileSystemEntityType.file) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'T1402',
+        summary: 'Flutter entrypoint was not found',
+        detail: selection.entrypointPath,
+        path: project.relative(entrypoint),
+        action: 'Create the entrypoint under lib/ or pass --entrypoint with the Dart file used by this flavor.',
+      );
+    }
+    return selection;
+  }
+
+  EntrypointSelection _resolveReleaseEntrypoint({
+    required FlutterProject project,
+    required ReleaseRecord release,
+    String? flavor,
+    String? entrypointPath,
+  }) {
+    final normalizedFlavor = flavor == null
+        ? null
+        : normalizeFlavorName(flavor);
+    final normalizedEntrypoint = entrypointPath == null
+        ? null
+        : normalizeEntrypointPath(entrypointPath);
+    if (normalizedFlavor != null && normalizedFlavor != release.flavor ||
+        normalizedEntrypoint != null &&
+            normalizedEntrypoint != release.entrypointPath) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.compatibility,
+        code: 'R5007',
+        summary: 'Entrypoint selection does not match the release baseline',
+        detail:
+            'Release uses ${release.flavor ?? 'default'} at ${release.entrypointPath}; requested ${normalizedFlavor ?? 'default'} at ${normalizedEntrypoint ?? release.entrypointPath}.',
+        action: 'Use the release baseline selection or create a new release for this flavor and entrypoint.',
+      );
+    }
+    final selection = EntrypointSelection(
+      target: release.target,
+      entrypointPath: release.entrypointPath,
+      flavor: release.flavor,
+    );
+    final entrypoint = File(
+      p.join(project.root.path, selection.entrypointPath),
+    );
+    if (FileSystemEntity.typeSync(entrypoint.path, followLinks: false) !=
+        FileSystemEntityType.file) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'T1402',
+        summary: 'Release entrypoint was not found',
+        detail: selection.entrypointPath,
+        path: project.relative(entrypoint),
+        action: 'Restore the recorded entrypoint or create a new release with the current project structure.',
+      );
+    }
+    return selection;
+  }
 
   Future<ToolEnvironmentSnapshot> doctor({String? projectPath}) async {
     final current = project(projectPath: projectPath);
@@ -1720,6 +1840,267 @@ final class HyfensToolchain {
     );
   }
 
+  /// Removes only the project metadata and local store created by Hyfens.
+  ///
+  /// This is deliberately called `detach`, not `rollback`: runtime rollback
+  /// is a signed operation that changes an installed app's active patch, while
+  /// detach disconnects a source checkout from the local Hyfens toolchain. The
+  /// preflight refuses unexpected files and links so a confirmed operation
+  /// cannot become a broad project deletion.
+  Future<DetachResult> detach({
+    String? projectPath,
+    bool dryRun = false,
+    bool keepKeys = false,
+    String? confirmation,
+  }) async {
+    final current = project(projectPath: projectPath);
+    final plan = _planDetach(current, keepKeys: keepKeys);
+    if (plan.removedPaths.isEmpty) {
+      return DetachResult(
+        project: current,
+        dryRun: dryRun,
+        keepKeys: keepKeys,
+        removedPaths: const <String>[],
+        retainedPaths: plan.retainedPaths,
+      );
+    }
+    if (!dryRun && confirmation != 'DETACH') {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.refused,
+        code: ToolDiagnosticCodes.detachConfirmationRequired,
+        summary: 'Detaching a project requires explicit confirmation',
+        detail: 'Expected --confirm DETACH',
+        action: 'Run hyfens detach --dry-run first, then repeat the exact command with --confirm DETACH; no files were changed.',
+      );
+    }
+    if (dryRun) {
+      return DetachResult(
+        project: current,
+        dryRun: true,
+        keepKeys: keepKeys,
+        removedPaths: plan.removedPaths,
+        retainedPaths: plan.retainedPaths,
+      );
+    }
+    try {
+      for (final file in plan.removableFiles) {
+        if (file.existsSync()) file.deleteSync();
+      }
+      for (final directory in plan.removableDirectories) {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      }
+    } on Object catch (error) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: ToolDiagnosticCodes.detachFailed,
+        summary: 'Hyfens project detach stopped before completion',
+        detail: '$error',
+        action: 'Inspect the remaining paths listed by hyfens detach --dry-run and retry only after resolving the filesystem error.',
+      );
+    }
+    return DetachResult(
+      project: current,
+      dryRun: false,
+      keepKeys: keepKeys,
+      removedPaths: plan.removedPaths,
+      retainedPaths: plan.retainedPaths,
+    );
+  }
+
+  _DetachPlan _planDetach(FlutterProject project, {required bool keepKeys}) {
+    final removableFiles = <File>[];
+    final removableDirectories = <Directory>[];
+    final removedPaths = <String>[];
+    final retainedPaths = <String>[];
+
+    void addFile(File file) {
+      final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+      if (type == FileSystemEntityType.notFound) return;
+      if (type != FileSystemEntityType.file) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.refused,
+          code: ToolDiagnosticCodes.detachTargetInvalid,
+          summary: 'Hyfens detach target is not a regular file',
+          detail: file.path,
+          action: 'Inspect the path manually; detach never follows links or removes special files.',
+        );
+      }
+      removableFiles.add(file);
+      removedPaths.add(project.relative(file));
+    }
+
+    final store = project.toolDirectory;
+    final storeType = FileSystemEntity.typeSync(store.path, followLinks: false);
+    if (storeType == FileSystemEntityType.link ||
+        (storeType != FileSystemEntityType.notFound &&
+            storeType != FileSystemEntityType.directory)) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.refused,
+        code: ToolDiagnosticCodes.detachTargetInvalid,
+        summary: 'Hyfens store is not a private directory',
+        detail: store.path,
+        action: 'Inspect .tool manually; detach never follows links or removes special files.',
+      );
+    }
+
+    // `tool.yaml` is a generic filename. Only remove it when the project also
+    // has an unmistakable Hyfens binding or private store; a lone file is
+    // retained rather than guessing that another tool's configuration belongs
+    // to Hyfens.
+    final bindingType = FileSystemEntity.typeSync(
+      project.hyfensConfigFile.path,
+      followLinks: false,
+    );
+    _validateDetachConfig(project.hyfensConfigFile, isBinding: true);
+    final hasHyfensState =
+        storeType == FileSystemEntityType.directory ||
+        bindingType == FileSystemEntityType.file;
+    if (hasHyfensState) {
+      _validateDetachConfig(project.configFile, isBinding: false);
+      addFile(project.configFile);
+    } else if (FileSystemEntity.typeSync(
+          project.configFile.path,
+          followLinks: false,
+        ) ==
+        FileSystemEntityType.file) {
+      retainedPaths.add(project.relative(project.configFile));
+    }
+    addFile(project.hyfensConfigFile);
+
+    if (storeType == FileSystemEntityType.directory) {
+      _validateDetachStore(store);
+      if (keepKeys) {
+        const removableNames = <String>{
+          '.gitignore',
+          '.builds',
+          'builds',
+          'patches',
+          'releases',
+        };
+        for (final entry in store.listSync(followLinks: false)) {
+          final name = p.basename(entry.path);
+          if (!removableNames.contains(name)) continue;
+          final type = FileSystemEntity.typeSync(
+            entry.path,
+            followLinks: false,
+          );
+          if (type == FileSystemEntityType.file) {
+            removableFiles.add(File(entry.path));
+          } else if (type == FileSystemEntityType.directory) {
+            removableDirectories.add(Directory(entry.path));
+          }
+          removedPaths.add(project.relative(entry));
+        }
+        final keys = Directory(p.join(store.path, 'keys'));
+        if (FileSystemEntity.typeSync(keys.path, followLinks: false) ==
+            FileSystemEntityType.directory) {
+          retainedPaths.add(project.relative(keys));
+        }
+      } else {
+        removableDirectories.add(store);
+        removedPaths.add(project.relative(store));
+      }
+    }
+
+    if (keepKeys && retainedPaths.isNotEmpty) {
+      retainedPaths.add(project.relative(project.root));
+    }
+    return _DetachPlan(
+      removableFiles: removableFiles,
+      removableDirectories: removableDirectories,
+      removedPaths: removedPaths,
+      retainedPaths: retainedPaths,
+    );
+  }
+
+  void _validateDetachConfig(File file, {required bool isBinding}) {
+    final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return;
+    if (type != FileSystemEntityType.file) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.refused,
+        code: ToolDiagnosticCodes.detachTargetInvalid,
+        summary: 'Hyfens metadata target is not a regular file',
+        detail: file.path,
+        action: 'Inspect the path manually; detach never follows links or removes special files.',
+      );
+    }
+    try {
+      if (isBinding) {
+        HyfensProjectBinding.load(file);
+      } else {
+        ToolConfig.load(file);
+      }
+    } on Object catch (error) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.refused,
+        code: ToolDiagnosticCodes.detachUnexpectedContent,
+        summary: 'Hyfens metadata could not be verified for detach',
+        detail: '${file.path}: $error',
+        action:
+            'Repair or preserve the file and remove it manually after review.',
+      );
+    }
+  }
+
+  void _validateDetachStore(Directory store) {
+    const allowed = <String>{
+      '.gitignore',
+      '.builds',
+      'builds',
+      'keys',
+      'patches',
+      'releases',
+    };
+    for (final entry in store.listSync(followLinks: false)) {
+      final name = p.basename(entry.path);
+      if (!allowed.contains(name)) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.refused,
+          code: ToolDiagnosticCodes.detachUnexpectedContent,
+          summary: 'Hyfens store contains unexpected content',
+          detail: entry.path,
+          action: 'Move or review the unexpected .tool entry manually; detach made no changes.',
+        );
+      }
+      final type = FileSystemEntity.typeSync(entry.path, followLinks: false);
+      if (type == FileSystemEntityType.link ||
+          (type != FileSystemEntityType.file &&
+              type != FileSystemEntityType.directory)) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.refused,
+          code: ToolDiagnosticCodes.detachTargetInvalid,
+          summary: 'Hyfens store contains a link or special file',
+          detail: entry.path,
+          action: 'Inspect .tool manually; detach never follows links or removes special files.',
+        );
+      }
+      if (type == FileSystemEntityType.directory) {
+        _validateDetachTree(Directory(entry.path));
+      }
+    }
+  }
+
+  void _validateDetachTree(Directory directory) {
+    for (final entry in directory.listSync(followLinks: false)) {
+      final type = FileSystemEntity.typeSync(entry.path, followLinks: false);
+      if (type == FileSystemEntityType.link ||
+          (type != FileSystemEntityType.file &&
+              type != FileSystemEntityType.directory)) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.refused,
+          code: ToolDiagnosticCodes.detachTargetInvalid,
+          summary: 'Hyfens store contains a link or special file',
+          detail: entry.path,
+          action: 'Inspect .tool manually; detach never follows links or removes special files.',
+        );
+      }
+      if (type == FileSystemEntityType.directory) {
+        _validateDetachTree(Directory(entry.path));
+      }
+    }
+  }
+
   /// Explicitly records a rollback to the trusted store-installed AOT base.
   ///
   /// The CLI does not clear or rewrite app-local E1 state. It records the
@@ -1731,6 +2112,52 @@ final class HyfensToolchain {
     String? projectPath,
     String? releaseId,
     String target = 'base',
+  }) async {
+    final prepared = await _prepareRollback(
+      projectPath: projectPath,
+      releaseId: releaseId,
+      target: target,
+    );
+    final state = await prepared.store.commitBaseRollback(
+      prepared.release.releaseId,
+      highWaterSequence: prepared.highWater.sequence,
+      highWaterDigest: prepared.highWater.digest,
+    );
+    final commandFile = prepared.store.rollbackControl(
+      prepared.release.releaseId,
+    );
+    await writeAtomicText(commandFile, prepared.command.encode());
+    return RollbackResult(
+      project: prepared.project,
+      release: prepared.release,
+      baseArtifact: prepared.baseArtifact,
+      state: state,
+      commandFile: commandFile,
+      keyId: prepared.command.keyId,
+    );
+  }
+
+  /// Signs the same release-bound base rollback control used by the local
+  /// rollback command without changing the local rollback journal or control
+  /// file. Managed Cloud sends these bytes to the authenticated environment;
+  /// the runtime still performs the trusted state transition locally.
+  Future<RollbackControlCommand> signRollbackControl({
+    String? projectPath,
+    String? releaseId,
+    String target = 'base',
+  }) async {
+    final prepared = await _prepareRollback(
+      projectPath: projectPath,
+      releaseId: releaseId,
+      target: target,
+    );
+    return prepared.command;
+  }
+
+  Future<_PreparedRollback> _prepareRollback({
+    String? projectPath,
+    String? releaseId,
+    required String target,
   }) async {
     if (target != 'base' && target != _rollbackTargetBaseAot) {
       throw ToolFailure.single(
@@ -1770,20 +2197,13 @@ final class HyfensToolchain {
       keyId: privateKey.keyId,
       signer: privateKey.sign,
     );
-    final state = await store.commitBaseRollback(
-      release.releaseId,
-      highWaterSequence: highWater.sequence,
-      highWaterDigest: highWater.digest,
-    );
-    final commandFile = store.rollbackControl(release.releaseId);
-    await writeAtomicText(commandFile, command.encode());
-    return RollbackResult(
+    return _PreparedRollback(
       project: current,
       release: release,
       baseArtifact: baseArtifact,
-      state: state,
-      commandFile: commandFile,
-      keyId: command.keyId,
+      store: store,
+      highWater: highWater,
+      command: command,
     );
   }
 
@@ -2054,6 +2474,8 @@ final class HyfensToolchain {
     String architecture = 'arm64',
     String buildMode = 'release',
     bool metadataOnly = false,
+    String? flavor,
+    String? entrypointPath,
   }) async {
     if (target != 'android' && target != 'ios') {
       throw ToolFailure.single(
@@ -2066,6 +2488,13 @@ final class HyfensToolchain {
     }
     final current = project(projectPath: projectPath);
     final config = this.config(current);
+    final selection = _resolveEntrypoint(
+      project: current,
+      config: config,
+      target: target,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
     final store = ToolStore(current);
     final configuredPublicKey = store.resolveConfiguredPath(
       config.publicKeyPath,
@@ -2077,7 +2506,12 @@ final class HyfensToolchain {
       _keyStore.readPublic(configuredPublicKey);
     }
     final graph = _graphLoader.load(current);
-    final source = _sourceDiscoverer.discover(current, graph, config);
+    final source = _sourceDiscoverer.discover(
+      current,
+      graph,
+      config,
+      entrypointPath: selection.entrypointPath,
+    );
     final environment = await _environment.inspect(current);
     final targetName = '$target-$architecture-$buildMode';
     final graphFingerprint = graph.fingerprint;
@@ -2095,9 +2529,12 @@ final class HyfensToolchain {
       'formatVersion': patchFormatV1,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
       'updateUrl': config.updateUrl,
+      'entrypoint': selection.entrypointPath,
+      'flavor': selection.flavor,
     });
     final applicationId =
-        config.applicationId ?? current.applicationIdFor(target);
+        config.applicationIdFor(target, flavor: selection.flavor) ??
+        current.applicationIdFor(target);
     final releaseId = releaseIdFor(
       applicationId: applicationId,
       sourceFingerprint: source.fingerprint,
@@ -2115,6 +2552,8 @@ final class HyfensToolchain {
       'format': patchFormatV1,
       'graph': graphFingerprint,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
+      'entrypoint': selection.entrypointPath,
+      'flavor': selection.flavor,
     });
     final plan = _instrumentationPlanner.build(
       project: current,
@@ -2151,13 +2590,19 @@ final class HyfensToolchain {
             plan: plan,
             target: target,
             buildMode: buildMode,
+            entrypointPath: selection.entrypointPath,
+            flavor: selection.flavor,
             environment: environment,
             graph: graph,
             artifactStagingDirectory: Directory(
               p.join(current.toolDirectory.path, '.builds', releaseId),
             ),
           );
-    final build = Map<String, Object?>.from(buildResult);
+    final build = <String, Object?>{
+      ...buildResult,
+      'entrypoint': selection.entrypointPath,
+      if (selection.flavor != null) 'flavor': selection.flavor,
+    };
     final stagedArtifactPath = build.remove('artifactPath');
     if (stagedArtifactPath is String) stagedArtifact = File(stagedArtifactPath);
     final functions = _functionRecords(current, plan);
@@ -2193,6 +2638,8 @@ final class HyfensToolchain {
       diagnostics: plan.diagnostics,
       configFingerprint: configFingerprint,
       nativeFingerprints: native,
+      entrypointPath: selection.entrypointPath,
+      flavor: selection.flavor,
     );
     try {
       await store.writeRelease(
@@ -2210,13 +2657,34 @@ final class HyfensToolchain {
     return record;
   }
 
-  AnalysisResult analyze({String? projectPath, String? releaseId}) {
+  AnalysisResult analyze({
+    String? projectPath,
+    String? releaseId,
+    String? flavor,
+    String? entrypointPath,
+  }) {
     final current = project(projectPath: projectPath);
     final config = this.config(current);
     final store = ToolStore(current);
-    final release = _selectRelease(store, releaseId);
+    final release = _selectRelease(
+      store,
+      releaseId,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
+    final selection = _resolveReleaseEntrypoint(
+      project: current,
+      release: release,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
     final graph = _graphLoader.load(current);
-    final source = _sourceDiscoverer.discover(current, graph, config);
+    final source = _sourceDiscoverer.discover(
+      current,
+      graph,
+      config,
+      entrypointPath: selection.entrypointPath,
+    );
     final plan = _instrumentationPlanner.build(
       project: current,
       discovery: source,
@@ -2667,8 +3135,15 @@ final class HyfensToolchain {
   Future<PatchBuildResult> patch({
     String? projectPath,
     String? releaseId,
+    String? flavor,
+    String? entrypointPath,
   }) async {
-    final analysis = analyze(projectPath: projectPath, releaseId: releaseId);
+    final analysis = analyze(
+      projectPath: projectPath,
+      releaseId: releaseId,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+    );
     if (!analysis.canPatch) {
       final errors = analysis.diagnostics
           .where((item) => item.severity == DiagnosticSeverity.error)
@@ -2943,9 +3418,29 @@ final class HyfensToolchain {
     );
   }
 
-  ReleaseRecord _selectRelease(ToolStore store, String? releaseId) {
+  ReleaseRecord _selectRelease(
+    ToolStore store,
+    String? releaseId, {
+    String? flavor,
+    String? entrypointPath,
+  }) {
     if (releaseId != null) return store.readRelease(releaseId);
-    final records = store.listReleases();
+    final normalizedFlavor = flavor == null
+        ? null
+        : normalizeFlavorName(flavor);
+    final normalizedEntrypoint = entrypointPath == null
+        ? null
+        : normalizeEntrypointPath(entrypointPath);
+    final records = store
+        .listReleases()
+        .where(
+          (release) =>
+              (normalizedFlavor == null ||
+                  release.flavor == normalizedFlavor) &&
+              (normalizedEntrypoint == null ||
+                  release.entrypointPath == normalizedEntrypoint),
+        )
+        .toList(growable: false);
     if (records.length == 1) return records.single;
     if (records.isEmpty) {
       throw ToolFailure.single(
@@ -3138,6 +3633,8 @@ final class HyfensToolchain {
     required InstrumentationPlan plan,
     required String target,
     required String buildMode,
+    required String entrypointPath,
+    String? flavor,
     required ToolEnvironmentSnapshot environment,
     required ProjectGraph graph,
     required Directory artifactStagingDirectory,
@@ -3258,6 +3755,8 @@ final class HyfensToolchain {
       final command = <String>[
         'build',
         target == 'android' ? 'apk' : 'ipa',
+        '--target=$entrypointPath',
+        if (flavor != null) '--flavor=$flavor',
         if (buildMode == 'release') '--release',
         // Phase 1B validates installation on registered physical devices.
         // A local development export uses the existing Apple Development
@@ -3273,6 +3772,8 @@ final class HyfensToolchain {
         ...<String>[
           'build',
           target == 'android' ? 'apk' : 'ipa',
+          '--target=$entrypointPath',
+          if (flavor != null) '--flavor=$flavor',
           if (buildMode == 'release') '--release',
           if (target == 'ios') '--export-method=development',
           '--no-pub',
@@ -4047,6 +4548,24 @@ final class RollbackResult {
   };
 }
 
+final class _PreparedRollback {
+  const _PreparedRollback({
+    required this.project,
+    required this.release,
+    required this.baseArtifact,
+    required this.store,
+    required this.highWater,
+    required this.command,
+  });
+
+  final FlutterProject project;
+  final ReleaseRecord release;
+  final File baseArtifact;
+  final ToolStore store;
+  final RollbackHighWater highWater;
+  final RollbackControlCommand command;
+}
+
 final class _OverlayPluginPackage {
   const _OverlayPluginPackage({
     required this.name,
@@ -4109,6 +4628,53 @@ final class CleanupResult {
     'result': 'CLEANED',
     'scope': scope,
     'releaseId': release.releaseId,
+    'removed': removedPaths,
+    'retained': retainedPaths,
+  };
+}
+
+final class _DetachPlan {
+  _DetachPlan({
+    required List<File> removableFiles,
+    required List<Directory> removableDirectories,
+    required List<String> removedPaths,
+    required List<String> retainedPaths,
+  }) : removableFiles = List.unmodifiable(removableFiles),
+       removableDirectories = List.unmodifiable(removableDirectories),
+       removedPaths = List.unmodifiable(removedPaths),
+       retainedPaths = List.unmodifiable(retainedPaths);
+
+  final List<File> removableFiles;
+  final List<Directory> removableDirectories;
+  final List<String> removedPaths;
+  final List<String> retainedPaths;
+}
+
+final class DetachResult {
+  DetachResult({
+    required this.project,
+    required this.dryRun,
+    required this.keepKeys,
+    required List<String> removedPaths,
+    required List<String> retainedPaths,
+  }) : removedPaths = List.unmodifiable(removedPaths),
+       retainedPaths = List.unmodifiable(retainedPaths);
+
+  final FlutterProject project;
+  final bool dryRun;
+  final bool keepKeys;
+  final List<String> removedPaths;
+  final List<String> retainedPaths;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'result': dryRun
+        ? 'DETACH_PREVIEW'
+        : removedPaths.isEmpty
+        ? 'NOT_ATTACHED'
+        : 'DETACHED',
+    'projectRoot': project.root.path,
+    'dryRun': dryRun,
+    'keepKeys': keepKeys,
     'removed': removedPaths,
     'retained': retainedPaths,
   };

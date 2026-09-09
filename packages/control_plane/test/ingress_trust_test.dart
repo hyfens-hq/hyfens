@@ -150,4 +150,42 @@ void main() {
     );
     expect(ControlPlaneIngressTrustPolicy.hostAffectsAuthorization, isFalse);
   });
+
+  test('forwarded TLS is trusted only from a private proxy peer', () {
+    expect(
+      ControlPlaneIngressTrustPolicy.isTrustedForwardedTls(
+        remoteAddress: '172.18.0.1',
+        forwardedProto: 'https',
+      ),
+      isTrue,
+    );
+    expect(
+      ControlPlaneIngressTrustPolicy.isTrustedForwardedTls(
+        remoteAddress: '127.0.0.1',
+        forwardedProto: 'https',
+      ),
+      isTrue,
+    );
+    expect(
+      ControlPlaneIngressTrustPolicy.isTrustedForwardedTls(
+        remoteAddress: '203.0.113.10',
+        forwardedProto: 'https',
+      ),
+      isFalse,
+    );
+    expect(
+      ControlPlaneIngressTrustPolicy.isTrustedForwardedTls(
+        remoteAddress: '172.18.0.1',
+        forwardedProto: 'http',
+      ),
+      isFalse,
+    );
+    expect(
+      ControlPlaneIngressTrustPolicy.isTrustedForwardedTls(
+        remoteAddress: '172.18.0.1',
+        forwardedProto: 'https, http',
+      ),
+      isFalse,
+    );
+  });
 }

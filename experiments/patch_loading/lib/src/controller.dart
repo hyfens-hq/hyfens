@@ -707,6 +707,13 @@ final class E1PatchController {
       );
       return false;
     }
+    // Cloud desired state may continue to advertise the base rollback until
+    // a newer deployment supersedes it. Once the durable controller is
+    // already at base, applying the same authenticated directive is a safe
+    // idempotent no-op rather than a second runtime reset.
+    if (state.current == null && state.health == _PatchHealth.base) {
+      return true;
+    }
     return _rollbackLoadedState(state, 'signed developer rollback to base AOT');
   });
 

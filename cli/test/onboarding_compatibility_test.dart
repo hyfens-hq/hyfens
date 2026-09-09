@@ -212,6 +212,9 @@ instrumentation: false
 
         expect(commands, <String>{
           'help',
+          'version',
+          'upgrade',
+          'mcp',
           'doctor',
           'status',
           'login',
@@ -224,6 +227,7 @@ instrumentation: false
           'patch',
           'rollback',
           'cleanup',
+          'detach',
           'inspect',
           'verify',
           'keys',

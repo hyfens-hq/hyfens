@@ -1,0 +1,7 @@
+# TEMPLATE ONLY. Generate and review after a GitHub Release.
+# Replace the package identifier and every __PLACEHOLDER__ before submission.
+PackageIdentifier: __WINGET_PUBLISHER__.Hyfens
+PackageVersion: __VERSION__
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.9.0

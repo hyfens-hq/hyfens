@@ -15,6 +15,7 @@ dependencies:
   args: ^2.7.0
   crypto: ^3.0.7
   cryptography: ^2.9.0
+  dart_mcp: ^0.5.2
   hyfens_compiler:
     path: ../packages/compiler
   hyfens_control_plane:

@@ -5,11 +5,15 @@ import 'dart:math';
 import 'package:cryptography/cryptography.dart';
 import 'package:cryptography/dart.dart';
 import 'package:hyfens_patch_format/patch_format.dart';
+import 'package:patch_loading_e1/patch_loading_e1.dart';
 
 import 'aggregation.dart';
+import 'artifact_retention.dart';
 import 'audit.dart';
 import 'auth.dart';
 import 'billing.dart';
+import 'cloud_plans.dart';
+import 'deletion.dart';
 import 'domain.dart';
 import 'encoding.dart';
 import 'errors.dart';
@@ -26,6 +30,7 @@ import 'persistence.dart';
 import 'reconciliation.dart';
 import 'release_bundle.dart';
 import 'rollout.dart';
+import 'usage_metering.dart';
 
 final class ArtifactPayload {
   const ArtifactPayload({required this.record, required this.bytes});
@@ -54,11 +59,50 @@ final class ControlPlaneService {
     this.observationPolicy = const ObservationPolicy(),
     this.p3eStore,
     this.humanAuth,
+    this.deploymentModel = DeploymentModel.selfHosted,
+    CloudUsageMeteringService? usageMetering,
     BillingService? billingService,
+    RazorpayBillingConfig? razorpayBilling,
+    this.billingProvider,
+    this.deletionPolicy = const DeletionPolicy(),
   }) : _random = random ?? Random.secure(),
        _clock = clock ?? (() => DateTime.now().toUtc()) {
     observationPolicy.validate();
-    billing = billingService ?? BillingService(store);
+    this.usageMetering =
+        usageMetering ??
+        billingService?.usageMetering ??
+        CloudUsageMeteringService(
+          store,
+          deploymentModel: deploymentModel,
+          clock: _clock,
+        );
+    billing =
+        billingService ??
+        BillingService(
+          store,
+          deploymentModel: deploymentModel,
+          clock: _clock,
+          usageMetering: this.usageMetering,
+          razorpay: razorpayBilling,
+        );
+    humanAuth?.setMemberAdmissionCheck(
+      deploymentModel == DeploymentModel.cloud
+          ? (organizationId) => billing.enforceCloudLimit(
+              organizationId: organizationId,
+              resource: cloudMembersLimitKey,
+            )
+          : null,
+    );
+    deletion = humanAuth == null
+        ? null
+        : AccountDeletionService(
+            store: store,
+            humanAuth: humanAuth,
+            billing: billing,
+            deploymentModel: deploymentModel,
+            policy: deletionPolicy,
+            clock: _clock,
+          );
   }
 
   final ControlPlaneStore store;
@@ -67,15 +111,37 @@ final class ControlPlaneService {
   final ObservationPolicy observationPolicy;
   final P3ePersistenceStore? p3eStore;
   final HumanAuthService? humanAuth;
+  final DeploymentModel deploymentModel;
+  final BillingProviderBridgeConfig? billingProvider;
+  final DeletionPolicy deletionPolicy;
+  final ArtifactRetentionPolicy artifactRetentionPolicy =
+      const ArtifactRetentionPolicy();
   late final BillingService billing;
+  late final AccountDeletionService? deletion;
+  late final CloudUsageMeteringService usageMetering;
   Future<void> _writeTail = Future<void>.value();
   final Map<String, List<DateTime>> _observationWindows =
       <String, List<DateTime>>{};
 
   Future<void> initialize() async {
     await store.initialize();
+    await billing.initialize();
     await humanAuth?.initialize();
     await p3eStore?.initialize();
+  }
+
+  /// Returns the lifecycle state used to reject access after a tenant's
+  /// staged organization deletion has completed. Provider webhooks continue
+  /// through the billing service and do not use this customer credential seam.
+  Future<void> ensureOrganizationAccessAllowed(String organizationId) async {
+    final value = await store.readJson('organizations', organizationId);
+    if (value?['deletionState'] == 'deleted') {
+      throw const ControlPlaneException(
+        'ORGANIZATION_DELETED',
+        'This Cloud organization is no longer active',
+        statusCode: 410,
+      );
+    }
   }
 
   /// Authorizes a control-plane read or mutation through the existing
@@ -97,6 +163,25 @@ final class ControlPlaneService {
     environmentId: environmentId,
   );
 
+  /// Authorizes the deployment-owned provider bridge without assigning it a
+  /// customer organization. Provider handlers must still resolve their target
+  /// organization from server-owned checkout/subscription mappings.
+  Future<BillingProviderPrincipal> authorizeBillingProvider({
+    required String token,
+  }) async {
+    final config = billingProvider;
+    if (deploymentModel != DeploymentModel.cloud ||
+        config == null ||
+        !config.matches(token)) {
+      throw const ControlPlaneException(
+        'UNAUTHORIZED',
+        'Billing provider credential is invalid',
+        statusCode: 401,
+      );
+    }
+    return config.principal;
+  }
+
   /// Appends a billing lifecycle event using the same immutable audit-chain
   /// seam as release and rollout mutations. The private Cloud provider adapter
   /// never receives permission to write arbitrary audit records.
@@ -105,15 +190,176 @@ final class ControlPlaneService {
     required String requestId,
     required String action,
     required String resourceId,
+    Map<String, Object?> metadata = const <String, Object?>{},
+    String? stableKey,
+  }) {
+    if (stableKey == null) {
+      return _audit(
+        requestId: requestId,
+        actor: actor,
+        action: action,
+        resourceType: 'billing',
+        resourceId: resourceId,
+        metadata: metadata,
+      );
+    }
+    final auditId =
+        'aud_billing_${sha256Hex(utf8.encode('${actor.organizationId}:$action:$resourceId:$stableKey')).substring(0, 32)}';
+    return _appendCustomerOnboardingAudit(
+      id: auditId,
+      requestId: requestId,
+      organizationId: actor.organizationId,
+      actorId: actor.id,
+      action: action,
+      resourceType: 'billing',
+      resourceId: resourceId,
+      metadata: metadata,
+    );
+  }
+
+  /// Records the outcome of a trusted provider callback without giving the
+  /// provider adapter a customer credential or permission to write arbitrary
+  /// audit records. The event ID makes retries audit-idempotent.
+  Future<void> auditBillingProviderEvent({
+    required BillingProviderEventResult result,
+    required String requestId,
+    String? actorId,
+  }) async {
+    if (result.status != 'applied' && result.status != 'duplicate') return;
+    final auditId =
+        'aud_billing_provider_${sha256Hex(utf8.encode('${result.organizationId}:${result.eventId}')).substring(0, 32)}';
+    final subscription = result.subscription;
+    final payment = result.payment;
+    final refund = result.refund;
+    final resourceType = refund != null
+        ? 'billing_refund_request'
+        : payment != null
+        ? 'billing_payment'
+        : 'billing_subscription';
+    final resourceId =
+        refund?['id'] as String? ??
+        payment?['id'] as String? ??
+        subscription?['id'] as String? ??
+        result.eventId;
+    await _appendCustomerOnboardingAudit(
+      id: auditId,
+      requestId: requestId,
+      organizationId: result.organizationId,
+      actorId: actorId ?? 'razorpay:webhook',
+      action: 'billing.provider_event.applied',
+      resourceType: resourceType,
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        'event_id': result.eventId,
+        'status': result.status,
+        'subscription_status': subscription?['status'],
+        'plan_id': subscription?['planId'],
+        'payment_status': payment?['status'],
+        'refund_status': refund?['status'],
+        'provider': 'razorpay',
+        'audience': customerAuthorizationAudience,
+        'actor_type': 'billing_provider_service',
+        'service_scope': billingProviderScope,
+      },
+    );
+    final scheduledPlanChange = result.scheduledPlanChange;
+    final scheduledChangeId = scheduledPlanChange?['id'];
+    if (scheduledPlanChange != null && scheduledChangeId is String) {
+      final status = scheduledPlanChange['status'];
+      final action = status == 'effective'
+          ? 'billing.plan_change.effective'
+          : 'billing.plan_change.scheduled';
+      final changeAuditId =
+          'aud_billing_plan_change_${sha256Hex(utf8.encode('${result.organizationId}:$action:$scheduledChangeId:${result.eventId}')).substring(0, 32)}';
+      await _appendCustomerOnboardingAudit(
+        id: changeAuditId,
+        requestId: requestId,
+        organizationId: result.organizationId,
+        actorId: actorId ?? 'razorpay:webhook',
+        action: action,
+        resourceType: 'billing_plan_change',
+        resourceId: scheduledChangeId,
+        metadata: <String, Object?>{
+          'event_id': result.eventId,
+          'current_plan': scheduledPlanChange['currentPlanKey'],
+          'target_plan': scheduledPlanChange['targetPlanKey'],
+          'status': status,
+          'effective_at': scheduledPlanChange['effectiveAt'],
+          'provider_subscription_id':
+              scheduledPlanChange['providerSubscriptionId'],
+          'provider': 'razorpay',
+          'actor_type': 'billing_provider_service',
+          'service_scope': billingProviderScope,
+        },
+      );
+    }
+  }
+
+  /// Appends a provider-bridge action with a stable service actor. The
+  /// stable key makes retries audit-idempotent without pretending the
+  /// provider callback was a customer action.
+  Future<void> auditBillingProviderOperation({
+    required BillingProviderPrincipal actor,
+    required String organizationId,
+    required String requestId,
+    required String action,
+    required String resourceId,
     required Map<String, Object?> metadata,
-  }) => _audit(
-    requestId: requestId,
-    actor: actor,
-    action: action,
-    resourceType: 'billing',
-    resourceId: resourceId,
-    metadata: metadata,
-  );
+    String? stableKey,
+  }) {
+    final key = stableKey ?? resourceId;
+    final auditId =
+        'aud_billing_provider_${sha256Hex(utf8.encode('$organizationId:$action:$resourceId:$key')).substring(0, 32)}';
+    return _appendCustomerOnboardingAudit(
+      id: auditId,
+      requestId: requestId,
+      organizationId: organizationId,
+      actorId: actor.id,
+      action: action,
+      resourceType: 'billing',
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        ...metadata,
+        'audience': customerAuthorizationAudience,
+        'service_scope': billingProviderScope,
+      },
+    );
+  }
+
+  /// Records an Enterprise quote/contract action for either a customer actor
+  /// or an authorized Platform commercial operator. The actor metadata keeps
+  /// the two authorities distinguishable without exposing credentials or
+  /// making the provider bridge a human session.
+  Future<void> auditEnterpriseCommercialOperation({
+    required String actorId,
+    required String actorType,
+    required String audience,
+    required String organizationId,
+    required String requestId,
+    required String action,
+    required String resourceType,
+    required String resourceId,
+    Map<String, Object?> metadata = const <String, Object?>{},
+    String? stableKey,
+  }) {
+    final key = stableKey ?? resourceId;
+    final auditId =
+        'aud_enterprise_${sha256Hex(utf8.encode('$organizationId:$action:$resourceId:$key')).substring(0, 32)}';
+    return _appendCustomerOnboardingAudit(
+      id: auditId,
+      requestId: requestId,
+      organizationId: organizationId,
+      actorId: actorId,
+      action: action,
+      resourceType: resourceType,
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        ...metadata,
+        'actor_type': actorType,
+        'audience': audience,
+      },
+    );
+  }
 
   Future<HumanUserRecord> bootstrapOwner({
     required String organizationId,
@@ -167,6 +413,241 @@ final class ControlPlaneService {
       password: password,
       profileName: profileName,
     );
+  }
+
+  Future<HumanRegistrationResult> registerCloudCustomer({
+    required String email,
+    required String password,
+    required String organizationName,
+  }) async {
+    _requireCloudOnboarding();
+    final auth = _requireHumanAuth();
+    await initialize();
+    return auth.registerCustomer(
+      email: email,
+      password: password,
+      organizationName: organizationName,
+    );
+  }
+
+  Future<HumanLoginResult> verifyCloudCustomer({
+    required String token,
+    String? organizationName,
+    String? requestId,
+  }) async {
+    _requireCloudOnboarding();
+    final auth = _requireHumanAuth();
+    await initialize();
+    return _serialized(() async {
+      final verification = await auth.verifyCustomerEmail(token: token);
+      final name = organizationName == null || organizationName.trim().isEmpty
+          ? verification.organizationName
+          : organizationName;
+      await _provisionCustomerOrganization(
+        user: verification.user,
+        organizationName: name,
+        idempotencyKey: 'first-org:${verification.user.id}',
+        requestId: requestId,
+      );
+      return auth.issueSessionForVerifiedUser(userId: verification.user.id);
+    });
+  }
+
+  Future<Map<String, Object?>> createCustomerOrganization({
+    required String token,
+    required String organizationName,
+    required String idempotencyKey,
+    String? requestId,
+  }) async {
+    _requireCloudOnboarding();
+    final auth = _requireHumanAuth();
+    await initialize();
+    return _serialized(() async {
+      final user = await auth.verifiedCustomerForAccessToken(
+        accessToken: token,
+      );
+      return _provisionCustomerOrganization(
+        user: user,
+        organizationName: organizationName,
+        idempotencyKey: idempotencyKey,
+        requestId: requestId,
+      );
+    });
+  }
+
+  HumanAuthService _requireHumanAuth() {
+    final auth = humanAuth;
+    if (auth == null) {
+      throw const ControlPlaneException(
+        'AUTH_UNAVAILABLE',
+        'Human authentication is not configured',
+        statusCode: 503,
+      );
+    }
+    return auth;
+  }
+
+  void _requireCloudOnboarding() {
+    if (deploymentModel != DeploymentModel.cloud) {
+      throw const ControlPlaneException(
+        'CLOUD_ONBOARDING_UNAVAILABLE',
+        'Cloud customer onboarding is not available on a self-hosted deployment',
+        statusCode: 404,
+      );
+    }
+  }
+
+  Future<Map<String, Object?>> _provisionCustomerOrganization({
+    required HumanUserRecord user,
+    required String organizationName,
+    required String idempotencyKey,
+    String? requestId,
+  }) async {
+    final normalizedName = organizationName.trim().isEmpty
+        ? 'My Hyfens workspace'
+        : requireNonEmpty(
+            organizationName.trim(),
+            'organization name',
+            maxLength: 120,
+          );
+    final body = <String, Object?>{
+      'userId': user.id,
+      'organizationName': normalizedName,
+    };
+    const scope = 'cloud_customer_organization';
+    final existing = await _existingIdempotency(scope, idempotencyKey, body);
+    late String organizationId;
+    if (existing != null) {
+      organizationId = existing['organization_id']! as String;
+    } else {
+      organizationId = _id('org');
+      final claim = <String, Object?>{
+        'requestDigest': sha256Digest(utf8.encode(canonicalJson(body))),
+        'result': <String, Object?>{'organization_id': organizationId},
+        'createdAt': _now().toIso8601String(),
+      };
+      try {
+        await store.createIdempotency(scope, idempotencyKey, claim);
+      } on StorageConflict {
+        final concurrent = await _existingIdempotency(
+          scope,
+          idempotencyKey,
+          body,
+        );
+        if (concurrent == null) rethrow;
+        organizationId = concurrent['organization_id']! as String;
+      }
+    }
+    final organization = OrganizationRecord(
+      id: organizationId,
+      name: normalizedName,
+      createdAt: _now(),
+    );
+    try {
+      await store.createJson(
+        'organizations',
+        organization.id,
+        organization.toJson(),
+      );
+    } on StorageConflict {
+      final current = await store.readJson('organizations', organization.id);
+      if (current == null || current['name'] != organization.name) rethrow;
+    }
+    await billing.ensureCloudPlanAssignment(organizationId: organization.id);
+    final member = await _requireHumanAuth().addCustomerOwnerMembership(
+      userId: user.id,
+      organizationId: organization.id,
+    );
+    final stableRequestId = 'cloud-onboarding:${organization.id}';
+    await _appendCustomerOnboardingAudit(
+      id: 'onb_org_${sha256Hex(utf8.encode(organization.id)).substring(0, 32)}',
+      requestId: stableRequestId,
+      organizationId: organization.id,
+      actorId: user.id,
+      action: 'customer.organization.create',
+      resourceType: 'organization',
+      resourceId: organization.id,
+      metadata: <String, Object?>{'source': 'public_cloud_onboarding'},
+    );
+    await _appendCustomerOnboardingAudit(
+      id: 'onb_plan_${sha256Hex(utf8.encode(organization.id)).substring(0, 32)}',
+      requestId: stableRequestId,
+      organizationId: organization.id,
+      actorId: user.id,
+      action: 'customer.free_plan.assign',
+      resourceType: 'billing',
+      resourceId: organization.id,
+      metadata: const <String, Object?>{
+        'plan': cloudPlanFreeKey,
+        'provider': 'internal',
+        'billing_status': 'not_required',
+      },
+    );
+    await _appendCustomerOnboardingAudit(
+      id: 'onb_member_${sha256Hex(utf8.encode(organization.id)).substring(0, 32)}',
+      requestId: stableRequestId,
+      organizationId: organization.id,
+      actorId: user.id,
+      action: 'customer.owner_membership.create',
+      resourceType: 'membership',
+      resourceId: user.id,
+      metadata: const <String, Object?>{
+        'role': 'owner',
+        'audience': customerAuthorizationAudience,
+      },
+    );
+    await _appendCustomerOnboardingAudit(
+      id: 'onb_verify_${sha256Hex(utf8.encode(organization.id)).substring(0, 32)}',
+      requestId: stableRequestId,
+      organizationId: organization.id,
+      actorId: user.id,
+      action: 'customer.email.verify',
+      resourceType: 'identity',
+      resourceId: user.id,
+      metadata: const <String, Object?>{'verified': true},
+    );
+    final entitlements = await billing.resolveEffectiveEntitlements(
+      organizationId: organization.id,
+    );
+    return <String, Object?>{
+      'organization': organization.toJson(),
+      'plan': entitlements.toPlanJson(),
+      'entitlements': entitlements.toEntitlementsJson(),
+      'owner_user_id': member.id,
+      if (requestId != null) 'request_id': requestId,
+    };
+  }
+
+  Future<void> _appendCustomerOnboardingAudit({
+    required String id,
+    required String requestId,
+    required String organizationId,
+    required String actorId,
+    required String action,
+    required String resourceType,
+    required String resourceId,
+    required Map<String, Object?> metadata,
+  }) async {
+    if (await store.readJson('audit', id) != null) return;
+    try {
+      await store.appendAudit(
+        id,
+        AuditRecord(
+          id: id,
+          requestId: requestId,
+          organizationId: organizationId,
+          actorId: actorId,
+          action: action,
+          resourceType: resourceType,
+          resourceId: resourceId,
+          result: 'SUCCESS',
+          metadata: metadata,
+          createdAt: _now(),
+        ).toJson(),
+      );
+    } on StorageConflict {
+      if (await store.readJson('audit', id) == null) rethrow;
+    }
   }
 
   Future<List<ContentRecord>> listContent({
@@ -544,12 +1025,14 @@ final class ControlPlaneService {
     final control = credentialService.issue(
       id: _id('cred'),
       organizationId: organization.id,
+      name: 'CLI control',
       kind: CredentialKind.control,
       scopes: controlScopes,
     );
     final delivery = credentialService.issue(
       id: _id('cred'),
       organizationId: organization.id,
+      name: 'Runtime delivery',
       kind: CredentialKind.delivery,
       scopes: deliveryScopes,
       applicationId: application.id,
@@ -560,6 +1043,9 @@ final class ControlPlaneService {
       organization.id,
       organization.toJson(),
     );
+    if (deploymentModel == DeploymentModel.cloud) {
+      await billing.ensureCloudPlanAssignment(organizationId: organization.id);
+    }
     await store.createJson(
       'applications',
       application.id,
@@ -589,6 +1075,229 @@ final class ControlPlaneService {
     );
   });
 
+  /// Registers one customer application identity. An application represents a
+  /// single runtime package/bundle identity; Android and iOS identities are
+  /// therefore registered as separate applications when they differ.
+  /// Registration is idempotent so a dashboard retry cannot create a second
+  /// application for the same request.
+  Future<ApplicationRecord> createApplication({
+    required String token,
+    required String organizationId,
+    required String runtimeApplicationId,
+    String? name,
+    String? platform,
+    required String idempotencyKey,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      applicationWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final normalizedRuntimeApplicationId = requireRuntimeIdentity(
+      runtimeApplicationId.trim(),
+      'runtime application ID',
+    );
+    final normalizedName = name?.trim();
+    final normalizedPlatform = platform?.trim();
+    if (normalizedPlatform != null &&
+        normalizedPlatform != 'android' &&
+        normalizedPlatform != 'ios') {
+      throw const ControlPlaneException(
+        'INVALID_APPLICATION_PLATFORM',
+        'Application platform must be android or ios',
+        statusCode: 422,
+      );
+    }
+    final body = <String, Object?>{
+      'organizationId': actor.organizationId,
+      'runtimeApplicationId': normalizedRuntimeApplicationId,
+      'name': normalizedName,
+      'platform': normalizedPlatform,
+    };
+    final existing = await _existingIdempotency(
+      'application-create',
+      idempotencyKey,
+      body,
+    );
+    if (existing != null) {
+      final existingId = existing['applicationId'];
+      if (existingId is! String) {
+        throw const ControlPlaneException(
+          'STORAGE_CORRUPT',
+          'Application idempotency record is malformed',
+          statusCode: 500,
+        );
+      }
+      final application = await _application(existingId);
+      _requireTenant(application.organizationId, actor.organizationId);
+      return application;
+    }
+    final duplicate = (await store.listJson('applications')).any(
+      (value) =>
+          value['organizationId'] == actor.organizationId &&
+          value['runtimeApplicationId'] == normalizedRuntimeApplicationId,
+    );
+    if (duplicate) {
+      throw const ControlPlaneException(
+        'APPLICATION_CONFLICT',
+        'The runtime application identity is already registered',
+        statusCode: 409,
+      );
+    }
+    await billing.enforceCloudLimit(
+      organizationId: actor.organizationId,
+      resource: cloudApplicationsLimitKey,
+    );
+    final application = ApplicationRecord(
+      id: _id('app'),
+      organizationId: actor.organizationId,
+      runtimeApplicationId: normalizedRuntimeApplicationId,
+      name: normalizedName,
+      platform: normalizedPlatform,
+      createdAt: _now(),
+    );
+    try {
+      await store.createJson(
+        'applications',
+        application.id,
+        application.toJson(),
+      );
+    } on StorageConflict {
+      throw const ControlPlaneException(
+        'APPLICATION_CONFLICT',
+        'The runtime application identity is already registered',
+        statusCode: 409,
+      );
+    }
+    await _saveIdempotency(
+      'application-create',
+      idempotencyKey,
+      body,
+      <String, Object?>{'applicationId': application.id},
+    );
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'application.create',
+      resourceType: 'application',
+      resourceId: application.id,
+      metadata: <String, Object?>{
+        'runtimeApplicationId': application.runtimeApplicationId,
+        if (application.platform != null) 'platform': application.platform,
+      },
+    );
+    return application;
+  });
+
+  /// Creates a customer environment under an existing application. The
+  /// environment starts at version zero and has no promoted release. The
+  /// operation is idempotent so dashboard retries cannot create duplicates.
+  Future<EnvironmentRecord> createEnvironment({
+    required String token,
+    required String organizationId,
+    required String applicationId,
+    required String name,
+    required String idempotencyKey,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      environmentWriteScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final application = await _application(applicationId);
+    _requireTenant(application.organizationId, actor.organizationId);
+    final normalizedName = requireNonEmpty(
+      name.trim(),
+      'environment name',
+      maxLength: 64,
+    );
+    final body = <String, Object?>{
+      'organizationId': actor.organizationId,
+      'applicationId': application.id,
+      'name': normalizedName,
+    };
+    final existing = await _existingIdempotency(
+      'environment-create',
+      idempotencyKey,
+      body,
+    );
+    if (existing != null) {
+      final existingId = existing['environmentId'];
+      if (existingId is! String) {
+        throw const ControlPlaneException(
+          'STORAGE_CORRUPT',
+          'Environment idempotency record is malformed',
+          statusCode: 500,
+        );
+      }
+      return _environment(existingId);
+    }
+    final existingNames = (await store.listJson('environments')).where(
+      (value) =>
+          value['organizationId'] == actor.organizationId &&
+          value['applicationId'] == application.id &&
+          value['name'] is String &&
+          (value['name']! as String).trim().toLowerCase() ==
+              normalizedName.toLowerCase(),
+    );
+    if (existingNames.isNotEmpty) {
+      throw const ControlPlaneException(
+        'ENVIRONMENT_CONFLICT',
+        'An environment with this name already exists for the application',
+        statusCode: 409,
+      );
+    }
+    await billing.enforceCloudLimit(
+      organizationId: actor.organizationId,
+      resource: cloudEnvironmentsPerApplicationLimitKey,
+      applicationId: application.id,
+    );
+    final environment = EnvironmentRecord(
+      id: _id('env'),
+      organizationId: actor.organizationId,
+      applicationId: application.id,
+      name: normalizedName,
+      version: 0,
+      promotedReleaseId: null,
+      createdAt: _now(),
+    );
+    try {
+      await store.createJson(
+        'environments',
+        environment.id,
+        environment.toJson(),
+      );
+    } on StorageConflict {
+      throw const ControlPlaneException(
+        'ENVIRONMENT_CONFLICT',
+        'An environment with this name already exists for the application',
+        statusCode: 409,
+      );
+    }
+    await _saveIdempotency(
+      'environment-create',
+      idempotencyKey,
+      body,
+      <String, Object?>{'environmentId': environment.id},
+    );
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'environment.create',
+      resourceType: 'environment',
+      resourceId: environment.id,
+      metadata: <String, Object?>{
+        'applicationId': application.id,
+        'name': environment.name,
+      },
+    );
+    return environment;
+  });
+
   /// Issues one short-lived or non-expiring credential and returns its secret
   /// exactly once to the caller. The service persists only the token hash.
   /// Customer operators rotate by issuing a replacement and then revoking the
@@ -598,6 +1307,7 @@ final class ControlPlaneService {
     required String organizationId,
     required CredentialKind kind,
     required Set<String> scopes,
+    String? name,
     String? applicationId,
     String? environmentId,
     DateTime? expiresAt,
@@ -609,6 +1319,13 @@ final class ControlPlaneService {
       kind: CredentialKind.control,
       organizationId: organizationId,
     );
+    if (scopes.difference(actor.scopes).isNotEmpty) {
+      throw const ControlPlaneException(
+        'FORBIDDEN',
+        'Credential scopes cannot exceed the issuer scope',
+        statusCode: 403,
+      );
+    }
     if (expiresAt != null && !expiresAt.isAfter(_now())) {
       throw const ControlPlaneException(
         'INVALID_CREDENTIAL_EXPIRY',
@@ -663,6 +1380,7 @@ final class ControlPlaneService {
     final issued = CredentialService(random: _random).issue(
       id: _id('cred'),
       organizationId: actor.organizationId,
+      name: name ?? 'Credential',
       kind: kind,
       scopes: scopes,
       applicationId: applicationId,
@@ -694,6 +1412,33 @@ final class ControlPlaneService {
     );
     return issued;
   });
+
+  /// Lists customer credential metadata without returning token hashes. The
+  /// persisted hash remains an internal lookup key and is never part of the
+  /// dashboard/API contract.
+  Future<List<Map<String, Object?>>> listCredentials({
+    required String token,
+    required String organizationId,
+  }) async {
+    final actor = await _authorize(
+      token,
+      credentialReadScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final result = <CredentialRecord>[];
+    for (final value in await store.listJson('credentials')) {
+      if (value['organizationId'] != actor.organizationId) continue;
+      result.add(CredentialRecord.fromJson(value));
+    }
+    result.sort((left, right) {
+      final byTime = right.createdAt.compareTo(left.createdAt);
+      return byTime != 0 ? byTime : left.id.compareTo(right.id);
+    });
+    return List.unmodifiable(
+      result.map((credential) => credential.toMetadataJson()),
+    );
+  }
 
   Future<IssuedCredential> issueObservationToken({
     required String token,
@@ -997,10 +1742,20 @@ final class ControlPlaneService {
         );
       }
       await store.putArtifact(artifact.sha256, bytes);
-      final readyArtifact = artifact.copyWith(state: 'READY');
+      final readyArtifact = artifact.copyWith(
+        state: artifactReadyState,
+        clearPurgeEligibleAt: true,
+        clearPurgedAt: true,
+        clearPurgeReason: true,
+      );
       final readyPatch = patch.copyWith(state: 'READY');
       await store.replaceJson('artifacts', artifact.id, readyArtifact.toJson());
       await store.replaceJson('patches', patch.id, readyPatch.toJson());
+      await _recordArtifactStorageAdded(
+        readyArtifact,
+        sourceId: 'artifact-upload:$idempotencyKey',
+        occurredAt: readyArtifact.createdAt,
+      );
       await _saveIdempotency(
         'artifact',
         idempotencyKey,
@@ -1019,7 +1774,11 @@ final class ControlPlaneService {
         },
       );
       return readyArtifact;
-    } on ControlPlaneException {
+    } on ControlPlaneException catch (error) {
+      if (error.code == 'USAGE_ACCOUNTING_UNAVAILABLE' ||
+          error.code == 'USAGE_EVENT_CONFLICT') {
+        rethrow;
+      }
       await _markQuarantined(artifact);
       rethrow;
     } on Object catch (error) {
@@ -1252,6 +2011,12 @@ final class ControlPlaneService {
       bundleDigest: bundle.bundleDigest,
     );
     final existingImport = await store.readJson('bundle_imports', importId);
+    final existingDestinationArtifact = existingImport == null
+        ? null
+        : await store.readJson('artifacts', destinationArtifactId);
+    final existingPurgeEligibleAt = existingDestinationArtifact == null
+        ? null
+        : ArtifactRecord.fromJson(existingDestinationArtifact).purgeEligibleAt;
     final existingState = existingImport == null
         ? null
         : _validateExistingBundleImport(
@@ -1348,6 +2113,11 @@ final class ControlPlaneService {
       contentType: sourceArtifact.contentType,
       state: destinationState,
       createdAt: sourceArtifact.createdAt,
+      purgeEligibleAt: destinationState == artifactQuarantinedState
+          ? existingImport == null
+                ? _now()
+                : existingPurgeEligibleAt
+          : null,
     );
     await store.putArtifact(destinationArtifact.sha256, payload.artifactBytes);
     await _ensureBundleRecord(
@@ -1574,7 +2344,12 @@ final class ControlPlaneService {
       );
     }
     final admittedPatch = current.patch.copyWith(state: 'READY');
-    final admittedArtifact = current.artifact.copyWith(state: 'READY');
+    final admittedArtifact = current.artifact.copyWith(
+      state: artifactReadyState,
+      clearPurgeEligibleAt: true,
+      clearPurgedAt: true,
+      clearPurgeReason: true,
+    );
     var changed = false;
     // Artifact readiness is established before patch readiness. If a process
     // stops between these writes, the next admission can safely finish the
@@ -1587,6 +2362,11 @@ final class ControlPlaneService {
       );
       changed = true;
     }
+    await _recordArtifactStorageAdded(
+      admittedArtifact,
+      sourceId: 'bundle-admit:$idempotencyKey',
+      occurredAt: admittedArtifact.createdAt,
+    );
     if (!patchReady) {
       await store.replaceJson(
         'patches',
@@ -1744,6 +2524,22 @@ final class ControlPlaneService {
       createdAt: environment.createdAt,
     );
     await store.replaceJson('environments', environment.id, promoted.toJson());
+    final priorRuntimeState = await _environmentRuntimeState(environment.id);
+    await _saveEnvironmentRuntimeState(
+      EnvironmentRuntimeStateRecord(
+        id: environment.id,
+        organizationId: actor.organizationId,
+        applicationId: environment.applicationId,
+        environmentId: environment.id,
+        desiredState: RuntimeDesiredState.patch,
+        releaseId: release.id,
+        runtimeReleaseId: release.runtimeReleaseId,
+        environmentVersion: promoted.version,
+        revision: (priorRuntimeState?.revision ?? 0) + 1,
+        actorId: actor.id,
+        updatedAt: _now(),
+      ),
+    );
     await _saveIdempotency('promotion', idempotencyKey, body, <String, Object?>{
       'environmentId': environment.id,
     });
@@ -1759,6 +2555,153 @@ final class ControlPlaneService {
       },
     );
     return promoted;
+  });
+
+  /// Requests a signed base rollback for one customer-owned environment.
+  ///
+  /// The signed command is persisted as the environment's desired runtime
+  /// state. The promoted release and immutable deployment/audit history are
+  /// deliberately left intact. A connected runtime receives the command from
+  /// [updateCheck] and performs the trusted local transition.
+  Future<CloudRollbackResult> requestRollback({
+    required String token,
+    required String organizationId,
+    required String applicationId,
+    required String environmentId,
+    required String rollbackControl,
+    required String idempotencyKey,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      environmentRollbackScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final application = await _application(applicationId);
+    _requireTenant(application.organizationId, actor.organizationId);
+    final environment = await _environment(environmentId);
+    _requireTenant(environment.organizationId, actor.organizationId);
+    if (environment.applicationId != application.id) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final body = <String, Object?>{
+      'organizationId': actor.organizationId,
+      'applicationId': application.id,
+      'environmentId': environment.id,
+      'rollbackControl': rollbackControl,
+    };
+    final existing = await _existingIdempotency(
+      'environment-rollback',
+      idempotencyKey,
+      body,
+    );
+    if (existing != null) return CloudRollbackResult.fromJson(existing);
+
+    final releaseId = environment.promotedReleaseId;
+    if (releaseId == null) {
+      throw const ControlPlaneException(
+        'NO_ACTIVE_RELEASE',
+        'The environment has no promoted release to roll back',
+        statusCode: 409,
+      );
+    }
+    final release = await _release(releaseId);
+    _requireTenant(release.organizationId, actor.organizationId);
+    if (release.applicationId != application.id) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final command = _decodeRollbackControl(rollbackControl);
+    await _validateRollbackControl(
+      command: command,
+      release: release,
+      organizationId: actor.organizationId,
+      requireActivePatch: true,
+    );
+
+    final previous = await _environmentRuntimeState(environment.id);
+    if (previous != null &&
+        previous.environmentVersion == environment.version &&
+        previous.releaseId == release.id &&
+        previous.desiredState == RuntimeDesiredState.base) {
+      final already = CloudRollbackResult(
+        status: 'ALREADY_BASE',
+        desiredState: RuntimeDesiredState.base,
+        organizationId: actor.organizationId,
+        applicationId: application.id,
+        environmentId: environment.id,
+        runtimeReleaseId: release.runtimeReleaseId,
+        revision: previous.revision,
+        changed: false,
+      );
+      await _saveIdempotency(
+        'environment-rollback',
+        idempotencyKey,
+        body,
+        already.toJson(),
+      );
+      return already;
+    }
+
+    final next = EnvironmentRuntimeStateRecord(
+      id: environment.id,
+      organizationId: actor.organizationId,
+      applicationId: application.id,
+      environmentId: environment.id,
+      desiredState: RuntimeDesiredState.base,
+      releaseId: release.id,
+      runtimeReleaseId: release.runtimeReleaseId,
+      environmentVersion: environment.version,
+      revision: (previous?.revision ?? 0) + 1,
+      actorId: actor.id,
+      updatedAt: _now(),
+      rollbackControl: rollbackControl,
+    );
+    await _saveEnvironmentRuntimeState(next);
+    final result = CloudRollbackResult(
+      status: 'ROLLBACK_REQUESTED',
+      desiredState: RuntimeDesiredState.base,
+      organizationId: actor.organizationId,
+      applicationId: application.id,
+      environmentId: environment.id,
+      runtimeReleaseId: release.runtimeReleaseId,
+      revision: next.revision,
+      changed: true,
+    );
+    await _saveIdempotency(
+      'environment-rollback',
+      idempotencyKey,
+      body,
+      result.toJson(),
+    );
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'environment.rollback.request',
+      resourceType: 'environment',
+      resourceId: environment.id,
+      metadata: <String, Object?>{
+        'applicationId': application.id,
+        'releaseId': release.id,
+        'runtimeReleaseId': release.runtimeReleaseId,
+        'previousDesiredState': previous?.desiredState.wireValue ?? 'patch',
+        'previousRevision': previous?.revision,
+        'desiredState': RuntimeDesiredState.base.wireValue,
+        'revision': next.revision,
+        'highWaterSequence': command.highWaterSequence,
+        'highWaterDigest': command.highWaterDigest,
+        'keyId': command.keyId,
+      },
+    );
+    return result;
   });
 
   /// Creates a DRAFT rollout and its immutable revision. The target is
@@ -3117,10 +4060,59 @@ final class ControlPlaneService {
     if (release.runtimeApplicationId != request.runtimeApplicationId ||
         release.runtimeReleaseId != request.runtimeReleaseId ||
         release.runtimeCompatibilityVersion !=
-            request.runtimeCompatibilityVersion) {
+            request.runtimeCompatibilityVersion ||
+        request.platformId != null &&
+            request.platformId != release.platformId) {
       return UpdateCheckResult(
         decision: 'STORE_RELEASE_REQUIRED',
         runtimeReleaseId: request.runtimeReleaseId,
+      );
+    }
+    final runtimeState = await _environmentRuntimeState(environment.id);
+    if (runtimeState != null &&
+        (runtimeState.organizationId != actor.organizationId ||
+            runtimeState.applicationId != application.id ||
+            runtimeState.environmentId != environment.id)) {
+      throw const ControlPlaneException(
+        'RUNTIME_STATE_CORRUPT',
+        'Environment runtime state is bound to another tenant resource',
+        statusCode: 500,
+      );
+    }
+    if (runtimeState?.desiredState == RuntimeDesiredState.base &&
+        runtimeState?.environmentVersion == environment.version &&
+        runtimeState?.releaseId == release.id &&
+        runtimeState?.runtimeReleaseId == release.runtimeReleaseId) {
+      final state = runtimeState!;
+      final encodedControl = state.rollbackControl;
+      if (encodedControl == null) {
+        throw const ControlPlaneException(
+          'RUNTIME_STATE_CORRUPT',
+          'Base runtime state is missing its signed rollback control',
+          statusCode: 500,
+        );
+      }
+      final command = _decodeRollbackControl(encodedControl, stored: true);
+      await _validateRollbackControl(
+        command: command,
+        release: release,
+        organizationId: actor.organizationId,
+        requireActivePatch: false,
+      );
+      if (request.highWaterDigest != command.highWaterDigest ||
+          request.highWaterSequence != command.highWaterSequence) {
+        return UpdateCheckResult(
+          decision: 'STORE_RELEASE_REQUIRED',
+          runtimeReleaseId: request.runtimeReleaseId,
+        );
+      }
+      return UpdateCheckResult(
+        decision: 'ROLLBACK_TO_BASE',
+        runtimeReleaseId: release.runtimeReleaseId,
+        rollbackControl: encodedControl,
+        applicationId: application.id,
+        environmentId: environment.id,
+        platformId: release.platformId,
       );
     }
     final rollout = await _rolloutForUpdate(
@@ -3188,10 +4180,24 @@ final class ControlPlaneService {
     _requireTenant(artifact.organizationId, actor.organizationId);
     final environment = await _environment(environmentId);
     final release = await _release(patch.releaseId);
+    if (artifact.state == artifactPurgedState) {
+      throw const ControlPlaneException(
+        'ARTIFACT_PURGED',
+        'The artifact bytes have been purged while its release evidence remains',
+        statusCode: 410,
+      );
+    }
+    if (artifact.state != artifactReadyState) {
+      throw const ControlPlaneException(
+        'ARTIFACT_UNAVAILABLE',
+        'The artifact is not available for delivery',
+        statusCode: 410,
+      );
+    }
     if (environment.promotedReleaseId != release.id ||
         environment.applicationId != applicationId ||
         release.applicationId != applicationId ||
-        artifact.state != 'READY') {
+        artifact.state != artifactReadyState) {
       throw const ControlPlaneException(
         'NOT_FOUND',
         'Resource was not found',
@@ -3207,6 +4213,58 @@ final class ControlPlaneService {
       );
     }
     return ArtifactPayload(record: artifact, bytes: List.unmodifiable(bytes));
+  }
+
+  /// Records bytes accepted by the current control-plane origin response.
+  ///
+  /// The HTTP adapter calls this after artifact authorization and digest
+  /// verification, but before writing the response body. A durable accounting
+  /// failure prevents the response from being acknowledged so usage evidence
+  /// cannot be silently lost. Direct CDN/object-store egress is outside this
+  /// seam and is not represented by this meter.
+  Future<void> recordArtifactDelivery({
+    required ArtifactPayload payload,
+    int? bytes,
+    String? sourceId,
+  }) async {
+    final deliveredBytes = bytes ?? payload.bytes.length;
+    if (deliveredBytes < 0 || deliveredBytes > payload.bytes.length) {
+      throw const ControlPlaneException(
+        'INVALID_DELIVERY_BYTES',
+        'Delivered bytes must be within the response payload length',
+        statusCode: 500,
+      );
+    }
+    try {
+      await usageMetering.recordArtifactDelivery(
+        artifact: payload.record,
+        bytes: deliveredBytes,
+        sourceId: sourceId ?? _id('delivery'),
+        occurredAt: _now(),
+      );
+    } on StorageUnavailable catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact delivery accounting is temporarily unavailable: ${error.message}',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactDeliveryMeter,
+          'source': artifactDeliveryOriginSource,
+        },
+      );
+    } on ControlPlaneException {
+      rethrow;
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact delivery accounting failed: $error',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactDeliveryMeter,
+          'source': artifactDeliveryOriginSource,
+        },
+      );
+    }
   }
 
   /// Validates and durably records one bounded client observation. This path
@@ -3638,6 +4696,159 @@ final class ControlPlaneService {
     return patch;
   }
 
+  Future<EnvironmentRuntimeStateRecord?> _environmentRuntimeState(
+    String environmentId,
+  ) async {
+    final value = await store.readJson(
+      'environment_runtime_states',
+      environmentId,
+    );
+    if (value == null) return null;
+    try {
+      return EnvironmentRuntimeStateRecord.fromJson(value);
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        'RUNTIME_STATE_CORRUPT',
+        'Environment runtime state is malformed: $error',
+        statusCode: 500,
+      );
+    }
+  }
+
+  Future<void> _saveEnvironmentRuntimeState(
+    EnvironmentRuntimeStateRecord state,
+  ) async {
+    final current = await store.readJson(
+      'environment_runtime_states',
+      state.environmentId,
+    );
+    if (current == null) {
+      try {
+        await store.createJson(
+          'environment_runtime_states',
+          state.environmentId,
+          state.toJson(),
+        );
+        return;
+      } on StorageConflict {
+        // A concurrent writer may have created the same environment state.
+        // The surrounding service write queue will resolve the latest desired
+        // state below without creating a second record.
+      }
+    }
+    await store.replaceJson(
+      'environment_runtime_states',
+      state.environmentId,
+      state.toJson(),
+    );
+  }
+
+  RollbackControlCommand _decodeRollbackControl(
+    String encoded, {
+    bool stored = false,
+  }) {
+    try {
+      if (encoded.isEmpty ||
+          encoded.length > 32768 ||
+          encoded.contains(RegExp(r'[\r\n\s]'))) {
+        throw const FormatException('Invalid rollback control encoding');
+      }
+      final bytes = base64.decode(encoded);
+      if (base64.encode(bytes) != encoded ||
+          bytes.length > RollbackControlCommand.maxBytes) {
+        throw const FormatException('Invalid rollback control encoding');
+      }
+      return RollbackControlCommand.decode(bytes);
+    } on ControlPlaneException {
+      rethrow;
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        stored ? 'RUNTIME_STATE_CORRUPT' : 'INVALID_ROLLBACK_CONTROL',
+        stored
+            ? 'Stored rollback control is invalid: $error'
+            : 'Rollback control is invalid',
+        statusCode: stored ? 500 : 400,
+      );
+    }
+  }
+
+  Future<void> _validateRollbackControl({
+    required RollbackControlCommand command,
+    required ReleaseRecord release,
+    required String organizationId,
+    required bool requireActivePatch,
+  }) async {
+    if (command.applicationId != release.runtimeApplicationId ||
+        command.releaseId != release.runtimeReleaseId) {
+      throw const ControlPlaneException(
+        'ROLLBACK_TARGET_MISMATCH',
+        'Rollback control is bound to another application or release',
+        statusCode: 409,
+      );
+    }
+    final encodedPublicKey = release.signingPublicKeys[command.keyId];
+    if (encodedPublicKey == null) {
+      throw const ControlPlaneException(
+        'INVALID_ROLLBACK_CONTROL',
+        'Rollback control key is not registered on the release',
+        statusCode: 409,
+      );
+    }
+    late final List<int> publicKey;
+    try {
+      publicKey = base64.decode(encodedPublicKey);
+    } on FormatException {
+      throw const ControlPlaneException(
+        'RUNTIME_STATE_CORRUPT',
+        'Release rollback trust key is malformed',
+        statusCode: 500,
+      );
+    }
+    if (base64.encode(publicKey) != encodedPublicKey ||
+        publicKey.length != 32 ||
+        !await command.verify(publicKey)) {
+      throw const ControlPlaneException(
+        'INVALID_ROLLBACK_CONTROL',
+        'Rollback control signature verification failed',
+        statusCode: 409,
+      );
+    }
+    if (!requireActivePatch) return;
+    if (command.highWaterSequence <= 0 || command.highWaterDigest == null) {
+      throw const ControlPlaneException(
+        'NO_ACTIVE_PATCH',
+        'The runtime has no active patch high-water to roll back',
+        statusCode: 409,
+      );
+    }
+    final expectedDigest = 'sha256:${command.highWaterDigest}';
+    var found = false;
+    for (final value in await store.listJson('patches')) {
+      if (value['organizationId'] != organizationId ||
+          value['releaseId'] != release.id) {
+        continue;
+      }
+      try {
+        final patch = PatchRecord.fromJson(value);
+        if (patch.state == 'READY' &&
+            patch.sequence == command.highWaterSequence &&
+            patch.sha256 == expectedDigest) {
+          found = true;
+          break;
+        }
+      } on Object {
+        // Malformed unrelated tenant data cannot authorize a rollback.
+      }
+    }
+    if (!found) {
+      throw const ControlPlaneException(
+        'ROLLBACK_HIGH_WATER_INVALID',
+        'Rollback high-water is not a ready patch for the promoted release',
+        statusCode: 409,
+      );
+    }
+  }
+
   Future<RolloutRecord> _rollout(String rolloutId) async {
     final value = await store.readJson('rollouts', rolloutId);
     if (value == null) {
@@ -3975,6 +5186,27 @@ final class ControlPlaneService {
     return List.unmodifiable(result);
   }
 
+  /// Returns safe organization member metadata through the human-auth
+  /// projection. Member APIs are intentionally unavailable without the human
+  /// session service because the response is a dashboard identity surface.
+  Future<List<Map<String, Object?>>> listOrganizationMembers({
+    required String token,
+    required String organizationId,
+  }) async {
+    final auth = humanAuth;
+    if (auth == null) {
+      throw const ControlPlaneException(
+        'AUTH_UNAVAILABLE',
+        'Human authentication is not configured',
+        statusCode: 503,
+      );
+    }
+    return auth.listOrganizationMembers(
+      accessToken: token,
+      organizationId: organizationId,
+    );
+  }
+
   Future<AuditExport> exportAudit({
     required String token,
     required String organizationId,
@@ -4029,17 +5261,26 @@ final class ControlPlaneService {
       kind: CredentialKind.control,
       organizationId: organizationId,
     );
+    final reconciliationRequestId = requestId ?? _id('req');
     final rawArtifacts = await store.listJson('artifacts');
     final rawPatches = <String, Map<String, Object?>>{
       for (final value in await store.listJson('patches'))
         if (value['id'] is String) value['id']! as String: value,
     };
     final expectedKeys = <String>{};
+    final liveDigestKeys = <String>{};
+    final purgedByDigest = <String, List<ArtifactRecord>>{};
     final items = <ArtifactReconciliationItem>[];
     var quarantined = 0;
     for (final raw in rawArtifacts) {
       final artifact = ArtifactRecord.fromJson(raw);
-      expectedKeys.add(artifact.sha256.substring(7));
+      final digestKey = artifact.sha256.substring(7);
+      if (artifact.state != artifactPurgedState) {
+        expectedKeys.add(digestKey);
+        liveDigestKeys.add(digestKey);
+      } else {
+        purgedByDigest.putIfAbsent(artifact.sha256, () => []).add(artifact);
+      }
       if (artifact.organizationId != actor.organizationId) continue;
       final patch = rawPatches[artifact.patchId];
       if (patch == null) {
@@ -4053,7 +5294,18 @@ final class ControlPlaneService {
         );
         continue;
       }
-      if (artifact.state != 'READY') {
+      if (artifact.state == artifactPurgedState) {
+        items.add(
+          ArtifactReconciliationItem(
+            status: 'purged_metadata',
+            artifactId: artifact.id,
+            digest: artifact.sha256,
+            detail: artifact.purgedAt?.toIso8601String(),
+          ),
+        );
+        continue;
+      }
+      if (artifact.state != artifactReadyState) {
         items.add(
           ArtifactReconciliationItem(
             status: 'non_ready',
@@ -4087,10 +5339,10 @@ final class ControlPlaneService {
           ? 'size_mismatch'
           : 'verified';
       if (status != 'verified') {
-        await store.replaceJson(
-          'artifacts',
-          artifact.id,
-          artifact.copyWith(state: 'QUARANTINED').toJson(),
+        await _markQuarantined(
+          artifact,
+          sourceId:
+              'artifact-reconcile:$reconciliationRequestId:${artifact.id}',
         );
         quarantined++;
       }
@@ -4113,11 +5365,28 @@ final class ControlPlaneService {
         for (final key in inventory) {
           final normalized = key.startsWith('sha256:') ? key.substring(7) : key;
           if (!expectedKeys.contains(normalized)) {
+            final digest = 'sha256:$normalized';
+            final purged = purgedByDigest[digest];
+            if (purged != null && !liveDigestKeys.contains(normalized)) {
+              for (final artifact in purged.where(
+                (value) => value.organizationId == actor.organizationId,
+              )) {
+                items.add(
+                  ArtifactReconciliationItem(
+                    status: 'purged_object',
+                    artifactId: artifact.id,
+                    digest: digest,
+                    detail: 'Purged metadata still has physical object bytes',
+                  ),
+                );
+              }
+              continue;
+            }
             items.add(
               ArtifactReconciliationItem(
                 status: 'orphan_object',
                 artifactId: null,
-                digest: 'sha256:$normalized',
+                digest: digest,
               ),
             );
           }
@@ -4139,7 +5408,7 @@ final class ControlPlaneService {
       quarantinedCount: quarantined,
     );
     await _audit(
-      requestId: requestId ?? _id('req'),
+      requestId: reconciliationRequestId,
       actor: actor,
       action: 'artifact.reconcile',
       resourceType: 'artifact-inventory',
@@ -4151,6 +5420,188 @@ final class ControlPlaneService {
       },
     );
     return report;
+  });
+
+  /// Purges only invalid, quarantined artifact bytes that have reached their
+  /// lifecycle eligibility point. This is an internal operator/scheduler seam;
+  /// it is deliberately not exposed as customer-controlled deletion.
+  ///
+  /// Artifact metadata remains after a successful purge, so release identity,
+  /// digest, signature references, deployment evidence, and audit history stay
+  /// available for investigation and reconciliation. A missing object is an
+  /// idempotent success; a database failure after object deletion is reported
+  /// by the next reconciliation and can be safely retried.
+  Future<ArtifactRetentionCleanupReport> runArtifactRetentionCleanup({
+    String? organizationId,
+    int limit = 100,
+    DateTime? now,
+  }) => _serialized(() async {
+    if (limit < 1 || limit > 1000) {
+      throw ArgumentError.value(limit, 'limit', 'must be between 1 and 1000');
+    }
+    if (deploymentModel != DeploymentModel.cloud) {
+      return const ArtifactRetentionCleanupReport(
+        managed: false,
+        deletionSupported: false,
+        consideredCount: 0,
+        purgedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        items: <ArtifactRetentionCleanupItem>[],
+      );
+    }
+    final normalizedNow = (now ?? _now()).toUtc();
+    final allArtifacts = (await store.listJson('artifacts'))
+        .map(ArtifactRecord.fromJson)
+        .toList(growable: false);
+    final artifacts = allArtifacts
+        .where(
+          (artifact) =>
+              organizationId == null ||
+              artifact.organizationId == organizationId,
+        )
+        .toList(growable: false);
+    final ownersByDigest = <String, List<ArtifactRecord>>{};
+    for (final artifact in allArtifacts) {
+      ownersByDigest.putIfAbsent(artifact.sha256, () => []).add(artifact);
+    }
+    final protectedArtifactIds = (await store.listJson('bundle_imports'))
+        .where((value) => value['state'] != 'ADMITTED')
+        .map((value) => value['artifactId'])
+        .whereType<String>()
+        .toSet();
+    final deletion = store is ArtifactDeletion
+        ? store as ArtifactDeletion
+        : null;
+    final candidates = artifacts
+        .where(
+          (artifact) =>
+              artifact.state == artifactQuarantinedState &&
+              artifact.purgeEligibleAt != null,
+        )
+        .take(limit)
+        .toList(growable: false);
+    final eligibleBatchIds = candidates
+        .where(
+          (artifact) => artifactRetentionPolicy
+              .evaluate(
+                artifact,
+                now: normalizedNow,
+                protectedByPendingBundleImport: protectedArtifactIds.contains(
+                  artifact.id,
+                ),
+              )
+              .purgeEligible,
+        )
+        .map((artifact) => artifact.id)
+        .toSet();
+    final items = <ArtifactRetentionCleanupItem>[];
+    var purgedCount = 0;
+    var skippedCount = 0;
+    var failedCount = 0;
+
+    for (final artifact in candidates) {
+      final decision = artifactRetentionPolicy.evaluate(
+        artifact,
+        now: normalizedNow,
+        protectedByPendingBundleImport: protectedArtifactIds.contains(
+          artifact.id,
+        ),
+      );
+      if (!decision.purgeEligible) {
+        skippedCount++;
+        items.add(
+          ArtifactRetentionCleanupItem(
+            status: 'protected',
+            artifactId: artifact.id,
+            digest: artifact.sha256,
+            detail: decision.reason,
+          ),
+        );
+        continue;
+      }
+
+      final shared =
+          (ownersByDigest[artifact.sha256] ?? const <ArtifactRecord>[]).any((
+            owner,
+          ) {
+            if (owner.id == artifact.id || owner.state == artifactPurgedState) {
+              return false;
+            }
+            return !eligibleBatchIds.contains(owner.id);
+          });
+      var physicalStatus = 'purged';
+      if (!shared) {
+        if (deletion == null) {
+          failedCount++;
+          items.add(
+            ArtifactRetentionCleanupItem(
+              status: 'purge_unavailable',
+              artifactId: artifact.id,
+              digest: artifact.sha256,
+              detail: 'configured artifact store does not support deletion',
+            ),
+          );
+          continue;
+        }
+        try {
+          final deleted = await deletion.deleteArtifact(artifact.sha256);
+          if (!deleted) physicalStatus = 'purged_missing_object';
+        } on Object catch (error) {
+          failedCount++;
+          items.add(
+            ArtifactRetentionCleanupItem(
+              status: 'purge_failed',
+              artifactId: artifact.id,
+              digest: artifact.sha256,
+              detail: '$error',
+            ),
+          );
+          continue;
+        }
+      } else {
+        physicalStatus = 'purged_shared_object';
+      }
+
+      final purged = artifact.copyWith(
+        state: artifactPurgedState,
+        purgedAt: normalizedNow,
+        purgeReason: 'quarantined_artifact_cleanup',
+        clearPurgeEligibleAt: true,
+      );
+      try {
+        await store.replaceJson('artifacts', artifact.id, purged.toJson());
+      } on Object catch (error) {
+        failedCount++;
+        items.add(
+          ArtifactRetentionCleanupItem(
+            status: 'metadata_update_failed',
+            artifactId: artifact.id,
+            digest: artifact.sha256,
+            detail: '$error',
+          ),
+        );
+        continue;
+      }
+      purgedCount++;
+      items.add(
+        ArtifactRetentionCleanupItem(
+          status: physicalStatus,
+          artifactId: artifact.id,
+          digest: artifact.sha256,
+        ),
+      );
+    }
+
+    return ArtifactRetentionCleanupReport(
+      managed: true,
+      deletionSupported: deletion != null,
+      consideredCount: candidates.length,
+      purgedCount: purgedCount,
+      skippedCount: skippedCount,
+      failedCount: failedCount,
+      items: List.unmodifiable(items),
+    );
   });
 
   Future<void> revokeCredential({
@@ -4290,7 +5741,7 @@ final class ControlPlaneService {
           statusCode: 403,
         );
       }
-      return auth.authorizeAccessToken(
+      final actor = await auth.authorizeAccessToken(
         token: token,
         requiredScope: scope,
         kind: kind ?? CredentialKind.control,
@@ -4298,8 +5749,11 @@ final class ControlPlaneService {
         applicationId: applicationId,
         environmentId: environmentId,
       );
+      await ensureOrganizationAccessAllowed(actor.organizationId);
+      await _enforceCloudEntitlement(actor: actor, scope: scope);
+      return actor;
     }
-    return CredentialService.authorize(
+    final actor = await CredentialService.authorize(
       token: token,
       requiredScope: scope,
       read: (hash) async {
@@ -4311,6 +5765,31 @@ final class ControlPlaneService {
       environmentId: environmentId,
       kind: kind,
       now: _now(),
+    );
+    await ensureOrganizationAccessAllowed(actor.organizationId);
+    await _enforceCloudEntitlement(actor: actor, scope: scope);
+    return actor;
+  }
+
+  Future<void> _enforceCloudEntitlement({
+    required CredentialRecord actor,
+    required String scope,
+  }) async {
+    if (deploymentModel != DeploymentModel.cloud) return;
+    final requiredEntitlement = cloudEntitlementForScope(scope);
+    if (requiredEntitlement == null) return;
+    final effective = await billing.resolveEffectiveEntitlements(
+      organizationId: actor.organizationId,
+    );
+    if (effective.capabilities.contains(requiredEntitlement)) return;
+    throw ControlPlaneException(
+      'FORBIDDEN',
+      'The active Cloud plan does not include this capability',
+      statusCode: 403,
+      details: <String, Object?>{
+        'plan': effective.planKey,
+        'entitlement': requiredEntitlement,
+      },
     );
   }
 
@@ -5210,6 +6689,11 @@ final class ControlPlaneService {
     if (!_sameBundleRecordExceptState(
       current.artifact.toJson(),
       expectedArtifact.toJson(),
+      ignoredFields: const <String>{
+        'purgeEligibleAt',
+        'purgedAt',
+        'purgeReason',
+      },
     )) {
       throw const FormatException(
         'Destination artifact metadata does not match the signed source',
@@ -5219,11 +6703,14 @@ final class ControlPlaneService {
 
   bool _sameBundleRecordExceptState(
     Map<String, Object?> actual,
-    Map<String, Object?> expected,
-  ) {
+    Map<String, Object?> expected, {
+    Set<String> ignoredFields = const <String>{},
+  }) {
     final actualMetadata = Map<String, Object?>.from(actual)..remove('state');
     final expectedMetadata = Map<String, Object?>.from(expected)
       ..remove('state');
+    actualMetadata.removeWhere((key, _) => ignoredFields.contains(key));
+    expectedMetadata.removeWhere((key, _) => ignoredFields.contains(key));
     return canonicalJson(actualMetadata) == canonicalJson(expectedMetadata);
   }
 
@@ -5370,13 +6857,113 @@ final class ControlPlaneService {
     );
   }
 
-  Future<void> _markQuarantined(ArtifactRecord artifact) async {
-    if (artifact.state == 'QUARANTINED') return;
-    await store.replaceJson(
-      'artifacts',
-      artifact.id,
-      artifact.copyWith(state: 'QUARANTINED').toJson(),
+  Future<void> _recordArtifactStorageAdded(
+    ArtifactRecord artifact, {
+    required String sourceId,
+    required DateTime occurredAt,
+  }) async {
+    try {
+      await usageMetering.ensureArtifactStorageAdded(
+        artifact: artifact,
+        sourceId: sourceId,
+        occurredAt: occurredAt,
+      );
+    } on StorageUnavailable catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact storage accounting is temporarily unavailable: ${error.message}',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactStorageMeter,
+          'source': artifactStorageSource,
+        },
+      );
+    } on ControlPlaneException {
+      rethrow;
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact storage accounting failed: $error',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactStorageMeter,
+          'source': artifactStorageSource,
+        },
+      );
+    }
+  }
+
+  Future<void> _recordArtifactStorageRemoved(
+    ArtifactRecord artifact, {
+    required String sourceId,
+    required DateTime occurredAt,
+  }) async {
+    try {
+      await usageMetering.ensureArtifactStorageRemoved(
+        artifact: artifact,
+        sourceId: sourceId,
+        occurredAt: occurredAt,
+      );
+    } on StorageUnavailable catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact storage accounting is temporarily unavailable: ${error.message}',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactStorageMeter,
+          'source': artifactStorageSource,
+        },
+      );
+    } on ControlPlaneException {
+      rethrow;
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact storage accounting failed: $error',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactStorageMeter,
+          'source': artifactStorageSource,
+        },
+      );
+    }
+  }
+
+  Future<void> _markQuarantined(
+    ArtifactRecord artifact, {
+    String? sourceId,
+  }) async {
+    if (artifact.state == artifactPurgedState) return;
+    if (artifact.state == artifactQuarantinedState) {
+      if (artifact.purgeEligibleAt == null) {
+        await store.replaceJson(
+          'artifacts',
+          artifact.id,
+          artifact.copyWith(purgeEligibleAt: _now()).toJson(),
+        );
+      }
+      await _recordArtifactStorageRemoved(
+        artifact,
+        sourceId: sourceId ?? 'artifact-quarantine:${artifact.id}',
+        occurredAt: _now(),
+      );
+      return;
+    }
+    final wasReady = artifact.state == artifactReadyState;
+    final quarantined = artifact.copyWith(
+      state: artifactQuarantinedState,
+      purgeEligibleAt: _now(),
+      clearPurgedAt: true,
+      clearPurgeReason: true,
     );
+    await store.replaceJson('artifacts', artifact.id, quarantined.toJson());
+    if (wasReady) {
+      await _recordArtifactStorageRemoved(
+        artifact,
+        sourceId: sourceId ?? 'artifact-quarantine:${artifact.id}',
+        occurredAt: _now(),
+      );
+    }
   }
 
   void _validateReleaseSpec(ReleaseSpec spec) {

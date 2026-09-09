@@ -118,12 +118,30 @@ two checksummed state copies with atomic temporary-file/rename updates and
 retains the accepted patch high-water across restart and base rollback.
 
 `tool rollback --release <id> --to base` signs a separate canonical rollback
-control bound to the exact current high-water. The development server exposes
-that control at `/v1/control`; the runtime verifies the embedded trusted key,
-application/release identity, and high-water before clearing the active patch.
-The control is not a Patch Format v1 extension and does not change the v1
-protocol. Prior-patch selection is deliberately not exposed.
+control bound to the exact current high-water. Local/self-hosted development
+serves that control at `/v1/control`; `hyfens rollback --cloud` submits the
+same control through the authenticated managed-Cloud environment endpoint.
+The runtime verifies the embedded trusted key, application/release/platform
+identity, and high-water before clearing the active patch. The control is not a
+Patch Format v1 extension and does not change the v1 protocol. Prior-patch
+selection is deliberately not exposed.
 
 `tool cleanup` has only explicitly confirmed `builds` and `patches` scopes.
 It refuses symlinks and protected scopes and preserves release baselines,
 signing keys, source, rollback journals, sequence state, and evidence.
+
+Flavor-aware release selection is explicit. `--flavor` is forwarded to the
+native Flutter build and `--entrypoint` identifies the project-relative Dart
+file containing that variant's `main()`. A `tool.yaml` target/flavor map can
+provide both the entrypoint and (when native IDs differ) the runtime
+application ID. Release metadata persists the resolved selection, so analyze
+and patch cannot silently switch to another flavor later. The tool requires
+`flutter pub get` to have produced a current package graph and refuses missing,
+traversal, non-Dart, or non-`lib/` entrypoints.
+
+`hyfens detach` is a separate, explicitly confirmed local cleanup boundary. It
+removes only verified `tool.yaml`, `hyfens.yaml`, and the canonical `.tool`
+store (or its release/patch/build contents when `--keep-keys` is selected). A
+preflight rejects unexpected `.tool` content, links, special files, or
+malformed metadata. It never removes Flutter/Dart source or native project
+files and never changes remote runtime rollback state.

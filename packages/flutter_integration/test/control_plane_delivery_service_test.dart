@@ -107,86 +107,149 @@ void main() {
     await storage.delete(recursive: true);
   });
 
-  test(
-    'real authenticated service lookup/fetch reaches runtime activation',
-    () async {
-      final publicKey = await _publicKey();
-      final patchBytes = await _patchFormatArtifact();
-      final release = await service.registerRelease(
-        token: bootstrap.controlCredential.token,
-        idempotencyKey: 'service-release-1',
-        spec: ReleaseSpec(
-          applicationId: bootstrap.application.id,
-          platformId: 'plt_android_arm64_release',
-          runtimeApplicationId: _appId,
-          runtimeReleaseId: _releaseId,
-          buildTarget: 'android-arm64-release',
-          runtimeCompatibilityVersion: patchFormatRuntimeCompatibilityV1,
-          patchFormatVersion: patchFormatV1,
-          buildFingerprint: _digest('build'),
-          capabilityAuthorityDigest: _digest('capability'),
-          functionSignatureDigest: _digest('functions'),
-          displayVersion: '0.1.0',
-          signingPublicKeys: <String, String>{_keyId: base64.encode(publicKey)},
-        ),
-      );
-      final patch = await service.registerPatch(
-        token: bootstrap.controlCredential.token,
-        releaseId: release.id,
-        idempotencyKey: 'service-patch-1',
-        spec: PatchSpec(
-          runtimePatchId: 'service-patch-1',
-          sequence: 1,
-          artifactId: 'art_service_delivery_1',
-          sha256: _digest(patchBytes),
-          sizeBytes: patchBytes.length,
-          signatureKeyId: _keyId,
-        ),
-      );
-      await service.uploadArtifact(
-        token: bootstrap.controlCredential.token,
-        artifactId: patch.artifactId,
-        bytes: patchBytes,
-        idempotencyKey: 'service-artifact-1',
-      );
-      await service.promote(
-        token: bootstrap.controlCredential.token,
+  test('real authenticated service lookup/fetch reaches runtime activation', () async {
+    final publicKey = await _publicKey();
+    final patchBytes = await _patchFormatArtifact();
+    final release = await service.registerRelease(
+      token: bootstrap.controlCredential.token,
+      idempotencyKey: 'service-release-1',
+      spec: ReleaseSpec(
+        applicationId: bootstrap.application.id,
+        platformId: 'plt_android_arm64_release',
+        runtimeApplicationId: _appId,
+        runtimeReleaseId: _releaseId,
+        buildTarget: 'android-arm64-release',
+        runtimeCompatibilityVersion: patchFormatRuntimeCompatibilityV1,
+        patchFormatVersion: patchFormatV1,
+        buildFingerprint: _digest('build'),
+        capabilityAuthorityDigest: _digest('capability'),
+        functionSignatureDigest: _digest('functions'),
+        displayVersion: '0.1.0',
+        signingPublicKeys: <String, String>{_keyId: base64.encode(publicKey)},
+      ),
+    );
+    final patch = await service.registerPatch(
+      token: bootstrap.controlCredential.token,
+      releaseId: release.id,
+      idempotencyKey: 'service-patch-1',
+      spec: PatchSpec(
+        runtimePatchId: 'service-patch-1',
+        sequence: 1,
+        artifactId: 'art_service_delivery_1',
+        sha256: _digest(patchBytes),
+        sizeBytes: patchBytes.length,
+        signatureKeyId: _keyId,
+      ),
+    );
+    await service.uploadArtifact(
+      token: bootstrap.controlCredential.token,
+      artifactId: patch.artifactId,
+      bytes: patchBytes,
+      idempotencyKey: 'service-artifact-1',
+    );
+    await service.promote(
+      token: bootstrap.controlCredential.token,
+      environmentId: bootstrap.environment.id,
+      releaseId: release.id,
+      expectedVersion: 0,
+      idempotencyKey: 'service-promotion-1',
+    );
+
+    final adapter = HyfensControlPlaneDelivery(
+      HyfensControlPlaneConfiguration(
+        baseUrl: Uri.parse('http://127.0.0.1:${server.port}/p2/'),
+        deliveryCredential: bootstrap.deliveryCredential.token,
+        applicationId: bootstrap.application.id,
         environmentId: bootstrap.environment.id,
-        releaseId: release.id,
-        expectedVersion: 0,
-        idempotencyKey: 'service-promotion-1',
-      );
+        platformId: 'plt_android_arm64_release',
+      ),
+    );
+    final result = await adapter.deliver(controller);
 
-      final adapter = HyfensControlPlaneDelivery(
-        HyfensControlPlaneConfiguration(
-          baseUrl: Uri.parse('http://127.0.0.1:${server.port}/p2/'),
-          deliveryCredential: bootstrap.deliveryCredential.token,
-          applicationId: bootstrap.application.id,
-          environmentId: bootstrap.environment.id,
-          platformId: 'plt_android_arm64_release',
+    expect(result.decision, HyfensDeliveryDecision.patchAvailable);
+    expect(result.activated, isTrue);
+    expect(await controller.markHealthy(), isTrue);
+    expect(controller.durableState.highWaterSequence, 1);
+    expect(controller.status.mode, E1PatchMode.patch);
+
+    final highWater = controller.durableState;
+    final algorithm = DartEd25519();
+    final keyPair = await algorithm.newKeyPairFromSeed(_seed);
+    late final RollbackControlCommand rollbackControl;
+    try {
+      rollbackControl = await RollbackControlCommand.sign(
+        applicationId: _appId,
+        releaseId: _releaseId,
+        highWaterSequence: highWater.highWaterSequence,
+        highWaterDigest: highWater.highWaterDigest,
+        keyId: _keyId,
+        signer: (message) async =>
+            (await algorithm.sign(message, keyPair: keyPair)).bytes,
+      );
+    } finally {
+      keyPair.destroy();
+    }
+    final rollbackClient = HttpClient();
+    try {
+      final rollbackRequest = await rollbackClient.postUrl(
+        Uri.parse(
+          'http://127.0.0.1:${server.port}/p2/v1/organizations/${bootstrap.organization.id}'
+          '/applications/${bootstrap.application.id}'
+          '/environments/${bootstrap.environment.id}/rollback',
         ),
       );
-      final result = await adapter.deliver(controller);
-
-      expect(result.decision, HyfensDeliveryDecision.patchAvailable);
-      expect(result.activated, isTrue);
-      expect(await controller.markHealthy(), isTrue);
-      expect(controller.durableState.highWaterSequence, 1);
-      expect(controller.status.mode, E1PatchMode.patch);
-
-      await server.close(force: true);
-      await expectLater(
-        adapter.deliver(controller),
-        throwsA(isA<HyfensControlPlaneDeliveryException>()),
+      final rollbackBody = utf8.encode(
+        jsonEncode(<String, Object?>{
+          'rollback_control': base64.encode(rollbackControl.encodeBytes()),
+        }),
       );
-      expect(controller.status.mode, E1PatchMode.patch);
-      expect(controller.durableState.highWaterSequence, 1);
+      rollbackRequest
+        ..headers.contentType = ContentType.json
+        ..headers.set(
+          'Authorization',
+          'Bearer ${bootstrap.controlCredential.token}',
+        )
+        ..headers.set('Idempotency-Key', 'service-rollback-1')
+        ..contentLength = rollbackBody.length;
+      rollbackRequest.add(rollbackBody);
+      final rollbackResponse = await rollbackRequest.close();
+      final rollbackJson = jsonDecode(
+        await rollbackResponse.transform(utf8.decoder).join(),
+      ) as Map<String, Object?>;
+      expect(
+        rollbackResponse.statusCode,
+        200,
+        reason: jsonEncode(rollbackJson),
+      );
+      expect(rollbackJson['status'], 'ROLLBACK_REQUESTED');
+      expect(rollbackJson['desired_state'], 'base');
+    } finally {
+      rollbackClient.close(force: true);
+    }
 
-      expect(await controller.rollback(), isTrue);
-      expect(controller.status.mode, E1PatchMode.base);
-      expect(controller.durableState.highWaterSequence, 1);
-    },
-  );
+    final rollback = await adapter.deliver(controller);
+    expect(rollback.decision, HyfensDeliveryDecision.rollbackToBase);
+    expect(rollback.activated, isTrue);
+    expect(controller.status.mode, E1PatchMode.base);
+    expect(controller.durableState.highWaterSequence, 1);
+
+    // The Cloud desired state remains a base directive until a newer
+    // deployment supersedes it. Re-polling is therefore safe and must not
+    // reactivate the rolled-back patch.
+    final repeatedRollback = await adapter.deliver(controller);
+    expect(repeatedRollback.decision, HyfensDeliveryDecision.rollbackToBase);
+    expect(repeatedRollback.activated, isTrue);
+    expect(controller.status.mode, E1PatchMode.base);
+    expect(controller.durableState.highWaterSequence, 1);
+
+    await server.close(force: true);
+    await expectLater(
+      adapter.deliver(controller),
+      throwsA(isA<HyfensControlPlaneDeliveryException>()),
+    );
+    expect(controller.status.mode, E1PatchMode.base);
+    expect(controller.durableState.highWaterSequence, 1);
+  });
 }
 
 Future<List<int>> _publicKey() async {

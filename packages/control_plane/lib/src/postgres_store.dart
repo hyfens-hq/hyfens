@@ -153,7 +153,14 @@ enum PostgresRolloutTransitionFailurePoint { beforeCommit, afterCommit }
 /// keys and transactional migrations provide cross-process idempotency and
 /// startup safety that a single-process file queue cannot provide.
 final class PostgresControlPlaneStore
-    implements ControlPlaneStore, ArtifactInventory {
+    implements
+        ControlPlaneStore,
+        ArtifactInventory,
+        ArtifactDeletion,
+        JsonRecordDeletion,
+        OneTimeTokenConsumption,
+        BoundedObservationDeletion,
+        BillingRefundTransactionStore {
   PostgresControlPlaneStore(
     String connectionString, {
     ArtifactStore? artifacts,
@@ -320,6 +327,19 @@ final class PostgresControlPlaneStore
   Future<void> close() => _pool.close();
 
   @override
+  Future<T> runBillingRefundTransaction<T>(
+    String lockKey,
+    Future<T> Function(BillingRefundTransaction transaction) action,
+  ) => _pool.runTx((session) async {
+    // Refund approval, balance reservation, and provider-attempt claims
+    // share one short-lived database lock. The operation is intentionally
+    // low volume; serializing this boundary is safer than allowing two
+    // workers to approve more than the captured balance.
+    await session.execute('SELECT pg_advisory_xact_lock(7812452)');
+    return action(_PostgresBillingRefundTransaction(session, this));
+  });
+
+  @override
   Future<void> checkReadiness() async {
     await _pool.execute('SELECT 1');
     final readiness = _artifacts;
@@ -407,6 +427,44 @@ final class PostgresControlPlaneStore
     if (result.affectedRows != 1) {
       throw const StorageConflict('Record does not exist');
     }
+  }
+
+  @override
+  Future<bool> deleteJson(String collection, String id) async {
+    final result = await _pool.execute(
+      Sql.named(
+        'DELETE FROM control_plane_records '
+        'WHERE collection = @collection:text AND record_id = @id:text',
+      ),
+      parameters: <String, Object?>{'collection': collection, 'id': id},
+    );
+    return result.affectedRows > 0;
+  }
+
+  @override
+  Future<Map<String, Object?>?> consumeOneTimeTokenIfUnused({
+    required String collection,
+    required String id,
+    required DateTime consumedAt,
+  }) async {
+    final result = await _pool.runTx(
+      (session) => session.execute(
+        Sql.named(
+          'UPDATE control_plane_records SET body = jsonb_set('
+          'body, \'{consumedAt}\', to_jsonb(@consumed_at:text), true), '
+          'updated_at = now() WHERE collection = @collection:text '
+          'AND record_id = @id:text AND body->>\'consumedAt\' IS NULL '
+          'RETURNING body::text AS body_json',
+        ),
+        parameters: <String, Object?>{
+          'collection': collection,
+          'id': id,
+          'consumed_at': consumedAt.toUtc().toIso8601String(),
+        },
+      ),
+    );
+    if (result.isEmpty) return null;
+    return _decodeBody(result.first.toColumnMap()['body_json']);
   }
 
   @override
@@ -511,6 +569,27 @@ final class PostgresControlPlaneStore
     if (value is Uint8List) return List<int>.from(value);
     if (value is List<int>) return List<int>.from(value);
     throw const StorageConflict('Stored artifact has an invalid byte value');
+  }
+
+  @override
+  Future<bool> deleteArtifact(String digest) async {
+    final artifacts = _artifacts;
+    if (artifacts != null) {
+      if (artifacts case final ArtifactDeletion deletion) {
+        return deletion.deleteArtifact(digest);
+      }
+      throw const StorageUnavailable(
+        'Artifact deletion is unavailable for the configured object store',
+      );
+    }
+    final normalized = requireSha256Digest(digest);
+    final result = await _pool.execute(
+      Sql.named(
+        'DELETE FROM control_plane_artifacts WHERE digest = @digest:text',
+      ),
+      parameters: <String, Object?>{'digest': normalized},
+    );
+    return result.affectedRows > 0;
   }
 
   @override
@@ -704,6 +783,37 @@ final class PostgresControlPlaneStore
     String? applicationId,
     String? environmentId,
     required DateTime olderThan,
+  }) => _deleteObservations(
+    organizationId: organizationId,
+    applicationId: applicationId,
+    environmentId: environmentId,
+    olderThan: olderThan,
+  );
+
+  @override
+  Future<int> deleteObservationsBatch({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    required int limit,
+  }) {
+    if (limit < 1) return Future<int>.value(0);
+    return _deleteObservations(
+      organizationId: organizationId,
+      applicationId: applicationId,
+      environmentId: environmentId,
+      olderThan: olderThan,
+      limit: limit,
+    );
+  }
+
+  Future<int> _deleteObservations({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    int? limit,
   }) async {
     final conditions = <String>['organization_id = @organization:text'];
     final parameters = <String, Object?>{
@@ -719,10 +829,15 @@ final class PostgresControlPlaneStore
       parameters['environment'] = environmentId;
     }
     conditions.add('received_at < @older:timestamptz');
+    final statement = limit == null
+        ? 'DELETE FROM control_plane_observations WHERE ${conditions.join(' AND ')}'
+        : 'DELETE FROM control_plane_observations WHERE ctid IN ('
+              'SELECT ctid FROM control_plane_observations '
+              'WHERE ${conditions.join(' AND ')} '
+              'ORDER BY received_at, event_id LIMIT @limit:int)';
+    if (limit != null) parameters['limit'] = limit;
     final result = await _pool.execute(
-      Sql.named(
-        'DELETE FROM control_plane_observations WHERE ${conditions.join(' AND ')}',
-      ),
+      Sql.named(statement),
       parameters: parameters,
     );
     return result.affectedRows;
@@ -928,5 +1043,159 @@ final class PostgresControlPlaneStore
       if (left[index] != right[index]) return false;
     }
     return true;
+  }
+}
+
+final class _PostgresBillingRefundTransaction
+    implements BillingRefundTransaction {
+  _PostgresBillingRefundTransaction(this.session, this.store);
+
+  final Session session;
+  final PostgresControlPlaneStore store;
+
+  @override
+  Future<Map<String, Object?>?> readJson(String collection, String id) async {
+    final result = await session.execute(
+      Sql.named(
+        'SELECT body::text AS body_json FROM control_plane_records '
+        'WHERE collection = @collection:text AND record_id = @id:text',
+      ),
+      parameters: <String, Object?>{'collection': collection, 'id': id},
+    );
+    if (result.isEmpty) return null;
+    return store._decodeBody(result.first.toColumnMap()['body_json']);
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> listJson(String collection) async {
+    final result = await session.execute(
+      Sql.named(
+        'SELECT body::text AS body_json FROM control_plane_records '
+        'WHERE collection = @collection:text ORDER BY record_id',
+      ),
+      parameters: <String, Object?>{'collection': collection},
+    );
+    return List.unmodifiable(
+      result.map((row) => store._decodeBody(row.toColumnMap()['body_json'])),
+    );
+  }
+
+  @override
+  Future<void> createJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) async {
+    final canonical = canonicalJson(value);
+    await session.execute(
+      Sql.named(
+        'INSERT INTO control_plane_records '
+        '(collection, record_id, organization_id, body) '
+        'VALUES (@collection:text, @id:text, @organization:text, @body:jsonb) '
+        'ON CONFLICT (collection, record_id) DO NOTHING',
+      ),
+      parameters: <String, Object?>{
+        'collection': collection,
+        'id': id,
+        'organization': value['organizationId'],
+        'body': value,
+      },
+    );
+    final existing = await readJson(collection, id);
+    if (existing == null || canonicalJson(existing) != canonical) {
+      if (existing == null) {
+        throw const StorageConflict('Record insert did not persist');
+      }
+      throw const StorageConflict('Immutable record already exists');
+    }
+  }
+
+  @override
+  Future<void> replaceJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) async {
+    final result = await session.execute(
+      Sql.named(
+        'UPDATE control_plane_records SET organization_id = @organization:text, '
+        'body = @body:jsonb, updated_at = now() '
+        'WHERE collection = @collection:text AND record_id = @id:text',
+      ),
+      parameters: <String, Object?>{
+        'collection': collection,
+        'id': id,
+        'organization': value['organizationId'],
+        'body': value,
+      },
+    );
+    if (result.affectedRows != 1) {
+      throw const StorageConflict('Record does not exist');
+    }
+  }
+
+  @override
+  Future<void> appendAudit(String id, Map<String, Object?> value) async {
+    final existing = await session.execute(
+      Sql.named(
+        'SELECT body::text AS body_json FROM control_plane_records '
+        'WHERE collection = @collection:text AND record_id = @id:text '
+        'FOR UPDATE',
+      ),
+      parameters: <String, Object?>{'collection': 'audit', 'id': id},
+    );
+    if (existing.isNotEmpty) {
+      final current = store._decodeBody(
+        existing.first.toColumnMap()['body_json'],
+      );
+      if (canonicalJson(current) != canonicalJson(value)) {
+        throw const StorageConflict('Audit record already exists differently');
+      }
+      return;
+    }
+
+    final body = canonicalJson(value);
+    final digest = sha256Digest(<int>[...utf8.encode(body)]);
+    await session.execute('SELECT pg_advisory_xact_lock(7812451)');
+    final previous = await session.execute(
+      'SELECT record_digest FROM control_plane_audit_chain '
+      'ORDER BY sequence DESC LIMIT 1',
+    );
+    final previousDigest = previous.isEmpty
+        ? null
+        : previous.first.toColumnMap()['record_digest'] as String?;
+    final nextSequence = await session.execute(
+      'SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence '
+      'FROM control_plane_audit_chain',
+    );
+    await session.execute(
+      Sql.named(
+        'INSERT INTO control_plane_audit_chain '
+        '(sequence, audit_id, organization_id, previous_digest, record_digest, body) '
+        'VALUES (@sequence:int8, @id:text, @organization:text, @previous:text, '
+        '@digest:text, @body:jsonb)',
+      ),
+      parameters: <String, Object?>{
+        'sequence': nextSequence.first.toColumnMap()['next_sequence'],
+        'id': id,
+        'organization': value['organizationId'],
+        'previous': previousDigest,
+        'digest': digest,
+        'body': value,
+      },
+    );
+    await session.execute(
+      Sql.named(
+        'INSERT INTO control_plane_records '
+        '(collection, record_id, organization_id, body) '
+        'VALUES (@collection:text, @id:text, @organization:text, @body:jsonb)',
+      ),
+      parameters: <String, Object?>{
+        'collection': 'audit',
+        'id': id,
+        'organization': value['organizationId'],
+        'body': value,
+      },
+    );
   }
 }

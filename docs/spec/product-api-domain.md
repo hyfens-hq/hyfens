@@ -6,7 +6,7 @@ This is a versioned REST/domain contract for the control plane and runtime
 delivery boundary. It specifies interface behavior and examples; it is not an
 OpenAPI document. The current bounded implementation covers the authenticated release/patch/artifact,
 promotion, update-check, and artifact-fetch subset in
-[`packages/control_plane`](../../packages/control_plane/); rollout, telemetry,
+[`packages/control_plane`](../../packages/control_plane); rollout, telemetry,
 hosted identity, and managed service features remain out of scope.
 
 Related vocabulary and tenant invariants are in

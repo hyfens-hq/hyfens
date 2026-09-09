@@ -38,6 +38,11 @@ abstract final class ToolDiagnosticCodes {
   static const cleanupRequiresBaseRollback = 'C7005';
   static const cleanupFailed = 'C7006';
 
+  static const detachConfirmationRequired = 'D8101';
+  static const detachTargetInvalid = 'D8102';
+  static const detachFailed = 'D8103';
+  static const detachUnexpectedContent = 'D8104';
+
   static const statusNotInitialized = 'T1801';
   static const statusStoreIncomplete = 'T1802';
   static const statusInventoryTruncated = 'T1803';

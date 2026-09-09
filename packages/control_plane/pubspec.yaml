@@ -11,6 +11,8 @@ dependencies:
   cryptography: ^2.9.0
   hyfens_patch_format:
     path: ../patch_format
+  patch_loading_e1:
+    path: ../../experiments/patch_loading
   path: ^1.9.1
   postgres: ^3.5.9
 

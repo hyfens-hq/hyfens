@@ -157,7 +157,11 @@ final class EcsTaskRoleCredentialsProvider implements AwsCredentialsProvider {
 /// immutable digest-addressed objects and verifies bytes on both upload and
 /// download.
 final class S3CompatibleArtifactStore
-    implements ArtifactStore, ArtifactStoreReadiness, ArtifactInventory {
+    implements
+        ArtifactStore,
+        ArtifactStoreReadiness,
+        ArtifactInventory,
+        ArtifactDeletion {
   S3CompatibleArtifactStore({
     required Uri endpoint,
     required this.bucket,
@@ -328,6 +332,28 @@ final class S3CompatibleArtifactStore
         throw const StorageConflict('Object failed its content digest check');
       }
       return bytes;
+    });
+  }
+
+  @override
+  Future<bool> deleteArtifact(String digest) async {
+    final normalized = requireSha256Digest(digest);
+    return _retry(() async {
+      final request = await _client.deleteUrl(_objectUri(normalized));
+      await _setHeaders(
+        request,
+        0,
+        sha256Digest(const <int>[]),
+        payload: const <int>[],
+      );
+      final response = await request.close();
+      final status = response.statusCode;
+      await response.drain<void>();
+      if (status == HttpStatus.notFound) return false;
+      if (status < 200 || status >= 300) {
+        throw StorageUnavailable('Object deletion failed with HTTP $status');
+      }
+      return true;
     });
   }
 

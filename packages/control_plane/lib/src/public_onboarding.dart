@@ -8,8 +8,10 @@ import 'persistence.dart';
 
 const String publicWaitlistCollection = 'waitlist';
 const String publicNewsletterCollection = 'newsletter';
+const String publicEnterpriseInquiryCollection = 'enterprise_inquiries';
 const int publicOnboardingNameMaxLength = 128;
 const int publicOnboardingSourceMaxLength = 64;
+const int publicEnterpriseMessageMaxLength = 4000;
 
 /// Durable, unauthenticated onboarding intake. Registration is owned by
 /// [HumanAuthService]; this service owns only the two non-auth collections.
@@ -42,6 +44,102 @@ final class PublicOnboardingService {
     name: name,
     source: source,
   );
+
+  /// Stores Enterprise interest in the operator-owned inbox. Email delivery
+  /// is intentionally a separate deployment concern; the durable record gives
+  /// the platform a real, auditable destination without promising a response
+  /// time or inventing a CRM integration.
+  Future<Map<String, Object?>> submitEnterpriseInquiry({
+    required String email,
+    required String message,
+    required String idempotencyKey,
+    String? name,
+    String? organization,
+    String? source,
+  }) => _serialized(() async {
+    final normalizedEmail = normalizeEmail(email);
+    final normalizedMessage = _requiredText(
+      message,
+      'message',
+      publicEnterpriseMessageMaxLength,
+    );
+    final normalizedIdempotency = _requiredText(
+      idempotencyKey,
+      'idempotency key',
+      256,
+    );
+    final normalizedName = _optionalText(
+      name,
+      'name',
+      publicOnboardingNameMaxLength,
+    );
+    final normalizedOrganization = _optionalText(
+      organization,
+      'organization',
+      publicOnboardingNameMaxLength,
+    );
+    final normalizedSource = _optionalText(
+      source,
+      'source',
+      publicOnboardingSourceMaxLength,
+    );
+    final id = sha256Digest(
+      utf8.encode('$normalizedEmail:$normalizedIdempotency'),
+    ).substring(7);
+    final digest = sha256Digest(
+      utf8.encode(
+        '$normalizedEmail:$normalizedMessage:${normalizedOrganization ?? ''}',
+      ),
+    );
+    final existing = await store.readJson(
+      publicEnterpriseInquiryCollection,
+      id,
+    );
+    if (existing != null) {
+      if (existing['payloadDigest'] != digest) {
+        throw const ControlPlaneException(
+          'PUBLIC_INQUIRY_CONFLICT',
+          'The inquiry idempotency key was already used for different content',
+          statusCode: 409,
+        );
+      }
+      return existing;
+    }
+    final record = <String, Object?>{
+      'id': id,
+      'email': normalizedEmail,
+      'emailDigest': sha256Digest(utf8.encode(normalizedEmail)),
+      if (normalizedName != null) 'name': normalizedName,
+      if (normalizedOrganization != null)
+        'organization': normalizedOrganization,
+      'message': normalizedMessage,
+      if (normalizedSource != null) 'source': normalizedSource,
+      'status': 'received',
+      'destination': 'platform.enterprise_inquiries',
+      'delivery': 'durable_control_plane_inbox',
+      'payloadDigest': digest,
+      'createdAt': _clock().toUtc().toIso8601String(),
+      'updatedAt': _clock().toUtc().toIso8601String(),
+    };
+    try {
+      await store.createJson(publicEnterpriseInquiryCollection, id, record);
+      return record;
+    } on StorageConflict {
+      final concurrent = await store.readJson(
+        publicEnterpriseInquiryCollection,
+        id,
+      );
+      if (concurrent == null) rethrow;
+      if (concurrent['payloadDigest'] != digest) {
+        throw const ControlPlaneException(
+          'PUBLIC_INQUIRY_CONFLICT',
+          'The inquiry idempotency key was already used for different content',
+          statusCode: 409,
+        );
+      }
+      return concurrent;
+    }
+  });
 
   Future<bool> _submit({
     required String collection,
@@ -118,6 +216,20 @@ final class PublicOnboardingService {
     final normalized = value.trim();
     if (normalized.isEmpty) return null;
     if (normalized.length > maxLength ||
+        normalized.contains(RegExp(r'[\u0000-\u001f\u007f]'))) {
+      throw ControlPlaneException(
+        'INVALID_PUBLIC_SUBMISSION',
+        '$field is invalid',
+        statusCode: 422,
+      );
+    }
+    return normalized;
+  }
+
+  static String _requiredText(String value, String field, int maxLength) {
+    final normalized = value.trim();
+    if (normalized.isEmpty ||
+        normalized.length > maxLength ||
         normalized.contains(RegExp(r'[\u0000-\u001f\u007f]'))) {
       throw ControlPlaneException(
         'INVALID_PUBLIC_SUBMISSION',
