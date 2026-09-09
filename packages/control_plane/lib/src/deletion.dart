@@ -426,7 +426,7 @@ final class AccountDeletionService {
     );
     await _notify(
       key: 'account.deletion.verified',
-      stableKey: '$accountRequestId:verified',
+      stableKey: _deletionNotificationStableKey(request, 'verified'),
       recipient: user.email,
       organizationId: auditOrganizationId == 'system'
           ? null
@@ -555,9 +555,10 @@ final class AccountDeletionService {
         organizationId: organizationId,
         actorId: userId,
       );
-      final revokedCredentialCount = await _revokeOrganizationCredentials(
+      final revokedCredentialIds = await _revokeOrganizationCredentials(
         organizationId,
         now,
+        id,
       );
       final marked = OrganizationRecord(
         id: organization.id,
@@ -577,7 +578,8 @@ final class AccountDeletionService {
           'effectivePlan': billingStop['effectivePlan'],
         },
         'billingStoppedAt': now.toIso8601String(),
-        'organizationCredentialsRevoked': revokedCredentialCount,
+        'organizationCredentialsRevoked': revokedCredentialIds.length,
+        'organizationCredentialRevocationIds': revokedCredentialIds,
         'updatedAt': now.toIso8601String(),
       };
       await store.replaceJson(
@@ -644,7 +646,7 @@ final class AccountDeletionService {
     );
     await _notify(
       key: 'organization.deletion.verified',
-      stableKey: '$id:verified',
+      stableKey: _deletionNotificationStableKey(request, 'verified'),
       recipient: user.email,
       organizationId: organizationId,
       entityType: 'organization_deletion_request',
@@ -785,7 +787,7 @@ final class AccountDeletionService {
     if (user?['email'] is String) {
       await _notify(
         key: 'account.deletion.cancelled',
-        stableKey: id,
+        stableKey: _deletionNotificationStableKey(updated, 'cancelled'),
         recipient: user!['email']! as String,
         organizationId: await _auditOrganizationForUser(userId),
         entityType: 'account_deletion_request',
@@ -859,6 +861,11 @@ final class AccountDeletionService {
       return await store.readJson(organizationDeletionRequestCollection, id) ??
           current;
     }
+    final restoredCredentialCount = await _restoreOrganizationCredentials(
+      organizationId,
+      id,
+      _now(),
+    );
     final organizationValue = await store.readJson(
       'organizations',
       organizationId,
@@ -882,12 +889,16 @@ final class AccountDeletionService {
       action: 'organization.deletion.cancelled',
       resourceType: 'organization_deletion_request',
       resourceId: id,
-      metadata: const <String, Object?>{},
+      metadata: <String, Object?>{
+        'credentials_restored': restoredCredentialCount,
+        'billing_cancellation_retained':
+            updated['billingCancellationRetained'] == true,
+      },
     );
     if (user.email.isNotEmpty) {
       await _notify(
         key: 'organization.deletion.cancelled',
-        stableKey: id,
+        stableKey: _deletionNotificationStableKey(updated, 'cancelled'),
         recipient: user.email,
         organizationId: organizationId,
         entityType: 'organization_deletion_request',
@@ -1164,7 +1175,10 @@ final class AccountDeletionService {
       );
       final queued = await _notify(
         key: key,
-        stableKey: '$id:reminder:$milestone',
+        stableKey: _deletionNotificationStableKey(
+          request,
+          'reminder:$milestone',
+        ),
         recipient: recipient,
         organizationId: request['organizationId'] as String?,
         entityType: '${scope}_deletion_request',
@@ -1330,7 +1344,7 @@ final class AccountDeletionService {
     );
     await _notify(
       key: 'account.deleted',
-      stableKey: requestId,
+      stableKey: _deletionNotificationStableKey(request, 'completed'),
       recipient: user.email,
       organizationId: _auditOrganization(user) == 'system'
           ? null
@@ -1524,7 +1538,7 @@ final class AccountDeletionService {
     if (owner?['email'] is String) {
       await _notify(
         key: 'organization.deleted',
-        stableKey: requestId,
+        stableKey: _deletionNotificationStableKey(request, 'completed'),
         recipient: owner!['email']! as String,
         organizationId: organizationId,
         entityType: 'organization_deletion_request',
@@ -1908,7 +1922,9 @@ final class AccountDeletionService {
     bool enabled = true,
     bool allowCancellation = true,
   }) {
-    final priorProcessing = existing['processingAt'];
+    final priorProcessing = existing['status'] == 'cancelled'
+        ? null
+        : existing['processingAt'];
     if (priorProcessing is String) {
       return <String, Object?>{
         'gracePeriodEndsAt': existing['gracePeriodEndsAt'] ?? priorProcessing,
@@ -2027,6 +2043,21 @@ final class AccountDeletionService {
     return variables;
   }
 
+  String _deletionNotificationStableKey(
+    Map<String, Object?> request,
+    String event,
+  ) {
+    final id = request['id'];
+    if (id is! String || id.isEmpty) {
+      throw const FormatException('Deletion request ID is invalid');
+    }
+    final generation = request['requestGeneration'];
+    final normalizedGeneration = generation is int && generation > 0
+        ? generation
+        : 1;
+    return '$id:g$normalizedGeneration:$event';
+  }
+
   Future<List<String>> _credentialIdsForUser(String userId) async {
     final issued = <String>{};
     for (final value in await store.listJson('audit')) {
@@ -2059,11 +2090,12 @@ final class AccountDeletionService {
     }
   }
 
-  Future<int> _revokeOrganizationCredentials(
+  Future<List<String>> _revokeOrganizationCredentials(
     String organizationId,
     DateTime now,
+    String deletionRequestId,
   ) async {
-    var revoked = 0;
+    final revoked = <String>[];
     for (final value in await store.listJson('credentials')) {
       if (value['organizationId'] != organizationId ||
           value['revoked'] == true) {
@@ -2075,10 +2107,38 @@ final class AccountDeletionService {
         ...value,
         'revoked': true,
         'revokedAt': now.toIso8601String(),
+        'deletionRevocationRequestId': deletionRequestId,
       });
-      revoked++;
+      final credentialId = value['id'];
+      if (credentialId is String) revoked.add(credentialId);
     }
-    return revoked;
+    return List.unmodifiable(revoked);
+  }
+
+  Future<int> _restoreOrganizationCredentials(
+    String organizationId,
+    String deletionRequestId,
+    DateTime now,
+  ) async {
+    var restored = 0;
+    for (final value in await store.listJson('credentials')) {
+      if (value['organizationId'] != organizationId ||
+          value['revoked'] != true ||
+          value['deletionRevocationRequestId'] != deletionRequestId) {
+        continue;
+      }
+      final storageId = value['tokenHash'];
+      if (storageId is! String) continue;
+      await store.replaceJson('credentials', storageId, <String, Object?>{
+        ...value,
+        'revoked': false,
+        'revokedAt': null,
+        'deletionRevocationRequestId': null,
+        'updatedAt': now.toIso8601String(),
+      });
+      restored++;
+    }
+    return restored;
   }
 
   int _requestGeneration(Map<String, Object?>? existing) {

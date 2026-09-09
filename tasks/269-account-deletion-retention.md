@@ -234,3 +234,15 @@ Review findings that were refactoring-level smells only (module divergence and
 small duplicated UI/auth checks) were intentionally left unchanged to avoid
 scope expansion. The repository-required signed-off commit trailer is present
 on the final control-plane commit.
+
+## Re-request correction — 2026-09-10
+
+An additional focused audit found that a cancelled request could otherwise
+reuse its old processing schedule and notification identity. Resubmitted
+requests now increment the persisted generation, recalculate the working-day
+schedule from the new verification time, and use generation-scoped
+acknowledgement/reminder/cancellation/completion notification identities.
+This preserves idempotency without suppressing communication for a new
+request. Organization credentials revoked by a pending deletion are restored
+only when that request is cancelled, while independently revoked credentials
+remain revoked. The regression is covered by the deletion test suite.

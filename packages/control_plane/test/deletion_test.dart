@@ -413,6 +413,63 @@ void main() {
     },
   );
 
+  test('a new request after cancellation gets a new schedule and notification identity', () async {
+    final customer = await _createCustomer(
+      email: 'reschedule@example.com',
+      password: 'correct horse battery staple',
+    );
+    final user = HumanUserRecord.fromJson(
+      (await store.readJson('users', customer.userId))!,
+    );
+    final membership = user.memberships.single;
+    await store.replaceJson(
+      'users',
+      customer.userId,
+      user
+          .copyWith(
+            memberships: <HumanMembership>[
+              HumanMembership(
+                organizationId: membership.organizationId,
+                role: 'member',
+                capabilities: membership.capabilities,
+                profileName: membership.profileName,
+                audience: membership.audience,
+                platformCapabilities: membership.platformCapabilities,
+              ),
+            ],
+          )
+          .toJson(),
+    );
+
+    final first = await service.deletion!.requestAccountDeletion(
+      userId: customer.userId,
+      actorId: customer.userId,
+      requestId: 'request-reschedule-first',
+    );
+    await service.deletion!.cancelAccountDeletion(
+      userId: customer.userId,
+      actorId: customer.userId,
+      requestId: 'request-reschedule-cancel',
+    );
+
+    now = DateTime.utc(2026, 9, 14, 10);
+    final second = await service.deletion!.requestAccountDeletion(
+      userId: customer.userId,
+      actorId: customer.userId,
+      requestId: 'request-reschedule-second',
+    );
+
+    expect(first['requestGeneration'], 1);
+    expect(first['processingDate'], '2026-09-18');
+    expect(second['requestGeneration'], 2);
+    expect(second['processingDate'], '2026-09-23');
+    expect(
+      (await store.listJson('notification_events'))
+          .where((event) => event['key'] == 'account.deletion.verified'),
+      hasLength(2),
+    );
+  });
+
   test(
     'organization deletion is staged, tenant-safe, and shared-object safe',
     () async {
@@ -535,6 +592,12 @@ void main() {
         ))!['deletionState'],
         'active',
       );
+      final restoredCredential = await store.readJson(
+        'credentials',
+        credential.record.tokenHash,
+      );
+      expect(restoredCredential?['revoked'], isFalse);
+      expect(restoredCredential?['deletionRevocationRequestId'], isNull);
 
       final persistedRequest = await store.readJson(
         organizationDeletionRequestCollection,

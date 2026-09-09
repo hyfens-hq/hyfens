@@ -181,11 +181,23 @@ artifact stores, credentials, or operator infrastructure. A new signup after
 completed personal deletion is a new identity and does not resurrect the old
 organization.
 
+## Request generations
+
+If a pending request is cancelled and later resubmitted, the new request gets
+a new persisted generation and a newly calculated working-day schedule.
+Acknowledgement, reminder, cancellation, and completion notification identities
+include that generation, so idempotency prevents duplicates without suppressing
+communication for a later request.
+
 ## Follow-up hardening — 2026-09-10
 
 Organization-scoped credentials are revoked when an authenticated Cloud
 organization deletion request enters the grace state; the human authentication
 mechanism needed to inspect or cancel personal deletion remains available.
+Credentials revoked by that request are tagged and restored only when the
+request is authoritatively cancelled; credentials that were already revoked
+are never resurrected. Final organization processing still removes the
+credential records.
 Pending personal deletion also blocks creation of a new Cloud organization,
 and the public account-deletion endpoints return Cloud-unavailable on
 self-hosted deployments. Failed deletion requests remain worker-eligible for
