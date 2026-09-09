@@ -132,8 +132,10 @@ final class KeplarsHumanMessageDelivery
         ..contentType = ContentType.json;
       request.add(
         utf8.encode(
-          jsonEncode(<String, String>{
-            'to': to,
+          jsonEncode(<String, Object?>{
+            // Keplars accepts recipients as a collection. Sending a scalar
+            // string is parsed as an iterable of characters by the provider.
+            'to': <String>[to],
             'subject': subject,
             'body': body,
             'from': _from,
