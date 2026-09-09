@@ -1,0 +1,85 @@
+# R2-backed public control-plane development deployment.
+# The explicit project name avoids the old phase/revision shorthand.
+name: hyfens-public-control-plane-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: hyfens
+      POSTGRES_USER: hyfens
+      POSTGRES_PASSWORD: ${HYFENS_POSTGRES_PASSWORD:?set HYFENS_POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hyfens -d hyfens"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - public-control-plane-dev-postgres:/var/lib/postgresql/data
+
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: deploy/p2/Dockerfile
+    image: ${HYFENS_CONTROL_PLANE_IMAGE:-hyfens-public-control-plane:current}
+    environment:
+      HYFENS_HOST: 0.0.0.0
+      HYFENS_PORT: 18081
+      HYFENS_DATABASE_URL: postgresql://hyfens:${HYFENS_POSTGRES_PASSWORD}@postgres:5432/hyfens?sslmode=disable
+      HYFENS_ARTIFACT_ENDPOINT: ${HYFENS_R2_ENDPOINT:?set HYFENS_R2_ENDPOINT}
+      HYFENS_ARTIFACT_BUCKET: ${HYFENS_R2_BUCKET:-hyfens-dev}
+      HYFENS_ARTIFACT_ACCESS_KEY: ${HYFENS_R2_ACCESS_KEY:?set HYFENS_R2_ACCESS_KEY}
+      HYFENS_ARTIFACT_SECRET_KEY: ${HYFENS_R2_SECRET_KEY:?set HYFENS_R2_SECRET_KEY}
+      HYFENS_ARTIFACT_REGION: ${HYFENS_R2_REGION:-auto}
+      HYFENS_DEPLOYMENT_MODEL: ${HYFENS_DEPLOYMENT_MODEL:-self_hosted}
+      HYFENS_API_BASE_PATH: ${HYFENS_API_BASE_PATH:-/}
+      HYFENS_DISCOVERY_PRODUCT: ${HYFENS_DISCOVERY_PRODUCT:-hyfens}
+      HYFENS_DISCOVERY_PRODUCT_VERSION: ${HYFENS_DISCOVERY_PRODUCT_VERSION:-0.1.0}
+      HYFENS_DISCOVERY_API_VERSION: ${HYFENS_DISCOVERY_API_VERSION:-v1}
+      HYFENS_AUTH_DEVICE_VERIFICATION_URI: ${HYFENS_AUTH_DEVICE_VERIFICATION_URI:-}
+      HYFENS_AUTH_AUTHORIZATION_ENDPOINT: ${HYFENS_AUTH_AUTHORIZATION_ENDPOINT:-}
+      HYFENS_WEB_ORIGINS: ${HYFENS_WEB_ORIGINS:-}
+      HYFENS_PUBLIC_CONTENT_ORGANIZATION_ID: ${HYFENS_PUBLIC_CONTENT_ORGANIZATION_ID:-}
+      HYFENS_AUTH_ISSUER: ${HYFENS_AUTH_ISSUER:-}
+      HYFENS_AUTH_AUDIENCE: ${HYFENS_AUTH_AUDIENCE:-}
+      HYFENS_AUTH_SIGNING_KEY: ${HYFENS_AUTH_SIGNING_KEY:-}
+      HYFENS_AUTH_SIGNING_KEY_ID: ${HYFENS_AUTH_SIGNING_KEY_ID:-}
+      HYFENS_AUTH_VERIFY_KEYS: ${HYFENS_AUTH_VERIFY_KEYS:-}
+      HYFENS_AUTH_ACCESS_TTL: ${HYFENS_AUTH_ACCESS_TTL:-}
+      HYFENS_AUTH_SESSION_TTL: ${HYFENS_AUTH_SESSION_TTL:-}
+      HYFENS_AUTH_CODE_TTL: ${HYFENS_AUTH_CODE_TTL:-}
+      HYFENS_AUTH_DEVICE_TTL: ${HYFENS_AUTH_DEVICE_TTL:-}
+      HYFENS_AUTH_DEVICE_POLL_INTERVAL: ${HYFENS_AUTH_DEVICE_POLL_INTERVAL:-}
+      HYFENS_AUTH_DEVICE_MAX_ATTEMPTS: ${HYFENS_AUTH_DEVICE_MAX_ATTEMPTS:-}
+      HYFENS_AUTH_DEVICE_ATTEMPTS_PER_MINUTE: ${HYFENS_AUTH_DEVICE_ATTEMPTS_PER_MINUTE:-}
+      HYFENS_AUTH_ALLOWED_REDIRECT_URIS: ${HYFENS_AUTH_ALLOWED_REDIRECT_URIS:-}
+      HYFENS_PLATFORM_ADMIN_EMAILS: ${HYFENS_PLATFORM_ADMIN_EMAILS:-}
+      # Cloud billing is opt-in. These values are deployment-owned and remain
+      # empty for the default self-hosted development stack.
+      HYFENS_BILLING_PROVIDER_TOKEN_HASH: ${HYFENS_BILLING_PROVIDER_TOKEN_HASH:-}
+      HYFENS_RAZORPAY_STARTER_PLAN_ID: ${HYFENS_RAZORPAY_STARTER_PLAN_ID:-}
+      HYFENS_RAZORPAY_TEAM_PLAN_ID: ${HYFENS_RAZORPAY_TEAM_PLAN_ID:-}
+      HYFENS_RAZORPAY_WEBHOOK_SECRET: ${HYFENS_RAZORPAY_WEBHOOK_SECRET:-}
+      HYFENS_RAZORPAY_CURRENCY: ${HYFENS_RAZORPAY_CURRENCY:-}
+      HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR: ${HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR:-}
+      HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR: ${HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR:-}
+      # Managed Cloud deletion policy is deployment-owned. Keep it unset for
+      # the default self-hosted development stack.
+      HYFENS_DELETION_GRACE_PERIOD: ${HYFENS_DELETION_GRACE_PERIOD:-}
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:18081/readyz >/dev/null"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${HYFENS_BIND_ADDRESS:-127.0.0.1}:${HYFENS_CONTROL_PLANE_PORT:-18082}:18081"
+
+volumes:
+  public-control-plane-dev-postgres:
+    # Preserve the existing dev database during this naming-only migration.
+    # Removing this explicit name would create a new, empty volume.
+    name: hyfens-p2-r2-postgres

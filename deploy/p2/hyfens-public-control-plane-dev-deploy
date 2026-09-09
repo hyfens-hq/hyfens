@@ -1,0 +1,373 @@
+#!/bin/sh
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+stage=/home/hyfen/p2-deploy-stage
+source_deploy="$stage/deploy/p2"
+source_control="$stage/packages/control_plane"
+source_patch="$stage/packages/patch_format"
+source_runtime="$stage/packages/runtime"
+source_instrumentation="$stage/experiments/instrumentation"
+source_patch_loading="$stage/experiments/patch_loading"
+target=/opt/hyfens/public-control-plane-dev
+previous_target=/opt/hyfens/public-control-plane-dev-previous
+env_file=/etc/hyfens/public-control-plane-dev.env
+project=hyfens-public-control-plane-dev
+current_image=hyfens-public-control-plane:current
+previous_image=hyfens-public-control-plane:previous
+old_target=/opt/hyfens/p2-r2
+old_compose_file="$old_target/deploy/p2/docker-compose.r2.yml"
+old_env_file=/etc/hyfens/p2-r2.env
+old_project=hyfens-p2-r2
+docker=/usr/bin/docker
+curl=/usr/bin/curl
+date=/usr/bin/date
+
+mode=deploy
+case "$#" in
+  0) ;;
+  1)
+    [ "$1" = '--rollback' ] || {
+      echo 'usage: hyfens-public-control-plane-dev-deploy [--rollback]' >&2
+      exit 2
+    }
+    mode=rollback
+    ;;
+  *)
+    echo 'usage: hyfens-public-control-plane-dev-deploy [--rollback]' >&2
+    exit 2
+    ;;
+esac
+
+fail() {
+  echo "public control-plane deployment failed: $*" >&2
+  exit 1
+}
+
+require_directory() {
+  path=$1
+  label=$2
+  [ -d "$path" ] || fail "$label is missing"
+  [ "$(readlink -f "$path")" = "$path" ] || fail "$label must not be a symlink"
+}
+
+require_file() {
+  path=$1
+  label=$2
+  [ -f "$path" ] || fail "$label is missing"
+  [ "$(readlink -f "$path")" = "$path" ] || fail "$label must not be a symlink"
+}
+
+require_safe_tree() {
+  path=$1
+  label=$2
+  if find "$path" -type l -print -quit | grep -q .; then
+    fail "$label must not contain symlinks"
+  fi
+  if find "$path" ! -type f ! -type d -print -quit | grep -q .; then
+    fail "$label must contain only regular files and directories"
+  fi
+}
+
+require_tools() {
+  [ -x "$docker" ] || fail 'Docker is not installed at /usr/bin/docker'
+  [ -x "$curl" ] || fail 'curl is not installed at /usr/bin/curl'
+  [ -x "$date" ] || fail 'date is not installed at /usr/bin/date'
+}
+
+require_environment() {
+  require_file "$env_file" 'protected public control-plane environment'
+  [ "$(stat -c '%U:%G %a' "$env_file")" = 'root:root 600' ] || {
+    fail 'protected public control-plane environment must be root:root with mode 600'
+  }
+}
+
+require_old_fallback() {
+  if [ -f "$old_compose_file" ] && [ -f "$old_env_file" ]; then
+    [ "$(stat -c '%U:%G %a' "$old_env_file")" = 'root:root 600' ] || {
+      fail 'old control-plane environment must be root:root with mode 600'
+    }
+    old_fallback_available=1
+  else
+    old_fallback_available=0
+  fi
+}
+
+validate_common() {
+  require_directory /opt 'deployment root'
+  require_directory /opt/hyfens 'Hyfens deployment root'
+  require_tools
+  require_environment
+  require_old_fallback
+}
+
+compose() {
+  compose_dir=$1
+  image_name=$2
+  shift 2
+  HYFENS_CONTROL_PLANE_IMAGE="$image_name" "$docker" compose \
+    --project-name "$project" \
+    --file "$compose_dir/deploy/p2/docker-compose.public-control-plane-dev.yml" \
+    --env-file "$env_file" \
+    "$@"
+}
+
+old_compose() {
+  "$docker" compose \
+    --project-name "$old_project" \
+    --file "$old_compose_file" \
+    --env-file "$old_env_file" \
+    "$@"
+}
+
+wait_for_control_plane() {
+  attempts=0
+  while ! "$curl" --fail --silent --show-error --max-time 5 \
+    http://127.0.0.1:18082/readyz -o /dev/null; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 60 ] || fail 'public control plane did not become ready'
+    sleep 1
+  done
+}
+
+write_state() {
+  action=$1
+  image_name=$2
+  state_file=/opt/hyfens/public-control-plane-dev-deployment-state
+  state_tmp="$state_file.tmp.$$"
+  {
+    printf 'action=%s\n' "$action"
+    printf 'timestamp=%s\n' "$($date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'compose_project=%s\n' "$project"
+    printf 'target=%s\n' "$target"
+    printf 'image=%s\n' "$image_name"
+    printf 'previous_target=%s\n' "$previous_target"
+  } > "$state_tmp"
+  install -o root -g root -m 0644 "$state_tmp" "$state_file"
+  rm -f "$state_tmp"
+}
+
+validate_staging() {
+  require_directory "$stage" 'deployment staging directory'
+  require_directory "$source_deploy" 'staged public control-plane deployment files'
+  require_directory "$source_control" 'staged control-plane files'
+  require_directory "$source_patch" 'staged patch-format files'
+  require_directory "$source_runtime" 'staged runtime files'
+  require_directory "$source_instrumentation" 'staged instrumentation files'
+  require_directory "$source_patch_loading" 'staged patch-loading files'
+  for file in Dockerfile docker-compose.public-control-plane-dev.yml; do
+    require_file "$source_deploy/$file" "staged control-plane deployment file: $file"
+  done
+  for file in pubspec.yaml; do
+    require_file "$source_control/$file" "staged control-plane package file: $file"
+    require_file "$source_patch/$file" "staged patch-format package file: $file"
+  done
+  require_file "$stage/LICENSE" 'staged license file'
+  require_file "$stage/THIRD_PARTY_NOTICES.md" 'staged third-party notices'
+  require_safe_tree "$source_deploy" 'control-plane deployment tree'
+  require_safe_tree "$source_control" 'control-plane source tree'
+  require_safe_tree "$source_patch" 'patch-format source tree'
+  require_safe_tree "$source_runtime" 'runtime source tree'
+  require_safe_tree "$source_instrumentation" 'instrumentation source tree'
+  require_safe_tree "$source_patch_loading" 'patch-loading source tree'
+}
+
+validate_release_directory() {
+  path=$1
+  label=$2
+  if [ -e "$path" ]; then
+    require_directory "$path" "$label"
+    require_safe_tree "$path" "$label"
+  fi
+}
+
+old_image_id=''
+old_previous_image_id=''
+build_dir=''
+work_dir=''
+old_stopped=0
+old_was_running=0
+target_moved=0
+previous_moved=0
+service_started=0
+succeeded=0
+
+cleanup() {
+  if [ -n "${build_dir:-}" ] && [ -e "$build_dir" ]; then
+    rm -rf "$build_dir"
+  fi
+  if [ -n "${work_dir:-}" ] && [ -e "$work_dir" ]; then
+    rm -rf "$work_dir"
+  fi
+}
+
+restore_previous_deploy() {
+  set +e
+  if [ "$service_started" -eq 1 ] && [ -f "$target/deploy/p2/docker-compose.public-control-plane-dev.yml" ]; then
+    compose "$target" "$current_image" down --remove-orphans >/dev/null 2>&1 || true
+  fi
+  if [ "$target_moved" -eq 1 ]; then
+    rm -rf "$target"
+    if [ -d "$work_dir/target" ]; then
+      mv "$work_dir/target" "$target" || true
+    fi
+  fi
+  if [ "$previous_moved" -eq 1 ]; then
+    rm -rf "$previous_target"
+    if [ -d "$work_dir/previous" ]; then
+      mv "$work_dir/previous" "$previous_target" || true
+    fi
+  fi
+  if [ -n "$old_image_id" ]; then
+    "$docker" tag "$old_image_id" "$current_image" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$old_previous_image_id" ]; then
+    "$docker" tag "$old_previous_image_id" "$previous_image" >/dev/null 2>&1 || true
+  fi
+  if [ "$old_stopped" -eq 1 ] && [ "$old_was_running" -eq 1 ]; then
+    old_compose up -d --no-build >/dev/null 2>&1 || true
+  fi
+  cleanup
+}
+
+trap restore_previous_deploy EXIT HUP INT TERM
+
+rollback_release() {
+  validate_release_directory "$target" 'current control-plane release'
+  validate_release_directory "$previous_target" 'previous control-plane release'
+  [ -d "$previous_target" ] || fail 'no durable previous control-plane release exists'
+  "$docker" image inspect "$previous_image" >/dev/null 2>&1 || {
+    fail 'previous control-plane image is missing'
+  }
+
+  work_dir=$(mktemp -d /opt/hyfens/.public-control-plane-rollback.XXXXXX)
+  if [ -d "$target" ]; then
+    compose "$target" "$current_image" down --remove-orphans || true
+    mv "$target" "$work_dir/current"
+    target_moved=1
+  fi
+  install -d -o root -g root -m 0755 "$target"
+  cp -a "$previous_target"/. "$target"/
+  compose "$target" "$previous_image" config --quiet
+  service_started=1
+  compose "$target" "$previous_image" up -d --no-build --force-recreate
+  wait_for_control_plane
+
+  if [ -d "$work_dir/current" ]; then
+    rm -rf "$previous_target"
+    mv "$work_dir/current" "$previous_target"
+  fi
+  if "$docker" image inspect "$current_image" >/dev/null 2>&1; then
+    "$docker" tag "$current_image" "$previous_image"
+  fi
+  write_state rollback "$previous_image"
+  succeeded=1
+  cleanup
+  trap - EXIT HUP INT TERM
+  echo 'public control-plane rollback complete'
+}
+
+deploy_release() {
+  validate_staging
+  validate_release_directory "$target" 'existing control-plane release'
+  validate_release_directory "$previous_target" 'existing previous control-plane release'
+
+  old_image_id=$(
+    "$docker" inspect --format '{{.Image}}' hyfens-public-control-plane-dev-control-plane-1 \
+      2>/dev/null || true
+  )
+  if [ -z "$old_image_id" ]; then
+    old_image_id=$(
+      "$docker" inspect --format '{{.Image}}' hyfens-p2-r2-control-plane-1 \
+        2>/dev/null || true
+    )
+  fi
+  if [ -z "$old_image_id" ]; then
+    old_image_id=$(
+      "$docker" image inspect --format '{{.Id}}' "$current_image" \
+        2>/dev/null || true
+    )
+  fi
+  old_previous_image_id=$(
+    "$docker" image inspect --format '{{.Id}}' "$previous_image" \
+      2>/dev/null || true
+  )
+
+  build_dir=$(mktemp -d /opt/hyfens/.public-control-plane-build.XXXXXX)
+  install -d "$build_dir/deploy/p2" "$build_dir/packages/control_plane" \
+    "$build_dir/packages/patch_format" "$build_dir/packages/runtime" \
+    "$build_dir/experiments/instrumentation" \
+    "$build_dir/experiments/patch_loading"
+  cp -a "$source_deploy"/. "$build_dir/deploy/p2/"
+  cp -a "$source_control"/. "$build_dir/packages/control_plane/"
+  cp -a "$source_patch"/. "$build_dir/packages/patch_format/"
+  cp -a "$source_runtime"/. "$build_dir/packages/runtime/"
+  cp -a "$source_instrumentation"/. \
+    "$build_dir/experiments/instrumentation/"
+  cp -a "$source_patch_loading"/. \
+    "$build_dir/experiments/patch_loading/"
+  install -o root -g root -m 0644 "$stage/LICENSE" "$build_dir/LICENSE"
+  install -o root -g root -m 0644 "$stage/THIRD_PARTY_NOTICES.md" \
+    "$build_dir/THIRD_PARTY_NOTICES.md"
+  require_safe_tree "$build_dir" 'control-plane build tree'
+
+  compose "$build_dir" "$current_image" config --quiet
+  compose "$build_dir" "$current_image" build control-plane
+  "$docker" image inspect "$current_image" >/dev/null 2>&1 || {
+    fail 'control-plane image was not produced'
+  }
+  if [ -n "$old_image_id" ]; then
+    "$docker" tag "$old_image_id" "$previous_image"
+  fi
+
+  work_dir=$(mktemp -d /opt/hyfens/.public-control-plane-deploy.XXXXXX)
+  if [ -d "$target" ]; then
+    mv "$target" "$work_dir/target"
+    target_moved=1
+  fi
+  if [ -d "$previous_target" ]; then
+    mv "$previous_target" "$work_dir/previous"
+    previous_moved=1
+  fi
+  install -d -o root -g root -m 0755 "$target"
+  cp -a "$build_dir"/. "$target"/
+  chown -R root:root "$target"
+  require_file "$target/deploy/p2/docker-compose.public-control-plane-dev.yml" \
+    'installed control-plane Compose manifest'
+  require_safe_tree "$target" 'installed control-plane release'
+
+  compose "$target" "$current_image" config --quiet
+  if [ "$old_fallback_available" -eq 1 ]; then
+    old_id=$(old_compose ps -q control-plane 2>/dev/null || true)
+    if [ -n "$old_id" ]; then
+      old_was_running=1
+      old_stopped=1
+      old_compose down --remove-orphans
+    fi
+  fi
+  service_started=1
+  compose "$target" "$current_image" up -d --no-build --force-recreate
+  wait_for_control_plane
+
+  if [ -d "$work_dir/target" ]; then
+    mv "$work_dir/target" "$previous_target"
+  elif [ -d "$work_dir/previous" ]; then
+    mv "$work_dir/previous" "$previous_target"
+  fi
+  if [ "$previous_moved" -eq 1 ] && [ -d "$work_dir/previous" ]; then
+    rm -rf "$work_dir/previous"
+  fi
+  write_state deploy "$current_image"
+  succeeded=1
+  cleanup
+  trap - EXIT HUP INT TERM
+  echo 'public control-plane deployed'
+}
+
+validate_common
+if [ "$mode" = 'rollback' ]; then
+  rollback_release
+else
+  deploy_release
+fi
