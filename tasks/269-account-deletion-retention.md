@@ -204,7 +204,7 @@ durations are inferred.
 
 Final affected-scope validation passed on the working-day correction:
 
-- `dart test test/deletion_test.dart test/human_auth_test.dart test/human_auth_http_test.dart test/customer_onboarding_test.dart test/customer_billing_test.dart test/notifications_test.dart` — 51 tests passed.
+- `dart test test/deletion_test.dart test/human_auth_test.dart test/human_auth_http_test.dart test/customer_onboarding_test.dart test/customer_billing_test.dart test/notifications_test.dart` — 52 tests passed.
 - `dart analyze .` in `packages/control_plane` — no issues found.
 - `dart format --output=none --set-exit-if-changed` for all changed Dart files — passed with no changes.
 - Cloud `npm run typecheck:web` — passed.
