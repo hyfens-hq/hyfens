@@ -123,3 +123,9 @@ used.
 - 2026-09-09: Hyfens PR opened at
   https://github.com/hyfens-hq/hyfens/pull/3. Companion Cloud-web PR opened at
   https://github.com/hyfens-hq/hyfens-cloud-web/pull/3.
+- 2026-09-09: Managed acceptance found that the public control-plane Compose
+  service omitted the callback/payload-key variables and the host had no
+  notification timer. Added the missing environment mapping and the bounded
+  systemd notification worker/timer to the existing deployment package as a
+  post-completion correction; managed acceptance remains separate from
+  repository code verification.

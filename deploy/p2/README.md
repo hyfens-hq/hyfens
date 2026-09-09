@@ -88,6 +88,13 @@ image, uses the same protected environment and database, emits only aggregate
 status counts, and is safe to resume after a restart. It is not a second queue
 or a replacement for the durable deletion request records.
 
+The same installation enables the
+`hyfens-public-control-plane-dev-notification.timer`, which invokes the
+bounded `--process-notifications` command every minute with a separate host
+lock. It drains durable notification deliveries asynchronously using the
+protected control-plane environment; it does not run from HTTP or provider
+webhook requests.
+
 The control plane is deliberately configured with customer/local signing
 authority. PostgreSQL and object storage persist and deliver bytes; they never
 verify or authorize runtime patches.
