@@ -472,7 +472,7 @@ class DashboardContractTest(unittest.TestCase):
         auth_focus_marker = ".auth-form input:focus,\n.auth-form input:focus-visible {"
 
         self.assertIn('href="styles.css?v=236"', markup)
-        self.assertIn('src="app.js?v=231"', markup)
+        self.assertIn('src="app.js?v=232"', markup)
         self.assertIn("min-height: 100dvh;", auth_layout_rule)
         self.assertIn("overflow: visible;", auth_layout_rule)
         self.assertNotIn("\n  height: 100dvh;", auth_layout_rule)
@@ -515,7 +515,7 @@ class DashboardContractTest(unittest.TestCase):
         )
         self.assertIn('href="tokens.css?v=222"', markup)
         self.assertIn('href="styles.css?v=236"', markup)
-        self.assertIn('src="app.js?v=231"', markup)
+        self.assertIn('src="app.js?v=232"', markup)
         self.assertGreaterEqual(
             styles.count("font-family: var(--hyfens-font-display);"),
             2,
