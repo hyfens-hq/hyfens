@@ -173,10 +173,13 @@ use marketing consent or unsubscribe semantics.
 
 The design is intentionally restrained: warm paper background, white message
 panel, near-black type, thin neutral rules, and a single Hyfens orange mark.
-There are no external images, image-only calls to action, gradients, or
-marketing decoration. The renderer escapes dynamic values, requires HTTPS
-actions, and permits actions only on the configured dashboard or marketing
-origins.
+The shell uses the canonical Hyfens SVG-derived `brand-mark.png` email asset
+with an accessible text fallback; it does not redraw the logo. There are no
+image-only calls to action, gradients, or marketing decoration. The renderer
+escapes dynamic values, requires HTTPS actions, and permits actions only on the
+configured dashboard or marketing origins. Customer-facing dates are rendered
+through the shared formatter; canonical UTC storage is shown as a readable UTC
+date/time because no reliable workspace timezone is currently available.
 
 ## Security and audit
 
@@ -194,11 +197,28 @@ tokens, card data, provider API keys, or full email bodies.
 
 Keplars callbacks may be posted to the authenticated control-plane route
 `POST /v1/notifications/webhooks/keplars` with an HMAC over the raw body in
-`X-Keplars-Signature`. The route is disabled unless
+`X-Webhook-Signature: sha256=<hex>`. The route is disabled unless
 `KEPLARS_WEBHOOK_SECRET` is configured. Callback states are normalized to
 `accepted`, `delivered`, `bounced`, `complained`, `hard_failed`, or
 `cancelled` and are audited without allowing out-of-order callbacks to regress
 a terminal state.
+
+### Runtime correlation boundary
+
+The Keplars documentation describes a send response identifier in
+`data.id` and callback payloads containing `email_id`. The adapter accepts the
+documented nested response shape as well as the top-level shape observed in
+the existing managed deployment. It correlates callbacks only by the exact
+provider message identifier stored on `notification_deliveries`.
+
+Task 273 managed acceptance observed a live send response with a `msg_...`
+identifier while the natural callback reported a different `email_id`; a
+status lookup using the `msg_...` value returned not-found. The documented
+contract currently exposes no metadata/client-reference echo or mapping
+operation that safely bridges those identifiers. Until Keplars supplies such a
+supported mapping, the delivery remains `accepted` rather than being promoted
+to `delivered`. Recipient, subject, timestamp, and message-order heuristics
+are explicitly prohibited.
 
 ## Provider/configuration contract
 
@@ -229,6 +249,13 @@ it never creates a delivery or opens an HTTP client. The preview fixture is
 intended for local development and automated render tests, not production
 customer data.
 
+Provider schema/callback probes are acceptance infrastructure, not customer
+notifications. The repository has no general raw-send probe path. Any managed
+probe must be explicitly classified as an internal diagnostic, target only an
+approved test mailbox, identify its environment and provider, and carry only a
+short safe correlation reference. It must not participate in customer
+recipient preferences or be used as evidence for customer delivery semantics.
+
 ## Operational checklist
 
 Before enabling the managed worker, verify the Keplars sending domain and
@@ -246,3 +273,5 @@ worker retries must remain observable by their distinct audit/correlation IDs.
 - [Razorpay payment webhooks](https://razorpay.com/docs/webhooks/payments/)
 - [Razorpay refund API](https://razorpay.com/docs/api/refunds/)
 - [Keplars skill/provider contract](../../.agents/skills/keplars/SKILL.md)
+- [Keplars webhook documentation](https://docs.keplars.com/docs/getting-started/webhooks)
+- [Keplars send-email documentation](https://docs.keplars.com/docs/getting-started/send-emails)

@@ -46,6 +46,7 @@ void main() {
       renderer: NotificationRenderer(
         dashboardOrigin: Uri.parse('https://app.hyfens.com'),
         marketingOrigin: Uri.parse('https://hyfens.com'),
+        clock: () => DateTime.utc(2026, 9, 9, 12),
       ),
       payloadProtector: NotificationPayloadProtector(List<int>.filled(32, 7)),
       clock: () => DateTime.utc(2026, 9, 9, 12),
@@ -143,6 +144,53 @@ void main() {
       await server.close(force: true);
     }
   });
+
+  test(
+    'Keplars adapter accepts the documented nested data.id response',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      try {
+        server.listen((request) async {
+          await request.drain<void>();
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode(<String, Object?>{
+                'success': true,
+                'data': <String, Object?>{
+                  'id': '456',
+                  'message': 'Email queued successfully',
+                },
+              }),
+            );
+          await request.response.close();
+        });
+
+        final provider = KeplarsNotificationProvider(
+          apiKey: 'test-key',
+          apiBase: Uri.parse('http://127.0.0.1:${server.port}/api/v1'),
+        );
+        final result = await provider.send(
+          const NotificationMessage(
+            to: 'owner@example.com',
+            subject: 'Test notification',
+            preheader: 'Test notification',
+            html: '<p>Test notification</p>',
+            text: 'Test notification',
+            sender: HyfensSenderPolicy.transactional,
+            priority: 'normal',
+            eventId: 'event-1',
+          ),
+          idempotencyKey: 'delivery-2',
+        );
+
+        expect(result.providerMessageId, '456');
+      } finally {
+        await server.close(force: true);
+      }
+    },
+  );
 
   test('enqueue is idempotent and creates one recipient delivery', () async {
     final event = NotificationEvent(
@@ -496,6 +544,105 @@ void main() {
     },
   );
 
+  test(
+    'provider callbacks require the exact provider message identifier',
+    () async {
+      await notifications.enqueue(
+        NotificationEvent(
+          key: 'billing.payment.succeeded',
+          stableKey: 'callback-no-heuristics-1',
+          recipientEmails: const <String>['owner@example.com'],
+          variables: const <String, Object?>{'message': 'Captured.'},
+          occurredAt: DateTime.utc(2026, 9, 9),
+          organizationId: 'org_notifications',
+        ),
+      );
+      await notifications.dispatchPending();
+      final delivery = (await store.listJson(notificationDeliveryCollection))
+          .single;
+      final body = utf8.encode(
+        jsonEncode(<String, Object?>{
+          'id': 'evt_unrelated',
+          'event_type': 'email.delivered',
+          'email_id': 'provider-id-for-another-message',
+          'recipient': 'owner@example.com',
+          'subject': 'Payment received for Hyfens Cloud',
+        }),
+      );
+      final digest = Hmac(
+        sha256,
+        utf8.encode('callback-secret'),
+      ).convert(body).toString();
+
+      await notifications.applyProviderDeliveryWebhook(
+        rawBody: body,
+        signature: 'sha256=$digest',
+        secret: 'callback-secret',
+      );
+
+      expect(
+        delivery['providerMessageId'],
+        isNot('provider-id-for-another-message'),
+      );
+      expect(
+        (await store.listJson(notificationDeliveryCollection)).single['state'],
+        'accepted',
+      );
+    },
+  );
+
+  test(
+    'renderer formats customer dates and keeps long summary values readable',
+    () {
+      final rendered = notifications.renderer.render(
+        NotificationEvent(
+          key: 'billing.subscription.cancelled',
+          stableKey: 'date-formatting-1',
+          recipientEmails: const <String>['owner@example.com'],
+          variables: const <String, Object?>{
+            'plan': 'Enterprise Annual Contract With A Deliberately Long Name',
+            'organization': 'Workspace With A Deliberately Long Customer Name',
+            'effective_at': '2026-09-30T18:29:00.000Z',
+            'message': 'Renewal has been stopped for this subscription.',
+          },
+          occurredAt: DateTime.utc(2026, 9, 9, 12),
+          organizationId: 'org_notifications',
+        ),
+      );
+
+      expect(rendered.html, contains('September 30, 2026 at 06:29 PM UTC'));
+      expect(rendered.html, contains('summary-row'));
+      expect(rendered.html, contains('summary-value'));
+      expect(rendered.html, isNot(contains('2026-09-30T18:29:00.000Z')));
+      expect(rendered.text, isNot(contains('2026-09-30T18:29:00.000Z')));
+    },
+  );
+
+  test(
+    'recovery notification uses the dedicated reset route and human expiry',
+    () async {
+      await notifications.authMessageDelivery().sendRecoveryEmail(
+        email: 'owner@example.com',
+        token: 'hfr_recovery_token',
+        expiresAt: DateTime.utc(2026, 9, 9, 12, 15),
+      );
+
+      await notifications.dispatchPending();
+
+      final message = provider.messages.single;
+      expect(message.html, contains('Reset password'));
+      expect(
+        message.html,
+        contains(
+          'https://hyfens.com/auth/reset-password?token=hfr_recovery_token',
+        ),
+      );
+      expect(message.html, contains('Expires in 15 minutes'));
+      expect(message.html, isNot(contains('2026-09-09T12:15:00.000Z')));
+      expect(message.html, contains('hfr_recovery_token'));
+    },
+  );
+
   test('preview renders without persisting or invoking a provider', () {
     final rendered = NotificationPreview.render(
       key: 'billing.subscription.downgrade_scheduled',
@@ -503,6 +650,23 @@ void main() {
     expect(rendered.html, contains('Example workspace'));
     expect(rendered.text, contains('Starter'));
     expect(rendered.html, contains('If the button does not work'));
+  });
+
+  test('notification previews do not leak raw ISO customer timestamps', () {
+    final isoTimestamp = RegExp(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}');
+    for (final definition in NotificationCatalog.definitions) {
+      final rendered = NotificationPreview.render(key: definition.key);
+      expect(
+        rendered.html,
+        isNot(matches(isoTimestamp)),
+        reason: definition.key,
+      );
+      expect(
+        rendered.text,
+        isNot(matches(isoTimestamp)),
+        reason: definition.key,
+      );
+    }
   });
 
   test(

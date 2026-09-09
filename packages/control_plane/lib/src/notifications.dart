@@ -214,8 +214,8 @@ final class NotificationCatalog {
       category: NotificationCategory.authentication,
       purpose: 'password_recovery',
       template: 'recovery_code',
-      subject: 'Recover your Hyfens Cloud account',
-      preheader: 'Use this one-time code to choose a new password.',
+      subject: 'Reset your Hyfens Cloud password',
+      preheader: 'Use this one-time link to choose a new password.',
       priority: 'instant',
       userCanDisable: false,
       deduplication: 'token_issue',
@@ -855,12 +855,26 @@ final class KeplarsNotificationProvider implements NotificationProvider {
       try {
         final decoded = jsonDecode(responseText);
         if (decoded is Map) {
-          // Keplars currently returns the message identifier as `id` for the
-          // send API, while delivery callbacks use `email_id`. Accept both
-          // shapes so provider delivery status can be reconciled reliably.
-          final candidate = decoded['email_id'] ?? decoded['id'];
-          if (candidate is String && candidate.isNotEmpty) {
-            messageId = candidate;
+          // Keplars documents both a nested `data.id` send response and an
+          // `email_id` callback field. Accept only provider-declared response
+          // identifiers. Recipient/subject/time matching is intentionally not
+          // a fallback because it cannot safely reconcile billing or security
+          // notifications.
+          final containers = <Object?>[decoded, decoded['data']];
+          for (final container in containers) {
+            if (container is! Map) continue;
+            for (final key in const <String>['email_id', 'id']) {
+              final candidate = container[key];
+              if (candidate is String && candidate.trim().isNotEmpty) {
+                messageId = candidate.trim();
+                break;
+              }
+              if (candidate is num) {
+                messageId = '$candidate';
+                break;
+              }
+            }
+            if (messageId != null) break;
           }
         }
       } on Object {
@@ -909,17 +923,24 @@ final class NotificationRenderer {
   NotificationRenderer({
     required this.dashboardOrigin,
     required this.marketingOrigin,
+    DateTime Function()? clock,
   }) {
     _requireHttps(dashboardOrigin, 'dashboardOrigin');
     _requireHttps(marketingOrigin, 'marketingOrigin');
+    _clock = clock ?? (() => DateTime.now().toUtc());
   }
 
   final Uri dashboardOrigin;
   final Uri marketingOrigin;
+  late final DateTime Function() _clock;
 
   NotificationRenderResult render(NotificationEvent event) {
     final definition = NotificationCatalog.forKey(event.key);
-    final content = _content(definition, event.variables);
+    final content = _content(
+      definition,
+      event.variables,
+      occurredAt: event.occurredAt,
+    );
     final action = _action(event.variables);
     final htmlContent = StringBuffer(content.html);
     final textContent = StringBuffer(content.text);
@@ -961,8 +982,9 @@ final class NotificationRenderer {
 
   _RenderedContent _content(
     NotificationDefinition definition,
-    Map<String, Object?> values,
-  ) {
+    Map<String, Object?> values, {
+    required DateTime occurredAt,
+  }) {
     final plan = _value(values, 'plan', fallback: 'Hyfens Cloud');
     final organization = _value(
       values,
@@ -974,7 +996,7 @@ final class NotificationRenderer {
       'amount',
       fallback: 'See your billing workspace',
     );
-    final effectiveAt = _value(
+    final effectiveAt = _customerDate(
       values,
       'effective_at',
       fallback: 'the next billing boundary',
@@ -998,12 +1020,20 @@ final class NotificationRenderer {
         final token = _value(values, 'token', fallback: 'Unavailable');
         final purpose = definition.template == 'verification_code'
             ? 'Finish creating your account with this one-time verification code:'
-            : 'Use this one-time recovery code to choose a new password:';
+            : 'We received a request to reset your Hyfens password.';
+        final codeInstruction = definition.template == 'verification_code'
+            ? purpose
+            : 'Use the Reset password button for the one-click path. If you need a manual fallback, use this one-time recovery code:';
+        final expiry = _customerExpiry(
+          values,
+          'expires_at',
+          fallback: 'the time shown in your account',
+        );
         return _RenderedContent(
           html:
-              '<p>${_escape(purpose)}</p><div style="margin:24px 0;padding:18px 20px;border:1px solid #d8d3cb;background:#f8f6f2;font:700 24px/1.2 monospace;letter-spacing:.12em;color:#121212">${_escape(token)}</div><p>This code expires at <strong>${_escape(_value(values, 'expires_at', fallback: 'the time shown in your account'))}</strong>.</p>',
+              '<p>${_escape(codeInstruction)}</p><div style="margin:24px 0;padding:18px 20px;border:1px solid #d8d3cb;background:#f8f6f2;font:700 24px/1.2 monospace;letter-spacing:.08em;word-break:break-all;overflow-wrap:anywhere;color:#121212">${_escape(token)}</div><p><strong>${_escape(expiry)}</strong>.</p>${definition.template == 'recovery_code' ? '<p>If you did not request a password reset, you can ignore this message. Contact support if you are concerned.</p>' : ''}',
           text:
-              '$purpose\n\n$token\n\nThis code expires at ${_value(values, 'expires_at', fallback: 'the time shown in your account')}.',
+              '$codeInstruction\n\n$token\n\n$expiry.${definition.template == 'recovery_code' ? '\n\nIf you did not request a password reset, you can ignore this message. Contact support if you are concerned.' : ''}',
         );
       case 'billing_summary':
         return _billingContent(
@@ -1058,11 +1088,16 @@ final class NotificationRenderer {
               '$message\n\nWorkspace: $organization\nInvited by: ${_value(values, 'invited_by', fallback: 'A workspace administrator')}',
         );
       case 'security_notice':
+        final occurred = _customerDate(
+          values,
+          'occurred_at',
+          fallback: _formatDateTime(occurredAt),
+        );
         return _RenderedContent(
           html:
-              '<div style="margin:20px 0;padding:16px 18px;border:1px solid #ded9d1;background:#f8f6f2"><strong>${_escape(message)}</strong></div>${_summaryTable(<String, String>{'Time': _value(values, 'occurred_at', fallback: 'Recently'), 'Location': _value(values, 'location', fallback: 'Not available'), 'Workspace': organization})}<p>If you do not recognize this change, secure your account and contact support.</p>',
+              '<div style="margin:20px 0;padding:16px 18px;border:1px solid #ded9d1;background:#f8f6f2"><strong>${_escape(message)}</strong></div>${_summaryTable(<String, String>{'Time': occurred, 'Location': _value(values, 'location', fallback: 'Not available'), 'Workspace': organization})}<p>If you do not recognize this change, secure your account and contact support.</p>',
           text:
-              '$message\n\nTime: ${_value(values, 'occurred_at', fallback: 'Recently')}\nLocation: ${_value(values, 'location', fallback: 'Not available')}\nWorkspace: $organization\n\nIf you do not recognize this change, secure your account and contact support.',
+              '$message\n\nTime: $occurred\nLocation: ${_value(values, 'location', fallback: 'Not available')}\nWorkspace: $organization\n\nIf you do not recognize this change, secure your account and contact support.',
         );
       case 'enterprise_inquiry':
         return _RenderedContent(
@@ -1087,9 +1122,9 @@ final class NotificationRenderer {
     required String message,
   }) => _RenderedContent(
     html:
-        '<p>${_escape(message)}</p>${_summaryTable(<String, String>{'Workspace': organization, 'Plan': plan, 'Amount': amount, 'Billing period': _value(values, 'billing_period', fallback: 'Current period'), 'Next billing date': _value(values, 'next_billing_at', fallback: 'See your billing workspace'), if (values['currency'] != null) 'Currency': _value(values, 'currency')})}',
+        '<p>${_escape(message)}</p>${_summaryTable(<String, String>{'Workspace': organization, 'Plan': plan, 'Amount': amount, 'Billing period': _value(values, 'billing_period', fallback: 'Current period'), 'Next billing date': _customerDate(values, 'next_billing_at', fallback: 'See your billing workspace'), if (values['currency'] != null) 'Currency': _value(values, 'currency')})}',
     text:
-        '$message\n\nWorkspace: $organization\nPlan: $plan\nAmount: $amount\nBilling period: ${_value(values, 'billing_period', fallback: 'Current period')}\nNext billing date: ${_value(values, 'next_billing_at', fallback: 'See your billing workspace')}',
+        '$message\n\nWorkspace: $organization\nPlan: $plan\nAmount: $amount\nBilling period: ${_value(values, 'billing_period', fallback: 'Current period')}\nNext billing date: ${_customerDate(values, 'next_billing_at', fallback: 'See your billing workspace')}',
   );
 
   String _title(
@@ -1121,13 +1156,82 @@ final class NotificationRenderer {
     required String preheader,
     required String content,
   }) =>
-      '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escape(title)}</title><style>body{margin:0;background:#efede8;color:#171717;font-family:Arial,Helvetica,sans-serif}a{color:#171717}p{font-size:16px;line-height:1.6;margin:0 0 16px}strong{font-weight:700}@media(max-width:620px){.outer{padding:20px 12px!important}.panel{padding:28px 22px!important}}</style></head><body><div style="display:none;max-height:0;overflow:hidden;opacity:0">${_escape(preheader)}</div><table class="outer" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#efede8;padding:44px 20px"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;background:#ffffff;border:1px solid #d8d3cb"><tr><td class="panel" style="padding:38px 42px"><div style="font-size:18px;font-weight:700;letter-spacing:-.02em;margin-bottom:38px"><span aria-hidden="true" style="display:inline-block;width:9px;height:9px;margin-right:8px;background:#fd5510"></span>hyfens</div><div style="color:#716d67;font-size:12px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px">Hyfens Cloud</div><h1 style="font-size:30px;line-height:1.12;letter-spacing:-.04em;margin:0 0 22px;color:#171717">${_escape(title)}</h1>$content</td></tr><tr><td style="padding:18px 42px;border-top:1px solid #e5e1db;color:#716d67;font-size:12px;line-height:1.5">Hyfens Cloud · Secure product communication<br><a href="${_escape(marketingOrigin.toString())}">hyfens.com</a> · <a href="mailto:support@hyfens.com">support@hyfens.com</a></td></tr></table></td></tr></table></body></html>''';
+      '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escape(title)}</title><style>body{margin:0;background:#efede8;color:#171717;font-family:Arial,Helvetica,sans-serif}a{color:#171717}p{font-size:16px;line-height:1.6;margin:0 0 16px}strong{font-weight:700}.summary-value{word-break:break-word;overflow-wrap:anywhere}@media(max-width:620px){.outer{padding:20px 12px!important}.panel{padding:28px 22px!important}.summary-row{display:block!important}.summary-label,.summary-value{display:block!important;width:100%!important;text-align:left!important}.summary-label{padding-bottom:4px!important;border-bottom:0!important}.summary-value{padding-top:0!important;padding-bottom:12px!important}}</style></head><body><div style="display:none;max-height:0;overflow:hidden;opacity:0">${_escape(preheader)}</div><table class="outer" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#efede8;padding:44px 20px"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;background:#ffffff;border:1px solid #d8d3cb"><tr><td class="panel" style="padding:38px 42px"><div style="font-size:18px;font-weight:700;letter-spacing:-.02em;margin-bottom:38px"><img src="${_escape(marketingOrigin.replace(path: '/brand-mark.png').toString())}" width="24" height="24" alt="Hyfens" style="display:inline-block;vertical-align:middle;width:24px;height:24px;margin-right:8px">hyfens</div><div style="color:#716d67;font-size:12px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px">Hyfens Cloud</div><h1 style="font-size:30px;line-height:1.12;letter-spacing:-.04em;margin:0 0 22px;color:#171717">${_escape(title)}</h1>$content</td></tr><tr><td style="padding:18px 42px;border-top:1px solid #e5e1db;color:#716d67;font-size:12px;line-height:1.5">Hyfens Cloud · Secure product communication<br><a href="${_escape(marketingOrigin.toString())}">hyfens.com</a> · <a href="mailto:support@hyfens.com">support@hyfens.com</a></td></tr></table></td></tr></table></body></html>''';
 
   String _cta(String label, String url) =>
       '<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:26px 0"><tr><td style="background:#171717"><a href="${_escape(url)}" style="display:inline-block;padding:13px 18px;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px">${_escape(label)} ↗</a></td></tr></table><p style="font-size:12px;color:#716d67;word-break:break-word">If the button does not work, use this link:<br><a href="${_escape(url)}">${_escape(url)}</a></p>';
 
   String _summaryTable(Map<String, String> rows) =>
-      '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;border-top:1px solid #ded9d1">${rows.entries.map((entry) => '<tr><td style="padding:11px 0;border-bottom:1px solid #ded9d1;color:#716d67;font-size:13px">${_escape(entry.key)}</td><td align="right" style="padding:11px 0;border-bottom:1px solid #ded9d1;color:#171717;font-size:13px;font-weight:700">${_escape(entry.value)}</td></tr>').join()}</table>';
+      '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;border-top:1px solid #ded9d1">${rows.entries.map((entry) => '<tr class="summary-row"><td class="summary-label" style="padding:11px 0;border-bottom:1px solid #ded9d1;color:#716d67;font-size:13px;vertical-align:top">${_escape(entry.key)}</td><td class="summary-value" align="right" style="padding:11px 0;border-bottom:1px solid #ded9d1;color:#171717;font-size:13px;font-weight:700;vertical-align:top">${_escape(entry.value)}</td></tr>').join()}</table>';
+
+  String _customerExpiry(
+    Map<String, Object?> values,
+    String key, {
+    required String fallback,
+  }) {
+    final parsed = _parseCustomerDate(values[key]);
+    if (parsed == null) return fallback;
+    final remaining = parsed.difference(_clock().toUtc());
+    late final String relative;
+    if (remaining.isNegative || remaining == Duration.zero) {
+      relative = 'Expired';
+    } else if (remaining.inSeconds < 60) {
+      relative = 'Expires in less than a minute';
+    } else if (remaining.inHours < 1) {
+      relative = 'Expires in ${remaining.inMinutes} minutes';
+    } else if (remaining.inDays < 1) {
+      relative = 'Expires in ${remaining.inHours} hours';
+    } else {
+      relative = 'Expires in ${remaining.inDays} days';
+    }
+    return '$relative (${_formatDateTime(parsed)})';
+  }
+
+  String _customerDate(
+    Map<String, Object?> values,
+    String key, {
+    required String fallback,
+  }) {
+    final parsed = _parseCustomerDate(values[key]);
+    if (parsed == null) return fallback;
+    final raw = values[key];
+    final dateOnly =
+        raw is String && RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(raw.trim());
+    return dateOnly ? _formatDateOnly(parsed) : _formatDateTime(parsed);
+  }
+
+  DateTime? _parseCustomerDate(Object? value) {
+    if (value is DateTime) return value.toUtc();
+    if (value is String) return DateTime.tryParse(value)?.toUtc();
+    return null;
+  }
+
+  String _formatDateTime(DateTime value) {
+    final utc = value.toUtc();
+    return '${_formatDateOnly(utc)} at ${_twoDigits(_hour12(utc.hour))}:${_twoDigits(utc.minute)} ${utc.hour >= 12 ? 'PM' : 'AM'} UTC';
+  }
+
+  static String _formatDateOnly(DateTime value) {
+    const months = <String>[
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    return '${months[value.month - 1]} ${value.day}, ${value.year}';
+  }
+
+  static int _hour12(int hour) => hour % 12 == 0 ? 12 : hour % 12;
+
+  static String _twoDigits(int value) => value.toString().padLeft(2, '0');
 
   static String _value(
     Map<String, Object?> values,
@@ -1178,6 +1282,7 @@ final class NotificationPreview {
   }) => NotificationRenderer(
     dashboardOrigin: dashboardOrigin ?? Uri.parse('https://app.hyfens.com'),
     marketingOrigin: marketingOrigin ?? Uri.parse('https://hyfens.com'),
+    clock: () => DateTime.utc(2026, 9, 9, 12),
   ).render(fixture(key));
 
   static NotificationEvent fixture(String key) {
@@ -1946,8 +2051,7 @@ final class NotificationService implements HumanAuthNotificationSink {
       await _audit(
         event: event,
         action: 'notification.provider_status_updated',
-        resourceId:
-            '${row['id']! as String}:$providerMessageId:${decoded['event']}',
+        resourceId: '${row['id']! as String}:$providerMessageId:$providerEvent',
         metadata: <String, Object?>{
           'provider_message_id': providerMessageId,
           'provider_event': providerEvent,
@@ -2173,8 +2277,13 @@ final class QueuedHumanMessageDelivery
           variables: <String, Object?>{
             'token': token,
             'expires_at': expiresAt.toUtc().toIso8601String(),
-            'action_url': notifications.renderer.dashboardOrigin.toString(),
-            'action_label': 'Open Hyfens Cloud',
+            'action_url': notifications.renderer.marketingOrigin
+                .replace(
+                  path: '/auth/reset-password',
+                  queryParameters: <String, String>{'token': token},
+                )
+                .toString(),
+            'action_label': 'Reset password',
           },
           occurredAt: DateTime.now().toUtc(),
           source: 'human_auth',
