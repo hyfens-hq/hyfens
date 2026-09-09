@@ -64,22 +64,9 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         if self.path in {"/v1/public/register", "/v1/public/waitlist", "/v1/public/newsletter"}:
             self._json(200, {"status": "accepted", "request_id": "request_demo"})
             return
-        if parsed_path.startswith("/v1/organizations/") and (
-            "/support/cases" in parsed_path or parsed_path.endswith("/invitations")
-        ):
-            self._json(200, {"readOnly": False, "scope": "customer"})
-            return
         if self.path in {"/auth/token", "/auth/device/code", "/auth/device/token", "/auth/device/approve"}:
             self._json(200, {"status": "accepted"})
             return
-        self._json(404, {"error": {"code": "NOT_FOUND"}})
-
-    def do_PATCH(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length)
-        self.__class__.calls.append(
-            (self.command, self.path, self.headers.get("Authorization"), body)
-        )
         self._json(404, {"error": {"code": "NOT_FOUND"}})
 
     def _json(self, status, value):
@@ -366,31 +353,6 @@ class ProxyRouteTest(unittest.TestCase):
             status, body = self.request("GET", path)
             self.assertEqual(status, 200)
             self.assertIn(b"HyfensAuthFlow", body)
-
-    def test_proxy_forwards_customer_support_and_invitation_routes(self):
-        headers = {"Authorization": "Bearer memory-access"}
-        requests = (
-            ("GET", "/v1/organizations/org_demo/support/cases"),
-            ("GET", "/v1/organizations/org_demo/invitations"),
-            ("POST", "/v1/organizations/org_demo/invitations"),
-            ("POST", "/v1/organizations/org_demo/support/cases"),
-        )
-        for method, path in requests:
-            with self.subTest(method=method, path=path):
-                if method == "PATCH":
-                    body = {"status": "IN_PROGRESS"}
-                elif method == "POST" and "/organizations/" in path:
-                    body = {"subject": "Help", "description": "A question"}
-                elif method == "POST":
-                    body = {"body": "Reply"}
-                else:
-                    body = None
-                status, _ = self.request(method, path, body, headers=headers)
-                self.assertEqual(status, 200)
-        self.assertEqual(
-            [(call[0], call[1]) for call in _UpstreamHandler.calls],
-            list(requests),
-        )
 
     def test_auth_pages_load_runtime_config_before_auth_flow(self):
         pages = (

@@ -1290,7 +1290,7 @@ Future<List<int>> _patchFormatArtifact(String source, int sequence) async {
         payload: utf8.encode(
           jsonEncode(<String, Object?>{
             'bridgeVersion': 1,
-            'encoding': 'e0-patch-container-v10-bytes',
+            'encoding': 'e0-patch-container-v9-bytes',
             'functions': <String, String>{_functionId: base64.encode(e0Bytes)},
           }),
         ),

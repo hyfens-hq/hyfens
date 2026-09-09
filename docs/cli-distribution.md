@@ -15,14 +15,11 @@ The version source is `cli/pubspec.yaml`. The current public release is
    `v0.1.1`.
 4. `.github/workflows/release-cli.yml` builds and attaches six archives:
    macOS, Linux, and Windows on x64 and arm64.
-6. The workflow extracts the same changelog section into non-empty GitHub
-   Release notes and attaches `SHA256SUMS` and `artifact-inventory.json`.
+5. The workflow also attaches `SHA256SUMS` and `artifact-inventory.json`.
 
 The separate `release-images.yml` workflow publishes matching multi-architecture
-`hyfens-control-plane` and `hyfens-dashboard` images to GHCR. The public
-`hyfens-dashboard` image is the Customer/Instance Workspace only; the private
-Cloud Platform Console is not published as an OSS image. Both workflows fail
-if the tag does not match `cli/pubspec.yaml`.
+`hyfens-control-plane` and `hyfens-dashboard` images to GHCR. Both workflows
+fail if the tag does not match `cli/pubspec.yaml`.
 
 The workflows do not contain signing keys, package-manager tokens, or user
 credentials. Code signing and package-manager publication are separate release

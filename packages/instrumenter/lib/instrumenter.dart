@@ -12,9 +12,7 @@ export 'package:instrumentation_e0/instrumentation_e0.dart'
         E0Identity,
         E0ReleaseManifest,
         E0TransformResult,
-        E0WidgetFactoryDescriptor,
-        e0FlutterWidgetBuildSignature,
-        e0StandardFlutterWidgetFactories;
+        E0WidgetFactoryDescriptor;
 
 /// Stable facade for source discovery/instrumentation output.
 ///
@@ -39,7 +37,6 @@ final class HyfensInstrumenter {
         capabilities: request.capabilities,
         widgetFactories: request.widgetFactories,
         widgetBuildClasses: request.widgetBuildClasses,
-        enableFlutterWidgetAbi: request.enableFlutterWidgetAbi,
         allowSyntheticWidgetTypes: request.allowSyntheticWidgetTypes,
         requireMain: request.requireMain,
         installRuntime: request.installRuntime,
@@ -62,7 +59,6 @@ final class SourceInstrumentationRequest {
     this.capabilities = const <E0AsyncCapabilityDescriptor>[],
     this.widgetFactories = const <E0WidgetFactoryDescriptor>[],
     this.widgetBuildClasses = const <String>{},
-    this.enableFlutterWidgetAbi = false,
     this.allowSyntheticWidgetTypes = false,
     this.requireMain = true,
     this.installRuntime = true,
@@ -82,7 +78,6 @@ final class SourceInstrumentationRequest {
   final List<E0AsyncCapabilityDescriptor> capabilities;
   final List<E0WidgetFactoryDescriptor> widgetFactories;
   final Set<String> widgetBuildClasses;
-  final bool enableFlutterWidgetAbi;
   final bool allowSyntheticWidgetTypes;
   final bool requireMain;
   final bool installRuntime;

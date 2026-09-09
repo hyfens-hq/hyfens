@@ -63,92 +63,6 @@ final class RolloutTransitionCommitResult {
   final bool applied;
 }
 
-/// Result of the one atomic runtime-receipt settlement operation.
-///
-/// A receipt and its canonical usage event are committed together. Retrying a
-/// previously committed receipt returns [createdReceipt] and [createdUsage]
-/// as false rather than creating another usage event.
-final class RuntimeReceiptCommitResult {
-  const RuntimeReceiptCommitResult({
-    required this.createdReceipt,
-    required this.createdUsage,
-  });
-
-  final bool createdReceipt;
-  final bool createdUsage;
-}
-
-/// Result of the one atomic managed-Cloud signup verification operation.
-///
-/// Verification creates the organization, owner account, onboarding marker,
-/// and verified signup record together. A repeated verification returns
-/// [created] false after comparing the existing records instead of creating a
-/// second organization or account.
-final class ManagedCloudOnboardingCommitResult {
-  const ManagedCloudOnboardingCommitResult({required this.created});
-
-  final bool created;
-}
-
-/// Persistence seam for managed Cloud self-service onboarding. It is kept
-/// separate from [ControlPlaneStore] so existing store implementations and
-/// test doubles do not acquire a new required capability merely by upgrading
-/// the public control-plane package.
-abstract interface class ManagedCloudOnboardingStore {
-  Future<Map<String, Object?>?> readJson(String collection, String id);
-
-  Future<void> createJson(
-    String collection,
-    String id,
-    Map<String, Object?> value,
-  );
-
-  Future<void> replaceJson(
-    String collection,
-    String id,
-    Map<String, Object?> value,
-  );
-
-  Future<void> appendAudit(String id, Map<String, Object?> value);
-
-  Future<ManagedCloudOnboardingCommitResult> commitManagedCloudOnboarding({
-    required String signupId,
-    required Map<String, Object?> expectedSignup,
-    required Map<String, Object?> verifiedSignup,
-    required Map<String, Object?> organization,
-    required Map<String, Object?> user,
-    required Map<String, Object?> onboarding,
-  });
-}
-
-/// Durable storage for the runtime trust boundary. Implementations must keep
-/// registration records immutable and settle a receipt plus its canonical
-/// usage event atomically.
-abstract interface class RuntimeReceiptStore {
-  Future<void> createRuntimeAdmission(String id, Map<String, Object?> value);
-
-  Future<Map<String, Object?>?> readRuntimeAdmission(String id);
-
-  Future<void> createRuntimeInstallation(String id, Map<String, Object?> value);
-
-  Future<Map<String, Object?>?> readRuntimeInstallation(String id);
-
-  Future<void> createRuntimeRegistration(String id, Map<String, Object?> value);
-
-  Future<Map<String, Object?>?> readRuntimeRegistration(String id);
-
-  Future<void> createRuntimeRejection(String id, Map<String, Object?> value);
-
-  Future<Map<String, Object?>?> readRuntimeReceipt(String id);
-
-  Future<RuntimeReceiptCommitResult> commitRuntimeReceipt({
-    required String receiptId,
-    required Map<String, Object?> receipt,
-    required String usageEventId,
-    required Map<String, Object?> usageEvent,
-  });
-}
-
 /// Storage operations whose correctness depends on a durable unique key.
 /// Implementations must compare an existing event's canonical body before
 /// acknowledging a retry; they must never silently overwrite an observation.
@@ -264,16 +178,6 @@ abstract interface class ControlPlaneStore
     String collection,
     String id,
     Map<String, Object?> value,
-  );
-
-  /// Replaces multiple records as one serialized metadata operation.
-  ///
-  /// PostgreSQL commits the replacements in one transaction. The file store
-  /// serializes the operation and keeps each replacement atomic, which is the
-  /// supported single-process semantics for local self-hosted storage.
-  Future<void> replaceJsonBatch(
-    String collection,
-    Map<String, Map<String, Object?>> values,
   );
 
   /// Touches an active human session only when its secret hash still matches.
@@ -443,136 +347,6 @@ final class FileControlPlaneStore
     }
     await _writeAtomic(file, utf8.encode('${canonicalJson(value)}\n'));
   }
-
-  @override
-  Future<void> createRuntimeAdmission(String id, Map<String, Object?> value) =>
-      _metadataOperation(() => createJson('runtime_admissions', id, value));
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeAdmission(String id) =>
-      readJson('runtime_admissions', id);
-
-  @override
-  Future<void> createRuntimeInstallation(
-    String id,
-    Map<String, Object?> value,
-  ) => _metadataOperation(() => createJson('runtime_installations', id, value));
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeInstallation(String id) =>
-      readJson('runtime_installations', id);
-
-  @override
-  Future<void> createRuntimeRegistration(
-    String id,
-    Map<String, Object?> value,
-  ) => _metadataOperation(() => createJson('runtime_registrations', id, value));
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeRegistration(String id) =>
-      readJson('runtime_registrations', id);
-
-  @override
-  Future<void> createRuntimeRejection(String id, Map<String, Object?> value) =>
-      _metadataOperation(() => createJson('runtime_rejections', id, value));
-
-  @override
-  Future<ManagedCloudOnboardingCommitResult> commitManagedCloudOnboarding({
-    required String signupId,
-    required Map<String, Object?> expectedSignup,
-    required Map<String, Object?> verifiedSignup,
-    required Map<String, Object?> organization,
-    required Map<String, Object?> user,
-    required Map<String, Object?> onboarding,
-  }) => _metadataOperation(() async {
-    final current = await readJson('cloud_signups', signupId);
-    if (current == null) {
-      throw const StorageConflict('Cloud signup does not exist');
-    }
-    if (canonicalJson(current) == canonicalJson(verifiedSignup)) {
-      await _verifyManagedCloudRecord('organizations', organization);
-      await _verifyManagedCloudRecord('users', user);
-      await _verifyManagedCloudRecord('cloud_onboarding', onboarding);
-      return const ManagedCloudOnboardingCommitResult(created: false);
-    }
-    if (canonicalJson(current) != canonicalJson(expectedSignup)) {
-      throw const StorageConflict('Cloud signup changed during verification');
-    }
-    await _createManagedCloudRecord('organizations', organization);
-    await _createManagedCloudRecord('users', user);
-    await _createManagedCloudRecord('cloud_onboarding', onboarding);
-    await replaceJson('cloud_signups', signupId, verifiedSignup);
-    return const ManagedCloudOnboardingCommitResult(created: true);
-  });
-
-  Future<void> _createManagedCloudRecord(
-    String collection,
-    Map<String, Object?> value,
-  ) async {
-    final id = value['id'];
-    if (id is! String) {
-      throw const StorageConflict('Managed Cloud record has no ID');
-    }
-    await createJson(collection, id, value);
-  }
-
-  Future<void> _verifyManagedCloudRecord(
-    String collection,
-    Map<String, Object?> value,
-  ) async {
-    final id = value['id'];
-    if (id is! String) {
-      throw const StorageConflict('Managed Cloud record has no ID');
-    }
-    final current = await readJson(collection, id);
-    if (current == null || canonicalJson(current) != canonicalJson(value)) {
-      throw const StorageConflict(
-        'Managed Cloud onboarding record is incomplete',
-      );
-    }
-  }
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeReceipt(String id) =>
-      readJson('runtime_receipts', id);
-
-  @override
-  Future<RuntimeReceiptCommitResult> commitRuntimeReceipt({
-    required String receiptId,
-    required Map<String, Object?> receipt,
-    required String usageEventId,
-    required Map<String, Object?> usageEvent,
-  }) => _metadataOperation(() async {
-    final existingReceipt = await readJson('runtime_receipts', receiptId);
-    if (existingReceipt != null) {
-      if (canonicalJson(existingReceipt) != canonicalJson(receipt)) {
-        throw const StorageConflict('Runtime receipt ID was reused');
-      }
-      final existingUsage = await readJson(
-        'runtime_usage_events',
-        usageEventId,
-      );
-      if (existingUsage == null) {
-        throw const StorageConflict(
-          'Runtime receipt exists without its usage event',
-        );
-      }
-      return const RuntimeReceiptCommitResult(
-        createdReceipt: false,
-        createdUsage: false,
-      );
-    }
-    final existingUsage = await readJson('runtime_usage_events', usageEventId);
-    if (existingUsage != null) {
-      throw const StorageConflict('Runtime usage key was already settled');
-    }
-    await createJson('runtime_receipts', receiptId, receipt);
-    await createJson('runtime_usage_events', usageEventId, usageEvent);
-    return const RuntimeReceiptCommitResult(
-      createdReceipt: true,
-      createdUsage: true,
-    );
-  });
 
   @override
   Future<void> replaceJson(
@@ -867,7 +641,6 @@ final class FileControlPlaneStore
       'result': idempotencyResult,
       'createdAt': DateTime.now().toUtc().toIso8601String(),
     });
-
     await appendAudit(audit['id']! as String, audit);
   }
 
@@ -936,17 +709,6 @@ final class FileControlPlaneStore
     );
     return result;
   }
-
-  Future<T> _metadataOperation<T>(Future<T> Function() action) {
-    final result = _metadataOperationTail.then((_) => action());
-    _metadataOperationTail = result.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace __) {},
-    );
-    return result;
-  }
-
-  Future<void> _metadataOperationTail = Future<void>.value();
 
   File _jsonFile(String collection, String id) =>
       File(p.join(root.path, _safeCollection(collection), '${_safe(id)}.json'));

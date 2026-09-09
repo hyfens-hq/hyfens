@@ -3,23 +3,15 @@ import 'dart:io';
 
 import 'diagnostics.dart';
 
-/// The canonical public API base for Hyfens Cloud.
-const managedCloudApiBase = 'https://api.hyfens.com/';
-
-/// Legacy edge path retained for existing installations and saved profiles.
-///
-/// This is a deployment alias, not an API version. New profiles and requests
-/// use [managedCloudApiBase].
-const legacyManagedCloudApiBase = 'https://api.hyfens.com/p2/';
+const managedCloudApiBase = 'https://api.hyfens.com/p2/';
 const defaultHyfensProfileName = 'hyfens-cloud';
 const managedCloudProfileName = defaultHyfensProfileName;
 const managedCloudDisplayName = 'Hyfens Cloud (managed)';
 
 /// Normalize a control-plane API base without dropping its API path.
 ///
-/// The API path is normally part of the credential boundary. The one
-/// intentional exception is the managed Cloud `/p2/` deployment alias, which
-/// is equivalent to the canonical root base during migration.
+/// The API path is part of the credential boundary: `/p2/` and `/v1/` are
+/// different control-plane identities even when they share an origin.
 Uri normalizeControlPlaneEndpoint(Uri endpoint) {
   final scheme = endpoint.scheme.toLowerCase();
   final host = endpoint.host.toLowerCase();
@@ -59,39 +51,6 @@ String controlPlaneEndpointKey(Uri endpoint) {
     path = path.substring(0, path.length - 1);
   }
   return '$scheme://$authority$path';
-}
-
-/// Whether [endpoint] is one of the two known managed Cloud API aliases.
-///
-/// The hostname check is deliberate: a self-hosted `/p2/` endpoint must not
-/// inherit managed Cloud behavior or credentials.
-bool isManagedCloudEndpoint(Uri endpoint) {
-  final normalized = normalizeControlPlaneEndpoint(endpoint);
-  if (normalized.scheme != 'https' ||
-      normalized.host.toLowerCase() != 'api.hyfens.com') {
-    return false;
-  }
-  final key = controlPlaneEndpointKey(normalized);
-  return key == controlPlaneEndpointKey(Uri.parse(managedCloudApiBase)) ||
-      key == controlPlaneEndpointKey(Uri.parse(legacyManagedCloudApiBase));
-}
-
-/// Returns the canonical managed Cloud endpoint while preserving all other
-/// control-plane endpoints exactly as configured.
-Uri canonicalizeManagedCloudEndpoint(Uri endpoint) {
-  final normalized = normalizeControlPlaneEndpoint(endpoint);
-  return isManagedCloudEndpoint(normalized)
-      ? Uri.parse(managedCloudApiBase)
-      : normalized;
-}
-
-/// Compares endpoint identities while allowing only the managed Cloud aliases
-/// to share credentials and profile scope during the path migration.
-bool controlPlaneEndpointsMatch(Uri left, Uri right) {
-  final leftKey = controlPlaneEndpointKey(left);
-  final rightKey = controlPlaneEndpointKey(right);
-  return leftKey == rightKey ||
-      isManagedCloudEndpoint(left) && isManagedCloudEndpoint(right);
 }
 
 bool isExplicitLoopbackEndpoint(Uri endpoint) {
@@ -226,17 +185,14 @@ typedef AuthProfile = ProfileScope;
 /// Tokens deliberately do not belong to this model or its JSON projection.
 final class Profile {
   Profile({
-    required Uri endpoint,
+    required this.endpoint,
     this.userId,
     this.email,
     this.displayName,
     List<ProfileScope> profiles = const <ProfileScope>[],
     String? organizationId,
     String? organizationName,
-  }) : endpoint = isManagedCloudEndpoint(endpoint)
-           ? Uri.parse(managedCloudApiBase)
-           : endpoint,
-       _organizationId = organizationId,
+  }) : _organizationId = organizationId,
        _organizationName = organizationName,
        profiles = List.unmodifiable(profiles);
 
@@ -362,7 +318,7 @@ final class ControlPlaneProfile {
     this.organizationId,
     this.applicationId,
     this.environmentId,
-  }) : endpoint = canonicalizeManagedCloudEndpoint(endpoint) {
+  }) : endpoint = normalizeControlPlaneEndpoint(endpoint) {
     _validateProfileName(name);
     if (this.endpoint.scheme == 'http' &&
         !isExplicitLoopbackEndpoint(this.endpoint)) {

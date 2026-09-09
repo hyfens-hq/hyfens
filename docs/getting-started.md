@@ -7,45 +7,28 @@ native archives. The source checkout remains the contributor fallback path.
 
 The tested toolchain family is Flutter `3.47.x` with Dart `3.13.x`.
 
-## 1. Install the CLI
+## 1. Install from a source checkout
 
-On macOS or Linux, install the latest release without Dart or Flutter:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
-```
-
-The installer detects x64/arm64, verifies the downloaded archive against
-`SHA256SUMS`, and prints PATH guidance. Pin a published release with
-`--version v0.1.0`. Direct Windows archives and PowerShell verification are
-documented in [CLI distribution](cli-distribution.md).
-
-Package-manager installs are:
-
-```bash
-brew install hyfens-hq/tap/hyfens
-```
-
-```powershell
-scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket
-scoop install hyfens
-```
-
-WinGet remains an external Microsoft submission gate. For contributors who
-need a source checkout:
+From an existing Hyfens checkout, resolve the CLI's local path dependencies:
 
 ```bash
 export HYFENS_CHECKOUT=/absolute/path/to/hyfens
 cd "$HYFENS_CHECKOUT/cli"
-flutter pub get
+dart pub get
+```
+
+Define the canonical command name in the shell that owns your Flutter project:
+
+```bash
 hyfens() {
   dart run "$HYFENS_CHECKOUT/cli/bin/hyfens.dart" "$@"
 }
 ```
 
-The `tool.dart` source filename is a compatibility detail. New scripts and
-documentation use `hyfens`; there is no second implementation. Do not copy a
-session file, token, or private signing key into the checkout.
+The `tool.dart` source filename is a compatibility detail of the current
+checkout. New scripts and documentation use `hyfens`; there is no second
+implementation. Do not copy a session file, token, or private signing key into
+the checkout.
 
 ## 2. Create a managed Cloud workspace
 
@@ -60,10 +43,6 @@ read-only client compatibility surface; it does not create Cloud customer
 workspaces.
 
 ## 3. Select an endpoint and authenticate
-
-Existing profiles using `https://api.hyfens.com/p2/` continue to work and are
-adopted to the canonical root when the CLI reads their session. `/p2/` is a
-legacy deployment alias, not an API version.
 
 Use the default profile for managed work:
 

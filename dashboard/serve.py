@@ -69,7 +69,6 @@ DASHBOARD_VIEW_PATHS = {
     "/artifacts",
     "/deployments",
     "/audit",
-    "/support",
     "/settings",
     "/platform",
     "/platform/organizations",
@@ -199,13 +198,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_error(405, "Only the bounded dashboard POST routes are supported")
 
     def do_PUT(self) -> None:
-        self.send_error(405, "Only the bounded dashboard routes are supported")
-
-    def do_PATCH(self) -> None:
-        if self._proxy_route() is not None:
-            self._proxy_request()
-            return
-        self.send_error(405, "Only the bounded dashboard PATCH routes are supported")
+        self.send_error(405, "Only GET is supported")
 
     def do_DELETE(self) -> None:
         self.send_error(405, "Only GET is supported")
@@ -290,7 +283,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return
 
         body = None
-        if self.command in {"POST", "PATCH"}:
+        if self.command == "POST":
             body = self._request_body()
             if body is None:
                 return
@@ -439,16 +432,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         # Never log request headers: they may contain the control credential.
         message = format % args
-        message = re.sub(
-            r"(/invite/)[^?\s/]+",
-            r"\1:redacted",
-            message,
-        )
-        message = re.sub(
-            r"(/v1/organization-invitations/)[^?\s/]+",
-            r"\1:redacted",
-            message,
-        )
         message = re.sub(r"(\s/[^\s?]*)\?[^\s]*", r"\1?[redacted]", message)
         super().log_message("%s", message)
 

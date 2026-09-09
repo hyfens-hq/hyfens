@@ -553,7 +553,6 @@ final class HumanMembership {
     String? environmentId,
     String? profileApplicationId,
     String? profileEnvironmentId,
-    this.active = true,
   }) : organizationId = requireOpaqueId(
          organizationId,
          'membership organization ID',
@@ -3351,9 +3350,6 @@ final class HumanAuthService {
     }
     return normalized;
   }
-
-  static String userIdForEmail(String email) =>
-      'usr_${sha256Hex(utf8.encode(normalizeHumanEmail(email))).substring(0, 32)}';
 
   static void _validatePassword(String password) {
     if (password.length < 12 || password.length > 1024) {

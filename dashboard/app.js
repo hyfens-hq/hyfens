@@ -94,10 +94,6 @@
       title: 'Settings',
       description: 'Human session, membership scope, endpoint, and account surfaces.',
     },
-    support: {
-      title: 'Support',
-      description: 'Ask Hyfens for help and keep the organization conversation in one auditable place.',
-    },
   };
 
   const RESOURCE_LABELS = {
@@ -250,10 +246,8 @@
     loginView: document.querySelector('#login-view'),
     appView: document.querySelector('#app-view'),
     authModeTabs: [...document.querySelectorAll('[data-auth-mode]')],
-    authModeSwitcher: document.querySelector('.auth-mode-switcher'),
     loginForm: document.querySelector('#login-form'),
     registerForm: document.querySelector('#register-form'),
-    invitationForm: document.querySelector('#invitation-form'),
     apiBase: document.querySelector('#api-base'),
     email: document.querySelector('#email'),
     password: document.querySelector('#password'),
@@ -3263,82 +3257,6 @@
     return stack;
   }
 
-  function renderCustomerSupportPage() {
-    const stack = element('div', 'page-stack');
-    const createPanel = makePanel(
-      'Contact Hyfens',
-      'Create an auditable support case for the selected organization. Do not include passwords, tokens, or other secrets.',
-      hasCustomerCapability('support:create') ? 'Customer action' : 'CLI / support handoff',
-    );
-    if (hasCustomerCapability('support:create')) {
-      const form = element('form', 'action-form');
-      form.dataset.dashboardAction = 'support-create';
-      const subject = element('input');
-      subject.type = 'text';
-      subject.name = 'subject';
-      subject.maxLength = 200;
-      subject.required = true;
-      subject.placeholder = 'Unable to promote a patch';
-      const category = element('input');
-      category.type = 'text';
-      category.name = 'category';
-      category.maxLength = 64;
-      category.value = 'general';
-      category.placeholder = 'general';
-      const priority = supportSelect('priority', SUPPORT_PRIORITIES, 'NORMAL');
-      const description = element('textarea');
-      description.name = 'description';
-      description.rows = 5;
-      description.maxLength = 8000;
-      description.required = true;
-      description.placeholder = 'Describe the problem, the command you ran, and the result.';
-      const fields = element('div', 'action-form-grid');
-      fields.append(
-        formField('Subject', subject),
-        formField('Category', category),
-        formField('Priority', priority),
-        formField('Description', description),
-      );
-      form.append(fields, actionSubmitButton('support-create', 'Create support case'));
-      createPanel.body.append(form);
-    } else {
-      createPanel.body.append(cliHandoff(
-        'Support case creation is unavailable',
-        'The selected customer profile does not have the support:create capability.',
-        ['hyfens status', 'hyfens doctor'],
-      ));
-    }
-    stack.append(createPanel.section);
-
-    const projection = state.supportCases;
-    if (!projection) {
-      stack.append(unavailablePage('Support cases', customerSupportUnavailableReason('cases')));
-      return stack;
-    }
-    const cases = arrayValue(projection.cases);
-    const panel = makePanel(
-      'Your support cases',
-      'Cases and replies are visible only within the selected customer organization.',
-      `${countValue(pick(pick(projection, 'counts'), 'matching'))} matching`,
-    );
-    panel.body.append(cases.length === 0
-      ? stateBlock('empty', 'No support cases', 'There are no support cases for this organization.')
-      : recordTable(
-        ['Case', 'Status', 'Priority', 'Category', 'Updated'],
-        cases,
-        (record) => tableRow([
-          primaryCell(supportCaseButton(record), recordId(record)),
-          statusTag(pick(record, 'status')),
-          statusTag(pick(record, 'priority')),
-          stringValue(pick(record, 'category')) ?? 'General',
-          dateValue(pick(record, 'updatedAt')),
-        ]),
-      ));
-    stack.append(panel.section);
-    if (state.supportCase) stack.append(renderSupportCaseDetail(state.supportCase, false));
-    return stack;
-  }
-
   function safeAuditRecord(record) {
     return safeAuditValue(record, SAFE_AUDIT_RECORD_KEYS) ?? {};
   }
@@ -3907,7 +3825,6 @@
     hideAuxiliaryAuthForms();
     setAuthFormState(nodes.loginForm, register);
     setAuthFormState(nodes.registerForm, !register);
-    setAuthFormState(nodes.invitationForm, true);
     nodes.authModeTabs.forEach((tab) => {
       const active = tab.dataset.authMode === nextMode;
       tab.setAttribute('aria-selected', String(active));
@@ -5112,7 +5029,6 @@
       artifacts: renderArtifactsPage,
       deployments: renderDeploymentsPage,
       audit: renderAuditPage,
-      support: renderCustomerSupportPage,
       settings: renderSettingsPage,
     }[state.currentView] ?? renderOverviewPage;
     replacePageRegion(page(), { transition });
@@ -5228,6 +5144,13 @@
     if (control === 'status') controls.status = target.value;
     if (control === 'sort') controls.sort = target.value;
     renderCurrentPage({ focusTarget: { type: 'collection', key, control } });
+    if (state.overview) {
+      const result = collectionResult(state.overview, key, scopedItems(key));
+      const sourceLabel = result.truncated ? 'loaded' : 'returned';
+      showToast(
+        `${RESOURCE_LABELS[key]}: showing ${result.items.length} of ${result.sourceCount} ${sourceLabel} records.${result.truncated ? ' More records may be available because the response is capped.' : ''}`,
+      );
+    }
   }
 
   function handleSearchResultClick(event) {
@@ -5828,6 +5751,5 @@
     }
   }
 
-  if (initialInvitationToken) bootstrapInvitation();
-  else bootstrapSession();
+  bootstrapSession();
 })();

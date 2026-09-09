@@ -8,56 +8,7 @@ bounded patches, verifies them, and deploys them through a selected control
 plane. The runtime remains the final authority for patch bytes, exact release
 binding, capabilities, sequence/high-water, health, rollback, and fallback.
 
-## Install a released CLI
-
-The canonical executable is `hyfens`. The current Hyfens release provides
-native archives for macOS, Linux, and Windows on x64 and arm64. The deprecated
-`tool` shim is included only for compatibility.
-
-On macOS or Linux, install the latest release without Dart or Flutter:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
-```
-
-Pin a published release with:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash -s -- --version v0.1.1
-```
-
-The installer detects the host architecture, downloads only from the fixed
-Hyfens GitHub repository, verifies `SHA256SUMS` before extraction, and prints
-PATH guidance. It does not modify project files or `~/.hyfens`.
-
-The Homebrew tap and Scoop bucket use the same immutable GitHub Release
-archives. Homebrew can add the tap and trust only the requested formula in a
-single command:
-
-```bash
-brew install hyfens-hq/tap/hyfens
-```
-
-If the tap was already added manually, Homebrew may require a one-time,
-formula-scoped trust before the short form works:
-
-```bash
-brew trust --formula hyfens-hq/tap/hyfens
-brew install hyfens
-```
-
-Do not disable tap trust globally.
-
-```powershell
-scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket
-scoop install hyfens
-```
-
-WinGet remains an external Microsoft submission gate for this release. Direct
-Windows archive and PowerShell verification instructions are in
-`docs/cli-distribution.md`.
-
-## Build from a source checkout
+## Source checkout invocation
 
 The package manifest deliberately has `publish_to: none` and uses repository
 path dependencies, so pub.dev is not the distribution channel. Tagged GitHub
@@ -68,8 +19,13 @@ use a checkout when contributing or when a native release is unavailable:
 ```bash
 export HYFENS_CHECKOUT=/absolute/path/to/hyfens
 cd "$HYFENS_CHECKOUT/cli"
-flutter pub get
+dart pub get
+```
 
+From the Flutter project being operated on, give the source runner its
+canonical shell name:
+
+```bash
 hyfens() {
   dart run "$HYFENS_CHECKOUT/cli/bin/hyfens.dart" "$@"
 }

@@ -58,7 +58,6 @@ void main() {
           method: 'POST',
           path: '/v1/organizations/${bootstrap.organization.id}/credentials',
           token: observationToken,
-          idempotencyKey: 'observation-http-denied',
           body: <String, Object?>{
             'kind': 'delivery',
             'scopes': deliveryScopes.toList(),
@@ -160,7 +159,6 @@ Future<_Response> _request(
   required String method,
   required String path,
   required String token,
-  String? idempotencyKey,
   Map<String, Object?>? body,
 }) async {
   final request = await client.openUrl(
@@ -171,9 +169,6 @@ Future<_Response> _request(
   request.headers
     ..set('Authorization', 'Bearer $token')
     ..set('X-Request-Id', 'observation-http-test');
-  if (idempotencyKey != null) {
-    request.headers.set('Idempotency-Key', idempotencyKey);
-  }
   if (encoded != null) {
     request.headers
       ..contentType = ContentType.json

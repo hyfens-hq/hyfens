@@ -5,7 +5,7 @@ published Hyfens images:
 
 - `hyfens-control-plane` for accounts, organization scope, metadata, auth, and
   release/patch records;
-- `hyfens-dashboard` for the Customer/Instance Workspace browser UI;
+- `hyfens-dashboard` for the browser UI;
 - PostgreSQL for metadata; and
 - MinIO as the bundled S3-compatible artifact store.
 
@@ -14,22 +14,12 @@ readiness claim. Back up PostgreSQL and the object-store volume together,
 protect the auth signing seed, and put a TLS reverse proxy in front of the two
 loopback-bound application ports.
 
-The public dashboard image is customer/instance scoped. It does not contain
-Hyfens's global Platform Console, Cloud commercial operations, staff
-administration, global support queue, or managed-fleet operations. Those are
-private Cloud surfaces and are not required to run this self-hosted package.
-
 ## Install
 
 Requirements: Docker Engine with Compose v2, a DNS name for the dashboard and
 API, and a host-level TLS reverse proxy. The release images are published to
-GHCR by the tagged GitHub release workflow. Anonymous GHCR pulls are currently
-an external package-visibility gate: the published packages may respond with
-HTTP 401 until an organization package administrator marks them public. This
-is not a Compose configuration problem. Do not put registry credentials in
-this repository; until visibility is corrected, use an authorized local
-`docker login ghcr.io` or override the image variables with images built or
-mirrored under your own control.
+GHCR by the tagged GitHub release workflow. If the package is private, log in
+with `docker login ghcr.io` before pulling.
 
 From this directory:
 

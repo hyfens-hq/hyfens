@@ -26,11 +26,6 @@ contracts. Version 9 does not claim arbitrary Flutter construction.
 Task 21 keeps patch/runtime version 9 and advances the release manifest to
 version 8. It adds a strict multi-library routing table for explicit pure-Dart
 package overlay units; no patch bytecode or runtime instruction changes.
-Task 253 introduces patch/runtime version 10 for bounded async intrinsics and
-host-owned Flutter frame scheduling. Version 10 adds typed `Future<T>.value`,
-bounded `Future<void>.delayed`, `WidgetsBinding.instance.endOfFrame`, and the
-explicit metadata needed by zero-argument async host callbacks. It rejects
-earlier patch containers rather than inferring the new async contract.
 
 ## Identity and dispatch
 
@@ -115,7 +110,7 @@ Decode rejects unknown/missing fields, invalid UTF-8/JSON/types, a corrupt paylo
 hash, a non-positive or stale sequence, files over 64 KiB, more than 256 constants,
 more than 2048 code words, wrong app/release/build fingerprint/runtime,
 unknown IDs, or slot mismatch. E0 remains unsigned; signing is outside Task 13.
-Version 10 permits at most 32 exception handlers, 32 capability requirements, and
+Version 7 permits at most 32 exception handlers, 32 capability requirements, and
 64 static await points. Activation is atomic: decode, compatibility, capability,
 and verifier checks complete before the slot table is replaced. A rejected N+1
 container leaves an already active known-good N program installed. Successful
@@ -299,9 +294,6 @@ Words are non-negative JSON integers. Opcodes and operands are fixed-width:
 | 34 | `callAsyncCapability capability,argc` | 3 | `[args…] -> [pending<T>]` | Invoke one exact registered async capability; the opaque pending token is runtime-owned. |
 | 35 | `awaitValue point` | 2 | `[pending<T>] -> suspend; [T] on resume` | Save the verified frame and resume only from the declared static point. |
 | 36 | `callSyncCapability capability,argc` | 3 | `[args…] -> [T]` | Invoke one exact cheap synchronous capability; I/O and Future results are rejected. |
-| 43 | `futureValue` | 1 | `[T] -> [pending<T>]` | Create a bounded immediate `Future<T>` value for an async program. |
-| 44 | `futureDelay milliseconds` | 2 | `[] -> [pending<void>]` | Create a bounded `Future<void>` delay; the duration is a compiler-validated constant of at most five minutes. |
-| 45 | `flutterEndOfFrame` | 1 | `[] -> [pending<void>]` | Await the host-owned next Flutter frame boundary; arbitrary Flutter objects remain outside the guest ABI. |
 
 Validation rejects unknown/truncated opcodes, invalid argument/constant indices,
 jumps that are not instruction boundaries, inconsistent control-flow stack states,
@@ -477,11 +469,11 @@ installer may stage one local pending candidate before authority configuration;
 reset clears it so it cannot cross lifecycle boundaries. Direct activation rejects
 missing authority or bindings.
 
-The general closure surface remains explicitly negative. Function values, mutable
-shared capture cells, nested functions, method tear-offs, and closure APIs such as
-`map`, `where`, `fold`, and `forEach` do not have a general stable wire ABI. The
-current v10 exception is a zero-argument async callback at the immutable
-host-owned button boundary; it carries explicit async metadata and is invoked by
-the Flutter host. Compiler regressions continue to reject capture-unsafe and
-nested-scope examples. Status is **NOT YET SUPPORTED** outside that seam, not an
-invitation to add unrestricted dynamic calls.
+The closure spike remains explicitly negative. Function values, immutable capture
+environments, mutable shared capture cells, nested functions, method tear-offs, and
+closure APIs such as `map`, `where`, `fold`, and `forEach` have no v6 wire type or
+opcode. Compiler regressions reject immutable capture, mutable capture, and nested
+scope examples. Status is **NOT YET SUPPORTED**, not architecturally blocked: the
+minimum future design still requires a pinned code reference plus typed environment,
+and mutable captures require shared heap cells. No unrestricted `dynamic` call was
+added to improve apparent coverage.

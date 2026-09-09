@@ -43,7 +43,7 @@ void main() {
         '--version',
       ], workingDirectory: Directory.current.path);
       expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
-      expect(result.stdout.toString().trim(), hyfensToolVersion);
+      expect(result.stdout.toString().trim(), startsWith('0.1.0-phase1c.'));
       expect(
         result.stderr.toString().trim(),
         endsWith('tool is deprecated; use hyfens'),
