@@ -120,3 +120,6 @@ used.
 - 2026-09-09: Completed implementation and changed-scope validation. Full
   suite failures were isolated to pre-existing unrelated tests; managed
   provider/mailbox acceptance remains an external deployment gate.
+- 2026-09-09: Hyfens PR opened at
+  https://github.com/hyfens-hq/hyfens/pull/3. Companion Cloud-web PR opened at
+  https://github.com/hyfens-hq/hyfens-cloud-web/pull/3.
