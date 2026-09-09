@@ -116,6 +116,21 @@ final class KeplarsHumanMessageDelivery
     );
   }
 
+  Future<void> sendEnterpriseInquiryNotification({
+    required Iterable<String> recipients,
+    required Map<String, Object?> inquiry,
+  }) async {
+    final body = _enterpriseInquiryBody(inquiry);
+    for (final recipient in recipients) {
+      await _send(
+        priority: 'high',
+        to: recipient,
+        subject: 'New Hyfens Enterprise inquiry',
+        body: body,
+      );
+    }
+  }
+
   Future<void> _send({
     required String priority,
     required String to,
@@ -193,6 +208,25 @@ final class KeplarsHumanMessageDelivery
       <p>If you did not request this, no action is required.</p>
     ''',
       );
+
+  String _enterpriseInquiryBody(Map<String, Object?> inquiry) => _messageShell(
+    title: 'New Hyfens Enterprise inquiry',
+    content:
+        '''
+      <p>A new Enterprise inquiry was received through Hyfens Cloud.</p>
+      <p><strong>Inquiry reference:</strong> ${_escape(_inquiryText(inquiry, 'id'))}</p>
+      <p><strong>Contact:</strong> ${_escape(_inquiryText(inquiry, 'email'))}</p>
+      <p><strong>Name:</strong> ${_escape(_inquiryText(inquiry, 'name'))}</p>
+      <p><strong>Organization:</strong> ${_escape(_inquiryText(inquiry, 'organization'))}</p>
+      <p><strong>Message:</strong></p>
+      <p>${_escape(_inquiryText(inquiry, 'message')).replaceAll('\n', '<br>')}</p>
+    ''',
+  );
+
+  static String _inquiryText(Map<String, Object?> inquiry, String key) {
+    final value = inquiry[key];
+    return value is String ? value : '';
+  }
 
   String _messageShell({required String title, required String content}) =>
       '<!doctype html><html><body><h1>${_escape(title)}</h1>$content</body></html>';

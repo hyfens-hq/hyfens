@@ -52,8 +52,9 @@ Codex
   marketing and payment surfaces.
 - [x] Run provider/database/object-store/TLS/backup/monitoring readiness
   checks without exposing secrets.
-- [-] Document ownership, rollback, and incident contacts for launch; named
-  operational owners and protected deployment access remain external.
+- [-] Document ownership and incident contacts for launch; protected deploy
+  access and rollback are now exercised, but named/role-based operational
+  ownership remains external.
 - [x] Add only focused operational checks or policy-link tests required by the
   decisions.
 
@@ -83,6 +84,12 @@ Validation evidence:
   task; Task 259 changed no Dart source;
 - control-plane focused auth/onboarding/billing/refund/deletion/Enterprise
   tests and analyzer: passed in the Task 267–270 evidence set;
+- current control-plane analyzer and focused onboarding, deletion, refund, and
+  human-auth tests passed after the managed-worker/notifier changes;
+- the complete control-plane test suite was run for PR validation; 27 failures
+  remain in pre-existing reconciliation, credential-scope, observation, and
+  auto-halt cases outside this task's changed files, while the affected
+  focused tests pass;
 - post-deployment live HTTPS checks from 2026-09-09: `/`, `/pricing`,
   `/pricing.md`, `/terms`, `/privacy`, `/refund-policy`,
   `/account-deletion`, and `/api/pricing` all returned 200; the webhook GET
@@ -99,6 +106,19 @@ Validation evidence:
   plan change, cycle-end cancellation, and reviewed partial refund were
   performed; no live payment, deletion, restore, or production
   customer-workspace cutover was performed.
+- root rollback rehearsal completed through the installed web wrapper, and the
+  current release was redeployed and returned to healthy status;
+- the installed bounded deletion timer is enabled and active; its last manual
+  service run exited successfully with zero due requests;
+- a valid managed control-plane registration request returned the expected
+  verification-required response, but the untouched `app.hyfens.com` legacy
+  dashboard still renders a stale registration form and reports account
+  creation unavailable. This prevents claiming current public onboarding
+  acceptance without the separately authorized workspace cutover;
+- the deployed Enterprise inquiry notifier uses the existing Keplars seam and
+  the latest inquiry is durably recorded with notification status `sent`.
+  Delivery to an owned mailbox is not yet proven because the configured
+  recipients are not the owned acceptance mailbox.
 
 ## Next Action
 
@@ -114,16 +134,16 @@ authorized.
 Current blockers:
 
 - full managed transactional-email acceptance is incomplete: signup
-  verification has been delivered, but recovery, no-login deletion, and
-  Enterprise inquiry notification still need mailbox evidence;
+  verification and recovery have been delivered; no-login deletion reached a
+  verified request, but full recovery completion and Enterprise inquiry
+  notification still need owned-mailbox evidence;
 - no managed Enterprise quote/payment acceptance has been executed;
 - the deletion worker, authenticated/no-login account deletion, and
   organization deletion have not completed managed acceptance;
 - live backup schedule, off-host durability, restore rehearsal, and
   deletion-tombstone resurrection protection are not evidenced;
-- rollback rehearsal and role-based owners for email, payments/webhooks,
-  refunds, Enterprise inquiries, deletion/object cleanup, and backup/restore
-  are not recorded;
+- role-based owners for email, payments/webhooks, refunds, Enterprise
+  inquiries, deletion/object cleanup, and backup/restore are not recorded;
 - tax treatment and legally approved financial, security/audit, and Enterprise
   commercial evidence-retention durations remain unresolved;
 - `app.hyfens.com` customer-workspace cutover remains separately unauthorized.
@@ -144,6 +164,13 @@ Team → Starter scheduling/Keep Team cancellation, cycle-end cancellation, and
 a reviewed partial refund completed with real Razorpay TEST evidence. The
 launch verdict remains `NOT_READY` because the blockers above are still
 unproven.
+
+Operational follow-up (2026-09-09): the deletion worker/timer and Enterprise
+inquiry notification retry/status wiring are deployed through the existing
+composition. Focused validation passed, a rollback/current-release rehearsal
+completed, and the live API returned a valid verification-required response
+for a disposable registration probe. The old `app.hyfens.com` dashboard still
+reports account creation unavailable and was intentionally not changed.
 
 ## Policy decisions and retention boundary
 
@@ -168,11 +195,14 @@ unproven.
 
 ## Email and Enterprise operations
 
-The deployed composition has the Keplars transport configured and signup
-verification has been delivered to a disposable managed customer. Recovery,
-no-login deletion verification, and Enterprise inquiry notification still lack
-complete mailbox acceptance. The durable `enterprise_inquiries` inbox and
-operator workspace exist; notification ownership is not yet recorded.
+The deployed composition has the Keplars transport configured. Signup
+verification and recovery messages have been delivered to the owned test
+mailbox; a fresh no-login deletion verification message was delivered and its
+single-use link reached the verified-request state. Full recovery completion,
+final account/organization deletion, and Enterprise inquiry mailbox acceptance
+remain open. The durable `enterprise_inquiries` inbox and operator workspace
+exist, and notifier delivery is retried/idempotently recorded, but a verified
+owned notification recipient is not yet configured.
 
 ## Razorpay TEST deployment
 
@@ -208,16 +238,16 @@ wording; no live payment activation was performed.
 
 | Workflow | Code verified | Managed verified | Provider verified | Production operational |
 | --- | --- | --- | --- | --- |
-| Signup verification | Yes, injected delivery tests | Partial; delivered | N/A | Partial |
-| Password recovery | Yes, injected delivery tests | No | N/A | No |
-| No-login deletion | Yes, token/security tests | No | N/A | No |
+| Signup verification | Yes, injected delivery tests | Yes; delivered | N/A | Partial; owned-mailbox flow not re-run after stale onboarding discovery |
+| Password recovery | Yes, injected delivery tests | Partial; delivered, completion not run | N/A | No |
+| No-login deletion | Yes, token/security tests | Partial; verified request reached | N/A | No; final deletion/email ownership incomplete |
 | Free → Starter | Yes, state/provider-contract tests | Yes | Yes, TEST checkout/webhook | No LIVE |
 | Starter → Team | Yes, state/provider-contract tests | Yes | Yes, TEST provider confirmation | No LIVE |
 | Team → Starter schedule | Yes, scheduling tests | Yes | Yes, TEST schedule/cancel | No LIVE |
 | Cancellation | Yes, state/provider-contract tests | Yes | Yes, TEST cycle-end schedule | No LIVE |
 | Refund | Yes, reviewed-workflow tests | Yes | Yes, TEST partial refund | No LIVE |
 | Enterprise quote/payment | Yes, domain/provider-contract tests | No | No real payment | No |
-| Account deletion | Yes, staged-worker tests | No | N/A | No |
+| Account deletion | Yes, staged-worker tests | Partial; verification/ownership gate | N/A | No |
 | Organization deletion | Yes, staged/object-safety tests | No | N/A | No |
 | Policy routes | Local current source | Yes; required routes 200 | N/A | Legal approval pending |
 | Backup retention | Local/templated evidence | No | N/A | No |
@@ -225,9 +255,10 @@ wording; no live payment activation was performed.
 ## Task 256B recommendation
 
 `DO_NOT_CUT_OVER`. Customer-workspace production cutover is not justified
-until protected Cloud deployment, transactional email, approved policy
-publication, backup/restore ownership, and managed disposable acceptance are
-complete.
+until the stale onboarding surface is replaced through the separately
+authorized cutover, mailbox ownership is operationally proven, Enterprise and
+deletion acceptance completes, backup/restore evidence exists, and policy/tax
+and retention decisions are approved.
 
 ## References
 
@@ -237,6 +268,9 @@ complete.
 - `hyfens-cloud-web/site/src/app/(marketing)/refund-policy/page.tsx`
 - `hyfens-cloud-web/site/src/lib/public-content.ts`
 - `hyfens-cloud-web/deploy/web/README.md`
+- `deploy/p2/hyfens-public-control-plane-dev-deletion-worker`
+- `deploy/p2/hyfens-public-control-plane-dev-deletion.service`
+- `deploy/p2/hyfens-public-control-plane-dev-deletion.timer`
 - `tasks/254-cloud-commercial-launch-readiness-audit.md`
 
 ## History
@@ -256,3 +290,10 @@ complete.
   was appended; Enterprise, deletion, backup/restore, rollback, full email,
   ownership, tax, and evidence-retention gates remain open. Verdict remains
   `NOT_READY`; `app.hyfens.com` was not changed.
+- 2026-09-09: Installed the bounded deletion worker/timer and deployed the
+  Enterprise inquiry notification retry/status wiring using the existing
+  Keplars transport. Re-ran focused validation, completed a safe rollback and
+  current-release redeploy, and verified live health/routes. The legacy
+  untouched `app.hyfens.com` onboarding surface remains stale; backup/restore,
+  Enterprise payment, deletion completion, mailbox ownership, role ownership,
+  and legal/tax retention gates remain open. Verdict remains `NOT_READY`.

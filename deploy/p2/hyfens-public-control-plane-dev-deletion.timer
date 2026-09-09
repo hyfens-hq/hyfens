@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule bounded Hyfens Cloud deletion processing
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=hyfens-public-control-plane-dev-deletion.service
+
+[Install]
+WantedBy=timers.target

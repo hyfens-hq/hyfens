@@ -80,6 +80,14 @@ restores the prior service when one exists. Use the same wrapper with
 P2-R2 target remains an additional migration fallback until the first current
 release is healthy.
 
+The managed Cloud installation also installs a bounded deletion worker. The
+`hyfens-public-control-plane-dev-deletion.timer` invokes the existing
+`processPendingDeletions` service method every 15 minutes, with a host lock to
+prevent overlapping runs. The worker runs inside the current control-plane
+image, uses the same protected environment and database, emits only aggregate
+status counts, and is safe to resume after a restart. It is not a second queue
+or a replacement for the durable deletion request records.
+
 The control plane is deliberately configured with customer/local signing
 authority. PostgreSQL and object storage persist and deliver bytes; they never
 verify or authorize runtime patches.

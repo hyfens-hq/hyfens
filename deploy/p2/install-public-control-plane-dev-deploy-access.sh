@@ -14,7 +14,13 @@ export PATH
 
 stage=/home/hyfen/p2-deploy-stage/deploy/p2
 source_wrapper="$stage/hyfens-public-control-plane-dev-deploy"
+source_worker="$stage/hyfens-public-control-plane-dev-deletion-worker"
+source_service="$stage/hyfens-public-control-plane-dev-deletion.service"
+source_timer="$stage/hyfens-public-control-plane-dev-deletion.timer"
 wrapper=/usr/local/sbin/hyfens-public-control-plane-dev-deploy
+worker=/usr/local/sbin/hyfens-public-control-plane-dev-deletion-worker
+service=/etc/systemd/system/hyfens-public-control-plane-dev-deletion.service
+timer=/etc/systemd/system/hyfens-public-control-plane-dev-deletion.timer
 sudoers=/etc/sudoers.d/hyfens-public-control-plane-dev-deploy
 
 [ -d "$stage" ] || {
@@ -37,8 +43,25 @@ sudoers=/etc/sudoers.d/hyfens-public-control-plane-dev-deploy
   echo 'public control-plane development deploy wrapper must be executable' >&2
   exit 1
 }
+for file in "$source_worker" "$source_service" "$source_timer"; do
+  [ -f "$file" ] || {
+    echo "required deletion worker file is missing: $file" >&2
+    exit 1
+  }
+  [ "$(readlink -f "$file")" = "$file" ] || {
+    echo "required deletion worker file must not be a symlink: $file" >&2
+    exit 1
+  }
+done
+[ -x "$source_worker" ] || {
+  echo 'deletion worker must be executable' >&2
+  exit 1
+}
 
 install -o root -g root -m 0755 "$source_wrapper" "$wrapper"
+install -o root -g root -m 0755 "$source_worker" "$worker"
+install -o root -g root -m 0644 "$source_service" "$service"
+install -o root -g root -m 0644 "$source_timer" "$timer"
 
 sudoers_tmp=$(mktemp /etc/sudoers.d/.hyfens-public-control-plane-dev-deploy.XXXXXX)
 trap 'rm -f "$sudoers_tmp"' EXIT
@@ -48,5 +71,8 @@ chmod 0440 "$sudoers_tmp"
 visudo -cf "$sudoers_tmp" >/dev/null
 mv -f "$sudoers_tmp" "$sudoers"
 trap - EXIT
+
+systemctl daemon-reload
+systemctl enable --now hyfens-public-control-plane-dev-deletion.timer >/dev/null
 
 echo 'public control-plane development deployment access enabled' >&2

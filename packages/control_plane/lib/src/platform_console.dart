@@ -281,6 +281,8 @@ final class PlatformConsoleProjection {
             'status': value['status'],
             'destination': value['destination'],
             'delivery': value['delivery'],
+            'notificationStatus': value['notificationStatus'],
+            'notificationSentAt': value['notificationSentAt'],
             'createdAt': value['createdAt'],
             'updatedAt': value['updatedAt'],
           },

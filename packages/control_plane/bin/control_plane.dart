@@ -62,6 +62,44 @@ Future<void> main(List<String> arguments) async {
     deletionPolicy: config.deletionPolicy,
   );
   await configuredService.initialize();
+  if (options.containsKey('process-deletions')) {
+    if (options.containsKey('bootstrap') ||
+        options.containsKey('bootstrap-admin') ||
+        options.containsKey('bootstrap-owner') ||
+        options.containsKey('seed-demo')) {
+      throw ArgumentError(
+        '--process-deletions cannot be combined with a bootstrap mode',
+      );
+    }
+    final deletion = configuredService.deletion;
+    if (deletion == null) {
+      throw StateError(
+        '--process-deletions requires human authentication and deletion '
+        'configuration',
+      );
+    }
+    try {
+      final processed = await deletion.processPendingDeletions();
+      final counts = <String, int>{};
+      for (final request in processed) {
+        final status = request['status'];
+        if (status is String) {
+          counts[status] = (counts[status] ?? 0) + 1;
+        }
+      }
+      stdout.write('deletion_worker_processed=${processed.length}');
+      final entries = counts.entries.toList()
+        ..sort((left, right) => left.key.compareTo(right.key));
+      for (final entry in entries) {
+        stdout.write(' ${entry.key}=${entry.value}');
+      }
+      stdout.writeln();
+    } finally {
+      await store.close();
+      taskRoleCredentials?.close();
+    }
+    return;
+  }
   if (options.containsKey('seed-demo')) {
     if (options.containsKey('bootstrap') ||
         options.containsKey('bootstrap-admin') ||
@@ -185,6 +223,14 @@ Future<void> main(List<String> arguments) async {
   final server = ControlPlaneHttpServer(
     configuredService,
     discovery: config.discovery,
+    enterpriseInquiryNotifier:
+        emailDelivery == null ||
+            config.auth?.platformAdminEmails.isEmpty != false
+        ? null
+        : (inquiry) => emailDelivery.sendEnterpriseInquiryNotification(
+            recipients: config.auth!.platformAdminEmails,
+            inquiry: inquiry,
+          ),
     limits: ControlPlaneHttpLimits(
       maxJsonBodyBytes: config.maxJsonBodyBytes,
       maxArtifactBytes: config.maxArtifactBytes,
@@ -221,7 +267,8 @@ Map<String, String> _options(List<String> arguments) {
       if (argument == '--bootstrap-only') result['bootstrap-only'] = 'true';
       continue;
     }
-    if (argument == '--seed-demo' ||
+    if (argument == '--process-deletions' ||
+        argument == '--seed-demo' ||
         argument == '--bootstrap-admin' ||
         argument == '--bootstrap-owner' ||
         argument == '--password-stdin') {

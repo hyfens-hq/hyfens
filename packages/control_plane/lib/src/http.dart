@@ -219,6 +219,7 @@ final class ControlPlaneHttpServer {
     ControlPlaneHttpLimits limits = const ControlPlaneHttpLimits(),
     ControlPlaneDiscoveryConfig? discovery,
     Future<bool> Function()? readyCheck,
+    EnterpriseInquiryNotifier? enterpriseInquiryNotifier,
     this.reconciliationObservability,
     this.periodicRunner,
     this.auditRetentionDays = 365,
@@ -228,7 +229,10 @@ final class ControlPlaneHttpServer {
            discovery ??
            ControlPlaneDiscoveryConfig.fromEnvironment(Platform.environment),
        _operatorOverview = OperatorOverviewProjection(service),
-       _publicOnboarding = PublicOnboardingService(store: service.store),
+       _publicOnboarding = PublicOnboardingService(
+         store: service.store,
+         enterpriseInquiryNotifier: enterpriseInquiryNotifier,
+       ),
        _platformConsole = PlatformConsoleProjection(service.store),
        _platformMetrics = PlatformMetricsProjection(store: service.store),
        _readyCheck = readyCheck ?? service.checkReadiness;

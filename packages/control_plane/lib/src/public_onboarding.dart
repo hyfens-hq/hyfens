@@ -13,13 +13,21 @@ const int publicOnboardingNameMaxLength = 128;
 const int publicOnboardingSourceMaxLength = 64;
 const int publicEnterpriseMessageMaxLength = 4000;
 
+typedef EnterpriseInquiryNotifier = Future<void> Function(
+  Map<String, Object?> inquiry,
+);
+
 /// Durable, unauthenticated onboarding intake. Registration is owned by
 /// [HumanAuthService]; this service owns only the two non-auth collections.
 final class PublicOnboardingService {
-  PublicOnboardingService({required this.store, DateTime Function()? clock})
-    : _clock = clock ?? (() => DateTime.now().toUtc());
+  PublicOnboardingService({
+    required this.store,
+    DateTime Function()? clock,
+    this.enterpriseInquiryNotifier,
+  }) : _clock = clock ?? (() => DateTime.now().toUtc());
 
   final ControlPlaneStore store;
+  final EnterpriseInquiryNotifier? enterpriseInquiryNotifier;
   final DateTime Function() _clock;
   Future<void> _writeTail = Future<void>.value();
 
@@ -103,7 +111,7 @@ final class PublicOnboardingService {
           statusCode: 409,
         );
       }
-      return existing;
+      return _deliverEnterpriseInquiry(id, existing);
     }
     final record = <String, Object?>{
       'id': id,
@@ -117,13 +125,14 @@ final class PublicOnboardingService {
       'status': 'received',
       'destination': 'platform.enterprise_inquiries',
       'delivery': 'durable_control_plane_inbox',
+      if (enterpriseInquiryNotifier != null) 'notificationStatus': 'pending',
       'payloadDigest': digest,
       'createdAt': _clock().toUtc().toIso8601String(),
       'updatedAt': _clock().toUtc().toIso8601String(),
     };
     try {
       await store.createJson(publicEnterpriseInquiryCollection, id, record);
-      return record;
+      return await _deliverEnterpriseInquiry(id, record);
     } on StorageConflict {
       final concurrent = await store.readJson(
         publicEnterpriseInquiryCollection,
@@ -137,9 +146,38 @@ final class PublicOnboardingService {
           statusCode: 409,
         );
       }
-      return concurrent;
+      return await _deliverEnterpriseInquiry(id, concurrent);
     }
   });
+
+  Future<Map<String, Object?>> _deliverEnterpriseInquiry(
+    String id,
+    Map<String, Object?> inquiry,
+  ) async {
+    final notifier = enterpriseInquiryNotifier;
+    if (notifier == null || inquiry['notificationStatus'] == 'sent') {
+      return inquiry;
+    }
+    try {
+      await notifier(Map.unmodifiable(inquiry));
+    } on Object {
+      final failed = <String, Object?>{
+        ...inquiry,
+        'notificationStatus': 'failed',
+        'updatedAt': _clock().toUtc().toIso8601String(),
+      };
+      await store.replaceJson(publicEnterpriseInquiryCollection, id, failed);
+      return failed;
+    }
+    final delivered = <String, Object?>{
+      ...inquiry,
+      'notificationStatus': 'sent',
+      'notificationSentAt': _clock().toUtc().toIso8601String(),
+      'updatedAt': _clock().toUtc().toIso8601String(),
+    };
+    await store.replaceJson(publicEnterpriseInquiryCollection, id, delivered);
+    return delivered;
+  }
 
   Future<bool> _submit({
     required String collection,

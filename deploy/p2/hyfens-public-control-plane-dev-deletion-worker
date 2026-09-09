@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+container=hyfens-public-control-plane-dev-control-plane-1
+lock_file=/run/lock/hyfens-public-control-plane-dev-deletion-worker.lock
+
+[ -x /usr/bin/docker ] || {
+  echo 'Docker is not installed at /usr/bin/docker' >&2
+  exit 1
+}
+
+exec 9>"$lock_file"
+if ! flock -n 9; then
+  exit 0
+fi
+
+/usr/bin/docker inspect "$container" >/dev/null 2>&1 || {
+  echo 'public control-plane container is unavailable' >&2
+  exit 1
+}
+
+exec /usr/bin/docker exec \
+  --user 65532:65532 \
+  --workdir /opt/hyfens/packages/control_plane \
+  "$container" \
+  dart run bin/control_plane.dart --process-deletions
