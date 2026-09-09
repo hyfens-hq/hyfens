@@ -50,6 +50,21 @@ abstract interface class OneTimeTokenConsumption {
   });
 }
 
+/// Optional compare-and-set support for privacy lifecycle records.
+///
+/// A deletion worker and a cancellation request may run at the same time. A
+/// store implementing this seam must only write [value] when the durable
+/// request still has [expectedStatus]. Returning false means another actor
+/// won the transition and the caller must re-read the request.
+abstract interface class DeletionRequestStateStore {
+  Future<bool> compareAndSetDeletionRequestStatus({
+    required String collection,
+    required String id,
+    required String expectedStatus,
+    required Map<String, Object?> value,
+  });
+}
+
 final class ObservationWriteResult {
   const ObservationWriteResult({required this.created, required this.value});
 
@@ -246,6 +261,7 @@ final class FileControlPlaneStore
         ArtifactDeletion,
         JsonRecordDeletion,
         OneTimeTokenConsumption,
+        DeletionRequestStateStore,
         BoundedObservationDeletion,
         BillingRefundTransactionStore,
         NotificationDeliveryClaimStore {
@@ -254,6 +270,7 @@ final class FileControlPlaneStore
   final Directory root;
   Future<void> _sessionOperationTail = Future<void>.value();
   Future<void> _notificationOperationTail = Future<void>.value();
+  Future<void> _deletionOperationTail = Future<void>.value();
   final Map<String, Future<void>> _billingRefundTails =
       <String, Future<void>>{};
 
@@ -276,6 +293,7 @@ final class FileControlPlaneStore
       'auth_verification_tokens',
       'auth_recovery_tokens',
       'auth_deletion_tokens',
+      'auth_deletion_cancel_tokens',
       'auth_bootstrap_consumptions',
       'audit',
       'audit_chain',
@@ -307,6 +325,23 @@ final class FileControlPlaneStore
     ]) {
       await Directory(p.join(root.path, name)).create(recursive: true);
     }
+  }
+
+  @override
+  Future<bool> compareAndSetDeletionRequestStatus({
+    required String collection,
+    required String id,
+    required String expectedStatus,
+    required Map<String, Object?> value,
+  }) {
+    final result = _deletionOperationTail.then((_) async {
+      final current = await readJson(collection, id);
+      if (current == null || current['status'] != expectedStatus) return false;
+      await replaceJson(collection, id, value);
+      return true;
+    });
+    _deletionOperationTail = result.then<void>((_) {}).catchError((_) {});
+    return result;
   }
 
   @override

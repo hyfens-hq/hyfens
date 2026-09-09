@@ -297,3 +297,50 @@ and retention decisions are approved.
   untouched `app.hyfens.com` onboarding surface remains stale; backup/restore,
   Enterprise payment, deletion completion, mailbox ownership, role ownership,
   and legal/tax retention gates remain open. Verdict remains `NOT_READY`.
+
+## Deletion lifecycle policy correction — 2026-09-10
+
+Task 269 follow-up now records the approved managed-Cloud grace policy as
+seven **working** days. The verification business date is day 1 when it is a
+Monday-Friday date not listed in the explicit holiday configuration; day 5 and
+day 7 reminders are persisted notification jobs; staged processing becomes
+eligible at the start of day 8. The server persists `processingAt` and exposes
+the same date to the UI and email. It is not derived from `7 * 24 hours`.
+
+During grace, the existing control-plane authorization boundary rejects normal
+tenant mutations and ordinary reads with deletion-pending errors while keeping
+status, safe billing status, ownership resolution, privacy/policy, and
+cancellation available. Cancellation and worker claiming use compare-and-set;
+stale reminders are no-ops. Organization billing remains separate: deletion
+stops future renewal through Task 270, creates no refund, and does not silently
+reverse an irreversible provider cancellation.
+
+The correction is locally code-verified. It does not close Task 259 managed
+acceptance: real mailbox cadence, managed time-seam acceptance, final staged
+deletion, backup/restore/tombstone rehearsal, operational ownership, and legal
+holiday/backup/financial/security/Enterprise retention decisions remain
+external gates. No statutory duration was invented.
+
+The subsequent review correction also verified that pending personal deletion
+cannot create a new Cloud organization, self-hosted deployments do not expose
+Cloud deletion routes, organization credentials are revoked before staged
+cleanup, failed requests remain retryable, and cancellation links are bound to
+request generations. These are application-level closures only; they do not
+advance the managed acceptance verdict or resolve the external backup, email,
+tax, legal, and retention gates.
+
+## Task 269 working-day correction validation — 2026-09-10
+
+The approved deletion grace policy is seven working days, not seven elapsed
+calendar days. The implementation persists the server-owned business-calendar
+schedule, day-5/day-7 reminder milestones, and day-8 processing timestamp;
+server authorization restricts pending accounts and organizations while the
+request remains recoverable. Cancellation and worker claim use durable
+compare-and-set state transitions, and provider billing cancellation is not
+silently reversed.
+
+The affected control-plane tests, analyzer, formatting check, Cloud web
+typecheck/lint/build, and `git diff --check` passed. This is code-level
+validation only. Task 259 remains `NOT_READY` for managed mailbox cadence,
+managed deletion completion, backup/restore/tombstone evidence, operational
+ownership, and unresolved legal/tax/evidence-retention decisions.

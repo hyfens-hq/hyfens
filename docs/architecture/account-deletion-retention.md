@@ -1,7 +1,8 @@
 # Account deletion and retention
 
-Status: CODE VERIFIED — 2026-09-09; grace-period, backup, and production-mail
-policy inputs remain external decisions
+Status: CODE VERIFIED — 2026-09-10; managed Cloud uses a seven-working-day
+grace policy; backup, holiday-calendar, and production-mail policy inputs
+remain external decisions
 
 ## Separate lifecycle actions
 
@@ -31,12 +32,14 @@ password recovery, or email verification. Unknown addresses produce the same
 response and no observable token.
 
 The verified link creates a durable account deletion request but does not
-delete an organization. A signed-in customer can request the same operation
+delete an account or organization. A signed-in customer can request the same operation
 from `/dashboard/privacy` after current-password verification and typing
 `DELETE`. The organization surface is owner-only and requires the same strong
 confirmation. Customer-facing routes disclose only the request projection,
 never tokens, provider secrets, payment credentials, internal notes, or
-foreign organizations.
+foreign organizations. Verification sends an acknowledgement with the
+server-calculated processing date and a purpose-bound cancellation link. The
+link opens a confirmation page and cannot cancel merely because it was opened.
 
 ## Ownership and billing
 
@@ -55,24 +58,31 @@ revokes organization credentials, marks the organization
 `deletion_requested`, and starts the configured grace boundary. A provider
 failure leaves the request retryable and does not mark the tenant deleted.
 
-While deletion is pending, new paid checkout and plan-change operations are
-rejected. Existing paid access and existing tenant reads remain available
-during the configured grace period so the customer can resolve ownership or
-cancel a pending request. A pending deletion can be cancelled for a Free
-organization after strong owner confirmation. Once a paid provider renewal has
-been stopped, cancellation is fail-closed until a provider-supported
-reversal/reconciliation is available; the system never restores local state
-while Razorpay remains cancelled.
+While deletion is pending, new paid checkout and plan-change operations,
+resource/member mutations, credential issuance, and deployment operations are
+rejected server-side. Normal product reads are also restricted. Only deletion
+status, privacy/policy information, safe billing cancellation status, required
+ownership-resolution information, and cancellation remain available. Existing
+customer data is preserved and artifacts are not purged during grace. A pending
+deletion can be cancelled after strong confirmation while the request remains
+cancellable. Once a paid provider renewal has been stopped, cancellation is
+still allowed before irreversible deletion processing, but the system does not
+pretend that provider billing was restored. Local access is restored and the
+provider's retained scheduled-cancellation state is shown/audited; the customer
+must use the normal billing lifecycle to re-establish paid renewal if supported.
 
 ## Staged worker
 
 Deletion requests are the durable queue. `processPendingDeletions` selects
 due, failed, and previously processing requests; `processDeletion` processes a
 bounded batch and may be called again after a crash. The request records track
-status, stage, attempt, grace boundary, progress, and safe error codes. The
-worker is idempotent: terminal requests are returned unchanged, evidence IDs
-are deterministic, artifact cleanup has durable item records, and retries do
-not re-run an already completed identity transition.
+status, stage, attempt, working-day milestones, processing boundary, progress,
+and safe error codes. Day-5 and day-7 reminders are persisted through
+deterministic notification identities before their milestone markers are
+written. The worker is idempotent: terminal/cancelled requests and stale
+reminder jobs are no-ops, evidence IDs are deterministic, artifact cleanup has
+durable item records, and retries do not re-run an already completed identity
+transition.
 
 Organization deletion removes only customer operational records from the
 explicit collection allow-list, removes memberships, and tombstones the
@@ -122,20 +132,36 @@ never purged solely because one tenant was deleted.
 
 ## Managed Cloud launch policy
 
-The managed Cloud launch default is a seven-day deletion grace period, set by
-the protected deployment value `HYFENS_DELETION_GRACE_PERIOD=7d`. This is a
-product/recovery default and does not replace legal/privacy approval of the
-customer-facing retention wording. Self-hosted deployments remain explicit:
-they may leave the setting unset because Cloud deletion is not exposed there.
+The managed Cloud launch policy is seven working days, set by the protected
+deployment value `HYFENS_DELETION_GRACE_PERIOD=7d`. The verification business
+date is working day 1 when it is Monday-Friday and not a configured holiday;
+otherwise the next business date is day 1. Day 5 sends a reminder, day 7 sends
+the final reminder, and processing becomes eligible at the start of working
+day 8. The persisted `processingAt` is the authoritative due timestamp used by
+the worker, UI, and notifications. The business calendar is Monday-Friday in
+`HYFENS_DELETION_BUSINESS_TIMEZONE` (UTC by default), with optional explicit
+`HYFENS_DELETION_HOLIDAYS=YYYY-MM-DD,...`; no jurisdiction-specific holidays
+are assumed. Self-hosted deployments remain explicit: they may leave the
+setting unset because Cloud deletion is not exposed there.
+
+During grace, the account remains recoverable but restricted. Cancellation is
+allowed until the worker atomically claims the request for `processing`; that
+transition is the point of no return. A successful cancellation restores local
+account/organization access and emits an acknowledgement, but it does not
+reverse an already irreversible provider cancellation or create a refund.
+
+The final completion acknowledgement is emitted only after active-system
+erase/anonymization, retained-evidence writes, credential revocation, object
+cleanup, and organization tombstoning have reached the defined terminal state.
 
 ## Policy and infrastructure decisions still required
 
-No arbitrary legal duration is embedded in code. A managed deployment must set
-`HYFENS_DELETION_GRACE_PERIOD` to the reviewed launch value before requests
-can process. The following remain Task 259/legal/infrastructure inputs:
+No arbitrary statutory retention duration is embedded in code. A managed
+deployment must set `HYFENS_DELETION_GRACE_PERIOD` and explicitly choose its
+business timezone/holiday configuration before requests can process. The
+following remain Task 259/legal/infrastructure inputs:
 
-- approved deletion grace period and whether login/undo remains available
-  during it;
+- approval of the business-calendar timezone and holiday source/changes;
 - billing/financial, security/audit, and Enterprise commercial evidence
   durations;
 - backup rotation and when deleted data disappears from immutable snapshots;
@@ -154,3 +180,22 @@ identity. They never issue remote deletion commands to Self-hosted databases,
 artifact stores, credentials, or operator infrastructure. A new signup after
 completed personal deletion is a new identity and does not resurrect the old
 organization.
+
+## Follow-up hardening — 2026-09-10
+
+Organization-scoped credentials are revoked when an authenticated Cloud
+organization deletion request enters the grace state; the human authentication
+mechanism needed to inspect or cancel personal deletion remains available.
+Pending personal deletion also blocks creation of a new Cloud organization,
+and the public account-deletion endpoints return Cloud-unavailable on
+self-hosted deployments. Failed deletion requests remain worker-eligible for
+retry, and credential records are removed using their protected storage key
+(`tokenHash`) rather than their public credential ID.
+
+Cancellation links carry the persisted deletion-request generation in addition
+to the request ID. A token from a cancelled generation therefore cannot cancel
+a later request for the same organization. Reminder processing is serialized
+with local cancellation and re-reads the durable request before enqueueing, so
+cancelled or superseded requests are no-op candidates. The customer projection
+surfaces retained provider-cancellation state without exposing worker or
+credential internals.

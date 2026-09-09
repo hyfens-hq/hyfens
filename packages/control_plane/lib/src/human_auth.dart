@@ -1830,6 +1830,65 @@ final class HumanAuthService {
         return user.id;
       });
 
+  /// Issues a separate, short-lived cancellation capability. It is never
+  /// interchangeable with the verification, recovery, or login token
+  /// purposes and stores only the hash at rest.
+  Future<Map<String, Object?>> issueDeletionCancellationToken({
+    required String userId,
+    required String deletionRequestId,
+    int? deletionRequestGeneration,
+    required String scope,
+    String? organizationId,
+    DateTime? expiresAt,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    if (scope != 'account' && scope != 'organization') {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Deletion cancellation scope is invalid',
+        statusCode: 422,
+      );
+    }
+    return _issueOneTimeToken(
+      collection: 'auth_deletion_cancel_tokens',
+      purpose: 'deletion_cancellation',
+      userId: userId,
+      ttl: config.recoveryTtl,
+      expiresAt: expiresAt,
+      tokenPrefix: 'hfc',
+      metadata: <String, Object?>{
+        'deletionRequestId': deletionRequestId,
+        if (deletionRequestGeneration != null)
+          'deletionRequestGeneration': deletionRequestGeneration,
+        'scope': scope,
+        if (organizationId != null) 'organizationId': organizationId,
+      },
+    );
+  });
+
+  Future<Map<String, Object?>> inspectDeletionCancellationToken({
+    required String token,
+  }) async {
+    await _ensureInitialized();
+    return _readOneTimeToken(
+      collection: 'auth_deletion_cancel_tokens',
+      token: token,
+      purpose: 'deletion_cancellation',
+    );
+  }
+
+  Future<Map<String, Object?>> consumeDeletionCancellationToken({
+    required String token,
+  }) => _serialized(() async {
+    final record = await inspectDeletionCancellationToken(token: token);
+    await _consumeOneTimeToken(
+      collection: 'auth_deletion_cancel_tokens',
+      record: record,
+      consumedAt: _now(),
+    );
+    return record;
+  });
+
   /// Confirms a recent customer password without issuing a new capability.
   /// HTTP callers must additionally provide the exact destructive-action
   /// confirmation phrase.
@@ -3127,13 +3186,22 @@ final class HumanAuthService {
     required String userId,
     String? organizationName,
     required Duration ttl,
+    DateTime? expiresAt,
     String? tokenPrefix,
+    Map<String, Object?> metadata = const <String, Object?>{},
   }) async {
     final token =
         '${tokenPrefix ?? (purpose == 'email_verification' ? 'hfv' : 'hfr')}_${_encodeBytes(_randomBytes(32))}';
     final tokenHash = sha256Hex(utf8.encode(token));
     final now = _now();
-    final expiresAt = now.add(ttl);
+    final effectiveExpiresAt = expiresAt?.toUtc() ?? now.add(ttl);
+    if (!effectiveExpiresAt.isAfter(now)) {
+      throw const ControlPlaneException(
+        'TOKEN_INVALID',
+        'The security token expiry is invalid',
+        statusCode: 422,
+      );
+    }
     await store.createJson(collection, tokenHash, <String, Object?>{
       'id': tokenHash,
       'purpose': purpose,
@@ -3141,10 +3209,11 @@ final class HumanAuthService {
       if (organizationName != null) 'organizationName': organizationName,
       'tokenHash': tokenHash,
       'createdAt': now.toIso8601String(),
-      'expiresAt': expiresAt.toIso8601String(),
+      'expiresAt': effectiveExpiresAt.toIso8601String(),
       'consumedAt': null,
+      ...metadata,
     });
-    return <String, Object?>{'token': token, 'expiresAt': expiresAt};
+    return <String, Object?>{'token': token, 'expiresAt': effectiveExpiresAt};
   }
 
   Future<Map<String, Object?>> _readOneTimeToken({
@@ -3157,6 +3226,8 @@ final class HumanAuthService {
         _invalidEmailVerification();
       }
       if (purpose == 'account_deletion') _invalidDeletionToken();
+      if (purpose == 'deletion_cancellation')
+        _invalidDeletionCancellationToken();
       _invalidRecoveryToken();
     }
     final tokenHash = sha256Hex(utf8.encode(token));
@@ -3169,6 +3240,8 @@ final class HumanAuthService {
         _invalidEmailVerification();
       }
       if (purpose == 'account_deletion') _invalidDeletionToken();
+      if (purpose == 'deletion_cancellation')
+        _invalidDeletionCancellationToken();
       _invalidRecoveryToken();
     }
     final expiresAt = DateTime.tryParse(record['expiresAt'] as String? ?? '');
@@ -3177,6 +3250,8 @@ final class HumanAuthService {
         _invalidEmailVerification();
       }
       if (purpose == 'account_deletion') _invalidDeletionToken();
+      if (purpose == 'deletion_cancellation')
+        _invalidDeletionCancellationToken();
       _invalidRecoveryToken();
     }
     return record;
@@ -3198,6 +3273,9 @@ final class HumanAuthService {
       if (consumed == null) {
         if (record['purpose'] == 'account_deletion') {
           _invalidDeletionToken();
+        }
+        if (record['purpose'] == 'deletion_cancellation') {
+          _invalidDeletionCancellationToken();
         }
         if (record['purpose'] == 'email_verification') {
           _invalidEmailVerification();
@@ -3427,6 +3505,13 @@ final class HumanAuthService {
     'The deletion verification link is invalid or expired',
     statusCode: 400,
   );
+
+  static Never _invalidDeletionCancellationToken() =>
+      throw const ControlPlaneException(
+        'DELETION_CANCELLATION_TOKEN_INVALID',
+        'The deletion cancellation link is invalid or expired',
+        statusCode: 400,
+      );
 
   static String _encodeJson(Map<String, Object?> value) =>
       _encodeBytes(utf8.encode(canonicalJson(value)));

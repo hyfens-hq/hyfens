@@ -525,6 +525,45 @@ final class NotificationCatalog {
       sender: HyfensSenderPolicy.support,
     ),
     NotificationDefinition(
+      key: 'account.deletion.verified',
+      version: 1,
+      category: NotificationCategory.account,
+      purpose: 'account_deletion_verified',
+      template: 'destructive_notice',
+      subject: 'Your Hyfens account deletion is scheduled',
+      preheader: 'Your request is verified. Review the grace period and cancel if needed.',
+      priority: 'high',
+      userCanDisable: false,
+      deduplication: 'deletion_request_verified',
+      sender: HyfensSenderPolicy.support,
+    ),
+    NotificationDefinition(
+      key: 'account.deletion.reminder_day5',
+      version: 1,
+      category: NotificationCategory.account,
+      purpose: 'account_deletion_reminder',
+      template: 'destructive_notice',
+      subject: 'Reminder: your Hyfens account deletion is scheduled',
+      preheader: 'Your account is still recoverable during the grace period.',
+      priority: 'high',
+      userCanDisable: false,
+      deduplication: 'deletion_reminder_day5',
+      sender: HyfensSenderPolicy.support,
+    ),
+    NotificationDefinition(
+      key: 'account.deletion.reminder_day7',
+      version: 1,
+      category: NotificationCategory.account,
+      purpose: 'account_deletion_final_reminder',
+      template: 'destructive_notice',
+      subject: 'Final reminder: your Hyfens account deletion is scheduled',
+      preheader: 'Deletion processing begins after the grace period.',
+      priority: 'high',
+      userCanDisable: false,
+      deduplication: 'deletion_reminder_day7',
+      sender: HyfensSenderPolicy.support,
+    ),
+    NotificationDefinition(
       key: 'account.deletion.requested',
       version: 1,
       category: NotificationCategory.account,
@@ -562,6 +601,46 @@ final class NotificationCatalog {
       priority: 'async',
       userCanDisable: false,
       deduplication: 'deletion_request',
+      sender: HyfensSenderPolicy.support,
+    ),
+    NotificationDefinition(
+      key: 'organization.deletion.verified',
+      version: 1,
+      category: NotificationCategory.account,
+      purpose: 'organization_deletion_verified',
+      template: 'destructive_notice',
+      subject: 'Your Hyfens organization deletion is scheduled',
+      preheader: 'Your request is verified. Review the grace period and cancel if needed.',
+      priority: 'high',
+      userCanDisable: false,
+      deduplication: 'organization_deletion_verified',
+      sender: HyfensSenderPolicy.support,
+    ),
+    NotificationDefinition(
+      key: 'organization.deletion.reminder_day5',
+      version: 1,
+      category: NotificationCategory.account,
+      purpose: 'organization_deletion_reminder',
+      template: 'destructive_notice',
+      subject: 'Reminder: your Hyfens organization deletion is scheduled',
+      preheader:
+          'Your organization remains recoverable during the grace period.',
+      priority: 'high',
+      userCanDisable: false,
+      deduplication: 'organization_deletion_reminder_day5',
+      sender: HyfensSenderPolicy.support,
+    ),
+    NotificationDefinition(
+      key: 'organization.deletion.reminder_day7',
+      version: 1,
+      category: NotificationCategory.account,
+      purpose: 'organization_deletion_final_reminder',
+      template: 'destructive_notice',
+      subject: 'Final reminder: your Hyfens organization deletion is scheduled',
+      preheader: 'Staged deletion begins after the grace period.',
+      priority: 'high',
+      userCanDisable: false,
+      deduplication: 'organization_deletion_reminder_day7',
       sender: HyfensSenderPolicy.support,
     ),
     NotificationDefinition(
@@ -1074,11 +1153,26 @@ final class NotificationRenderer {
               '$message\n\nAmount: $amount\nPayment: ${_value(values, 'payment_id', fallback: 'Hyfens payment')}\nStatus: ${_value(values, 'status', fallback: 'Under review')}\nWorkspace: $organization\n\nRefund processing is separate from subscription state. A refund does not by itself cancel a subscription.',
         );
       case 'destructive_notice':
+        final processingAt = _customerDate(
+          values,
+          'processing_at',
+          fallback: effectiveAt,
+        );
+        final restriction = _value(
+          values,
+          'restriction',
+          fallback: 'Access is restricted to deletion status and cancellation during the grace period.',
+        );
+        final billingMessage = _value(
+          values,
+          'billing_message',
+          fallback: 'Deletion does not automatically create a refund. Billing and required security evidence remain subject to policy.',
+        );
         return _RenderedContent(
           html:
-              '<div style="margin:20px 0;padding:16px 18px;border-left:3px solid #b42318;background:#fff1f0"><strong>${_escape(message)}</strong></div><p>Account deletion is separate from subscription cancellation. Required billing, security, and audit evidence may be retained according to Hyfens policy.</p>',
+              '<div style="margin:20px 0;padding:16px 18px;border-left:3px solid #b42318;background:#fff1f0"><strong>${_escape(message)}</strong></div>${_summaryTable(<String, String>{if (values['processing_at'] != null) 'Expected processing date': processingAt, if (values['working_day'] != null) 'Grace milestone': _value(values, 'working_day'), 'Access': restriction, 'Billing': billingMessage})}<p>Account deletion is separate from subscription cancellation. Required billing, security, and audit evidence may be retained according to Hyfens policy.</p>',
           text:
-              '$message\n\nAccount deletion is separate from subscription cancellation. Required billing, security, and audit evidence may be retained according to Hyfens policy.',
+              '$message\n\n${values['processing_at'] != null ? 'Expected processing date: $processingAt\n' : ''}${values['working_day'] != null ? 'Grace milestone: ${_value(values, 'working_day')}\n' : ''}Access: $restriction\nBilling: $billingMessage\n\nAccount deletion is separate from subscription cancellation. Required billing, security, and audit evidence may be retained according to Hyfens policy.',
         );
       case 'invitation':
         return _RenderedContent(
