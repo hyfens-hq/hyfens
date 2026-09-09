@@ -3504,7 +3504,11 @@ final class ControlPlaneHttpServer {
         statusCode: 503,
       );
     }
-    final signature = request.headers.value('x-keplars-signature');
+    // Keplars documents X-Webhook-Signature with a sha256= prefix. Keep the
+    // earlier adapter header as a compatibility fallback for existing senders.
+    final signature =
+        request.headers.value('x-webhook-signature') ??
+        request.headers.value('x-keplars-signature');
     if (signature == null || signature.isEmpty) {
       throw const ControlPlaneException(
         'INVALID_NOTIFICATION_SIGNATURE',

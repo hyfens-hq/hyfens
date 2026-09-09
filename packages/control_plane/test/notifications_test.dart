@@ -94,6 +94,56 @@ void main() {
     expect(rendered.html, isNot(contains('undefined')));
   });
 
+  test('Keplars adapter records the current top-level provider id', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    try {
+      server.listen((request) async {
+        expect(request.method, 'POST');
+        expect(request.uri.path, '/api/v1/send-email/normal');
+        expect(
+          request.headers.value(HttpHeaders.authorizationHeader),
+          'Bearer test-key',
+        );
+        expect(request.headers.value('Idempotency-Key'), 'delivery-1');
+        await request.drain<void>();
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.json
+          ..write(
+            jsonEncode(<String, Object?>{
+              'id': 'msg_current_provider_shape',
+              'object': 'email',
+              'status': 'queued',
+            }),
+          );
+        await request.response.close();
+      });
+
+      final provider = KeplarsNotificationProvider(
+        apiKey: 'test-key',
+        apiBase: Uri.parse('http://127.0.0.1:${server.port}/api/v1'),
+      );
+      final result = await provider.send(
+        const NotificationMessage(
+          to: 'owner@example.com',
+          subject: 'Test notification',
+          preheader: 'Test notification',
+          html: '<p>Test notification</p>',
+          text: 'Test notification',
+          sender: HyfensSenderPolicy.transactional,
+          priority: 'normal',
+          eventId: 'event-1',
+        ),
+        idempotencyKey: 'delivery-1',
+      );
+
+      expect(result.state, NotificationDeliveryState.accepted);
+      expect(result.providerMessageId, 'msg_current_provider_shape');
+    } finally {
+      await server.close(force: true);
+    }
+  });
+
   test('enqueue is idempotent and creates one recipient delivery', () async {
     final event = NotificationEvent(
       key: 'billing.subscription.activated',
@@ -405,6 +455,46 @@ void main() {
       'delivered',
     );
   });
+
+  test(
+    'provider callback accepts the documented Keplars payload and signature',
+    () async {
+      await notifications.enqueue(
+        NotificationEvent(
+          key: 'billing.payment.succeeded',
+          stableKey: 'keplars-payload-1',
+          recipientEmails: const <String>['owner@example.com'],
+          variables: const <String, Object?>{'message': 'Captured.'},
+          occurredAt: DateTime.utc(2026, 9, 9),
+          organizationId: 'org_notifications',
+        ),
+      );
+      await notifications.dispatchPending();
+      final body = utf8.encode(
+        jsonEncode(<String, Object?>{
+          'id': 'evt_keplars_1',
+          'event_type': 'email.delivered',
+          'email_id': 'mail_1',
+          'status': 'delivered',
+        }),
+      );
+      final digest = Hmac(
+        sha256,
+        utf8.encode('callback-secret'),
+      ).convert(body).toString();
+
+      await notifications.applyProviderDeliveryWebhook(
+        rawBody: body,
+        signature: 'sha256=$digest',
+        secret: 'callback-secret',
+      );
+
+      expect(
+        (await store.listJson(notificationDeliveryCollection)).single['state'],
+        'delivered',
+      );
+    },
+  );
 
   test('preview renders without persisting or invoking a provider', () {
     final rendered = NotificationPreview.render(

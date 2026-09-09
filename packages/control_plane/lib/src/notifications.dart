@@ -854,8 +854,14 @@ final class KeplarsNotificationProvider implements NotificationProvider {
       String? messageId;
       try {
         final decoded = jsonDecode(responseText);
-        if (decoded is Map && decoded['email_id'] is String) {
-          messageId = decoded['email_id'] as String;
+        if (decoded is Map) {
+          // Keplars currently returns the message identifier as `id` for the
+          // send API, while delivery callbacks use `email_id`. Accept both
+          // shapes so provider delivery status can be reconciled reliably.
+          final candidate = decoded['email_id'] ?? decoded['id'];
+          if (candidate is String && candidate.isNotEmpty) {
+            messageId = candidate;
+          }
         }
       } on Object {
         // A successful provider response without JSON is still accepted.
@@ -1886,21 +1892,25 @@ final class NotificationService implements HumanAuthNotificationSink {
     required String signature,
     required String secret,
   }) async {
+    final normalizedSignature = signature.startsWith('sha256=')
+        ? signature.substring('sha256='.length)
+        : signature;
     final expected = crypto.Hmac(
       crypto.sha256,
       utf8.encode(secret),
     ).convert(rawBody).toString();
-    if (!_constantTimeEquals(expected, signature)) {
+    if (!_constantTimeEquals(expected, normalizedSignature)) {
       throw const FormatException('Invalid notification provider signature');
     }
     final decoded = jsonDecode(utf8.decode(rawBody));
-    if (decoded is! Map ||
-        decoded['email_id'] is! String ||
-        decoded['event'] is! String) {
+    if (decoded is! Map || decoded['email_id'] == null) {
       throw const FormatException('Invalid notification provider event');
     }
-    final providerMessageId = decoded['email_id'] as String;
-    final providerEvent = decoded['event'] as String;
+    final providerMessageId = decoded['email_id'].toString();
+    final providerEvent = (decoded['event_type'] ?? decoded['event']);
+    if (providerEvent is! String || providerEvent.isEmpty) {
+      throw const FormatException('Invalid notification provider event');
+    }
     final rows = await store.listJson(notificationDeliveryCollection);
     for (final row in rows.where(
       (item) => item['providerMessageId'] == providerMessageId,
