@@ -48,6 +48,9 @@ Hyfens engineering
 - `git diff --check` and branch/PR review.
 - Focused control-plane notification tests: passed (20 tests).
 - Cloud `typecheck:web`, `lint:web`, and `build:web`: passed.
+- Cloud provider-package boundary tests: passed (9 tests) after moving the
+  legacy commercial orchestration behind an explicit compatibility module and
+  preserving the shared provider-package boundary.
 - Full control-plane package suite: failed in 27 unrelated credential/reconciliation/P3E tests, with 31 integration tests skipped because external PostgreSQL/S3/process harnesses were not configured; no failure was in the changed notification files.
 
 ## Next Action
@@ -73,3 +76,4 @@ Code and focused acceptance are complete, but the required natural Keplars callb
 
 - 2026-09-09: Created as the scoped follow-up to the Task 273 runtime blocker and email UX findings.
 - 2026-09-09: Added documented Keplars response-shape support, exact-ID-only callback tests, shared customer date formatting, reset route/CTA, responsive summaries, canonical email mark, and Cloud conflict resolution. Focused checks passed; full control-plane suite retained unrelated pre-existing failures. Verdict remains `BLOCKED` because a natural Keplars callback still cannot correlate to the live send response.
+- 2026-09-09: Final Cloud merge correction committed as `b255aae`; current `apps/web` topology, provider boundary, typecheck, lint, build, and provider tests are clean. Both PRs remain open and unmerged. Natural Keplars callback correlation is still the acceptance blocker.
