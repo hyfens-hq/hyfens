@@ -22,6 +22,14 @@ Future<void> main(List<String> arguments) async {
     final value = options[entry.key];
     if (value != null) values[entry.value] = value;
   }
+  final previewKey = options['preview-notification'];
+  if (previewKey != null) {
+    final rendered = NotificationPreview.render(key: previewKey);
+    stdout.writeln(rendered.html);
+    stdout.writeln('\n--- PLAIN TEXT ---\n');
+    stdout.writeln(rendered.text);
+    return;
+  }
   final config = ControlPlaneConfig.fromEnvironment(values);
   final taskRoleCredentials = config.artifactUseTaskRole
       ? EcsTaskRoleCredentialsProvider.fromEnvironment(environment: values)
@@ -38,20 +46,33 @@ Future<void> main(List<String> arguments) async {
           keyPrefix: config.artifactKeyPrefix,
           region: config.artifactRegion,
         );
-  final emailDelivery = KeplarsHumanMessageDelivery.fromEnvironment(values);
+  final legacyEmailDelivery = KeplarsHumanMessageDelivery.fromEnvironment(
+    values,
+  );
   final store = config.databaseUrl == null
       ? FileControlPlaneStore(config.fileRoot)
       : PostgresControlPlaneStore(
           config.databaseUrl!,
           artifacts: artifactStore,
         );
+  final notifications = NotificationService.fromEnvironment(
+    store: store,
+    values: values,
+  );
+  final queuedEmailDelivery = notifications?.canQueueSensitiveMessages == true
+      ? notifications!.authMessageDelivery()
+      : null;
+  final HumanAuthMessageDelivery? authEmailDelivery =
+      queuedEmailDelivery ?? legacyEmailDelivery;
+  final HumanDeletionMessageDelivery? deletionEmailDelivery =
+      queuedEmailDelivery ?? legacyEmailDelivery;
   final auth = config.auth == null
       ? null
       : HumanAuthService(
           store: store,
           config: config.auth!,
-          messageDelivery: emailDelivery,
-          deletionMessageDelivery: emailDelivery,
+          messageDelivery: authEmailDelivery,
+          deletionMessageDelivery: deletionEmailDelivery,
         );
   final configuredService = ControlPlaneService(
     store: store,
@@ -59,6 +80,7 @@ Future<void> main(List<String> arguments) async {
     deploymentModel: config.deploymentModel,
     razorpayBilling: config.razorpayBilling,
     billingProvider: config.billingProvider,
+    notifications: notifications,
     deletionPolicy: config.deletionPolicy,
   );
   await configuredService.initialize();
@@ -94,6 +116,31 @@ Future<void> main(List<String> arguments) async {
         stdout.write(' ${entry.key}=${entry.value}');
       }
       stdout.writeln();
+    } finally {
+      await store.close();
+      taskRoleCredentials?.close();
+    }
+    return;
+  }
+  if (options.containsKey('process-notifications')) {
+    if (options.containsKey('bootstrap') ||
+        options.containsKey('bootstrap-admin') ||
+        options.containsKey('bootstrap-owner') ||
+        options.containsKey('seed-demo') ||
+        options.containsKey('process-deletions')) {
+      throw ArgumentError(
+        '--process-notifications cannot be combined with another worker or bootstrap mode',
+      );
+    }
+    final configuredNotifications = configuredService.notifications;
+    if (configuredNotifications == null) {
+      throw StateError(
+        '--process-notifications requires a configured notification provider',
+      );
+    }
+    try {
+      final processed = await configuredNotifications.dispatchPending();
+      stdout.writeln('notification_worker_processed=$processed');
     } finally {
       await store.close();
       taskRoleCredentials?.close();
@@ -223,11 +270,18 @@ Future<void> main(List<String> arguments) async {
   final server = ControlPlaneHttpServer(
     configuredService,
     discovery: config.discovery,
-    enterpriseInquiryNotifier:
-        emailDelivery == null ||
-            config.auth?.platformAdminEmails.isEmpty != false
+    enterpriseInquiryNotifier: config.auth?.platformAdminEmails.isEmpty != false
         ? null
-        : (inquiry) => emailDelivery.sendEnterpriseInquiryNotification(
+        : notifications != null
+        ? (inquiry) => notifications
+              .enqueueEnterpriseInquiry(
+                recipients: config.auth!.platformAdminEmails,
+                inquiry: inquiry,
+              )
+              .then((_) {})
+        : legacyEmailDelivery == null
+        ? null
+        : (inquiry) => legacyEmailDelivery.sendEnterpriseInquiryNotification(
             recipients: config.auth!.platformAdminEmails,
             inquiry: inquiry,
           ),
@@ -238,6 +292,7 @@ Future<void> main(List<String> arguments) async {
     ),
     auditRetentionDays: config.auditRetentionDays,
     allowInsecureAuth: config.allowInsecureAuth,
+    notificationProviderWebhookSecret: values['KEPLARS_WEBHOOK_SECRET'],
   );
   final bound = await server.bind(host: config.host, port: config.port);
   stdout.writeln(
@@ -268,6 +323,7 @@ Map<String, String> _options(List<String> arguments) {
       continue;
     }
     if (argument == '--process-deletions' ||
+        argument == '--process-notifications' ||
         argument == '--seed-demo' ||
         argument == '--bootstrap-admin' ||
         argument == '--bootstrap-owner' ||

@@ -210,6 +210,7 @@ final class BillingProviderEventResult {
     required this.status,
     required this.eventId,
     required this.organizationId,
+    this.eventName,
     this.subscription,
     this.checkout,
     this.enterpriseContract,
@@ -221,6 +222,7 @@ final class BillingProviderEventResult {
   final String status;
   final String eventId;
   final String organizationId;
+  final String? eventName;
   final Map<String, Object?>? subscription;
   final Map<String, Object?>? checkout;
   final Map<String, Object?>? enterpriseContract;
@@ -228,10 +230,25 @@ final class BillingProviderEventResult {
   final Map<String, Object?>? refund;
   final Map<String, Object?>? scheduledPlanChange;
 
+  BillingProviderEventResult copyWith({String? eventName}) =>
+      BillingProviderEventResult(
+        status: status,
+        eventId: eventId,
+        organizationId: organizationId,
+        eventName: eventName ?? this.eventName,
+        subscription: subscription,
+        checkout: checkout,
+        enterpriseContract: enterpriseContract,
+        payment: payment,
+        refund: refund,
+        scheduledPlanChange: scheduledPlanChange,
+      );
+
   Map<String, Object?> toJson() => <String, Object?>{
     'status': status,
     'event_id': eventId,
     'organization_id': organizationId,
+    if (eventName != null) 'event_name': eventName,
     if (subscription != null) 'subscription': subscription,
     if (checkout != null) 'checkout': checkout,
     if (enterpriseContract != null) 'enterprise_contract': enterpriseContract,
@@ -2107,12 +2124,13 @@ final class BillingService {
       256,
     );
     final eventName = _providerText(body['event'], 'Razorpay event name', 128);
-    return _applyRazorpayWebhookBody(
+    final result = await _applyRazorpayWebhookBody(
       rawBody: rawBody,
       body: body,
       eventId: eventId,
       eventName: eventName,
     );
+    return result.copyWith(eventName: eventName);
   }
 
   Future<BillingProviderEventResult> _applyRazorpayWebhookBody({

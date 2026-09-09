@@ -315,3 +315,19 @@ The deletion treatment assigned to each data class: `erase`, `anonymize`,
 `retain`, or `temporary_retain`. The classification preserves required audit,
 billing, Enterprise, security, and shared-object evidence without inventing
 legal retention durations.
+
+**Notification Event**:
+A provider-neutral, versioned Hyfens communication consequence emitted after
+an authoritative domain action. It contains normalized recipients, safe
+correlation/provider references, and either non-sensitive variables or an
+encrypted sensitive payload. It is not a Razorpay webhook name.
+
+**Notification Delivery**:
+The durable per-recipient attempt projection for a Notification Event. It
+tracks normalized delivery state, retry attempts, provider message reference,
+and recipient digest without storing unnecessary message or credential data.
+
+**Notification Provider Adapter**:
+The narrow interface that renders a Hyfens Notification Event and submits it
+to a selected transport such as Keplars. Provider responses are normalized and
+must not become the source of truth for billing, entitlement, or account state.

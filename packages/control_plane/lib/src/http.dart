@@ -224,6 +224,7 @@ final class ControlPlaneHttpServer {
     this.periodicRunner,
     this.auditRetentionDays = 365,
     this.allowInsecureAuth = false,
+    this.notificationProviderWebhookSecret,
   }) : limits = limits,
        discovery =
            discovery ??
@@ -242,6 +243,7 @@ final class ControlPlaneHttpServer {
   final ControlPlaneDiscoveryConfig discovery;
   final int auditRetentionDays;
   final bool allowInsecureAuth;
+  final String? notificationProviderWebhookSecret;
   final ReconciliationObservability? reconciliationObservability;
   final ReconciliationPeriodicRunner? periodicRunner;
   final OperatorOverviewProjection _operatorOverview;
@@ -705,6 +707,16 @@ final class ControlPlaneHttpServer {
       if (request.method == 'POST' &&
           _matches(path, const ['v1', 'billing', 'provider', 'webhook'])) {
         await _applyBillingProviderWebhook(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'notifications',
+            'webhooks',
+            'keplars',
+          ])) {
+        await _applyNotificationProviderWebhook(request, requestId);
         return;
       }
       if (request.method == 'POST' &&
@@ -3050,6 +3062,23 @@ final class ControlPlaneHttpServer {
         },
         stableKey: _idempotency(request),
       );
+      await service.notifications?.enqueueOrganizationEvent(
+        organizationId: actor.organizationId,
+        key: 'billing.checkout.initiated',
+        stableKey: 'checkout:${checkout['id']}',
+        entityType: 'billing_checkout',
+        entityId: checkout['id']! as String,
+        correlationId: requestId,
+        variables: <String, Object?>{
+          'plan': checkout['planKey'],
+          'amount':
+              '${checkout['currency']} ${((checkout['amountMinor'] as int) / 100).toStringAsFixed(2)}',
+          'currency': checkout['currency'],
+          'message': 'Your secure Hyfens checkout is ready to continue.',
+          'action_url': 'https://app.hyfens.com/dashboard/billing',
+          'action_label': 'Open billing',
+        },
+      );
     }
     await _json(
       request.response,
@@ -3100,6 +3129,26 @@ final class ControlPlaneHttpServer {
         'currency': result['currency'],
       },
       stableKey: _idempotency(request),
+    );
+    final requestedAmountMinor = result['requestedAmountMinor'];
+    final refundCurrency = result['currency'];
+    final refundAmount = requestedAmountMinor is int && refundCurrency is String
+        ? '$refundCurrency ${(requestedAmountMinor / 100).toStringAsFixed(2)}'
+        : 'See your billing workspace';
+    await service.notifications?.enqueueOrganizationEvent(
+      organizationId: actor.organizationId,
+      key: 'billing.refund.requested',
+      stableKey: 'refund-request:${result['id']}',
+      entityType: 'billing_refund_request',
+      entityId: result['id']! as String,
+      correlationId: requestId,
+      variables: <String, Object?>{
+        'amount': refundAmount,
+        'currency': result['currency'],
+        'status': result['status'],
+        'payment_id': result['paymentId'],
+        'message': 'Your refund request was received and will be reviewed according to the Refund Policy.',
+      },
     );
     await _json(request.response, 201, <String, Object?>{
       ..._customerRefundResponse(result),
@@ -3161,6 +3210,20 @@ final class ControlPlaneHttpServer {
       },
       stableKey: '${resourceId}:${change['revision']}',
     );
+    await service.notifications?.enqueueOrganizationEvent(
+      organizationId: actor.organizationId,
+      key: 'billing.plan_change.requested',
+      stableKey: 'plan-change-request:${change['id']}:${change['revision']}',
+      entityType: 'billing_plan_change',
+      entityId: resourceId,
+      correlationId: requestId,
+      variables: <String, Object?>{
+        'old_plan': change['currentPlanKey'],
+        'new_plan': change['targetPlanKey'],
+        'effective_at': change['effectiveAt'],
+        'message': 'Your requested plan change is being confirmed with the billing provider.',
+      },
+    );
     await _json(request.response, 201, <String, Object?>{
       ...change,
       'request_id': requestId,
@@ -3200,6 +3263,20 @@ final class ControlPlaneHttpServer {
           'status': change['status'],
         },
         stableKey: '${resourceId}:${change['revision']}',
+      );
+      await service.notifications?.enqueueOrganizationEvent(
+        organizationId: actor.organizationId,
+        key: 'billing.plan_change.cancelled',
+        stableKey:
+            'plan-change-cancelled:${change['id']}:${change['revision']}',
+        entityType: 'billing_plan_change',
+        entityId: resourceId,
+        correlationId: requestId,
+        variables: <String, Object?>{
+          'old_plan': change['currentPlanKey'],
+          'new_plan': change['targetPlanKey'],
+          'message': 'Your scheduled plan change was cancelled. Your current plan continues unchanged.',
+        },
       );
     }
     await _json(request.response, 200, <String, Object?>{
@@ -3242,6 +3319,23 @@ final class ControlPlaneHttpServer {
           'scheduled_plan_change_id': cancellation['scheduledPlanChangeId'],
         },
         stableKey: cancellation['subscriptionId']! as String,
+      );
+      final effectivePlan =
+          cancellation['effectivePlan'] is Map<String, Object?>
+          ? cancellation['effectivePlan']! as Map<String, Object?>
+          : null;
+      await service.notifications?.enqueueOrganizationEvent(
+        organizationId: actor.organizationId,
+        key: 'billing.subscription.cancellation_scheduled',
+        stableKey: 'cancellation:${cancellation['subscriptionId']}',
+        entityType: 'billing_cancellation',
+        entityId: cancellation['subscriptionId']! as String,
+        correlationId: requestId,
+        variables: <String, Object?>{
+          'plan': effectivePlan?['planKey'],
+          'effective_at': cancellation['effectiveAt'],
+          'message': 'Renewal is stopped. Your current paid access continues through the paid-through date.',
+        },
       );
     }
     await _json(request.response, 200, <String, Object?>{
@@ -3387,8 +3481,49 @@ final class ControlPlaneHttpServer {
       result: result,
       requestId: requestId,
     );
+    await service.notifications?.enqueueBillingProviderResult(
+      result,
+      requestId: requestId,
+    );
     await _json(request.response, 200, <String, Object?>{
       ...result.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _applyNotificationProviderWebhook(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final notifications = service.notifications;
+    final secret = notificationProviderWebhookSecret;
+    if (notifications == null || secret == null || secret.isEmpty) {
+      throw const ControlPlaneException(
+        'NOTIFICATION_PROVIDER_UNAVAILABLE',
+        'Notification provider delivery callbacks are not configured',
+        statusCode: 503,
+      );
+    }
+    final signature = request.headers.value('x-keplars-signature');
+    if (signature == null || signature.isEmpty) {
+      throw const ControlPlaneException(
+        'INVALID_NOTIFICATION_SIGNATURE',
+        'Notification provider signature is required',
+        statusCode: 401,
+      );
+    }
+    final rawBody = await _bytesBody(
+      request,
+      maxBytes: limits.maxJsonBodyBytes,
+      tooLargeCode: 'REQUEST_TOO_LARGE',
+    );
+    await notifications.applyProviderDeliveryWebhook(
+      rawBody: rawBody,
+      signature: signature,
+      secret: secret,
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'status': 'accepted',
       'request_id': requestId,
     });
   }
@@ -3642,6 +3777,47 @@ final class ControlPlaneHttpServer {
       },
       stableKey: '$resourceId:${body['status']}',
     );
+    final providerStatus = providerRefund is Map
+        ? providerRefund['status']
+        : body['status'];
+    final refundNotificationKey = switch (providerStatus) {
+      'pending' => 'billing.refund.initiated',
+      'processed' => 'billing.refund.completed',
+      'failed' => 'billing.refund.failed',
+      _ => null,
+    };
+    if (refundNotificationKey != null) {
+      final refundAmountMinor = providerRefund is Map
+          ? providerRefund['amountMinor']
+          : body['amount_minor'];
+      final refundCurrency = providerRefund is Map
+          ? providerRefund['currency']
+          : body['currency'];
+      final refundAmount = refundAmountMinor is int && refundCurrency is String
+          ? '$refundCurrency ${(refundAmountMinor / 100).toStringAsFixed(2)}'
+          : 'See your billing workspace';
+      await service.notifications?.enqueueOrganizationEvent(
+        organizationId: organizationId,
+        key: refundNotificationKey,
+        stableKey: 'refund-provider:${resourceId}:${body['status']}',
+        entityType: 'billing_provider_refund',
+        entityId: resourceId,
+        correlationId: requestId,
+        variables: <String, Object?>{
+          'amount': refundAmount,
+          'currency': refundCurrency,
+          'status': providerStatus,
+          'payment_id': result['paymentId'],
+          'organization': organizationId,
+          'message': switch (refundNotificationKey) {
+            'billing.refund.initiated' => 'The approved refund has been sent to the payment provider for processing.',
+            'billing.refund.completed' =>
+              'The approved refund was processed by the payment provider.',
+            _ => 'The payment provider could not complete the approved refund. Hyfens will retry or reconcile it.',
+          },
+        },
+      );
+    }
     await _json(request.response, 200, <String, Object?>{
       ...result,
       'request_id': requestId,
@@ -3890,6 +4066,10 @@ final class ControlPlaneHttpServer {
       result: result,
       requestId: requestId,
       actorId: actor.id,
+    );
+    await service.notifications?.enqueueBillingProviderResult(
+      result,
+      requestId: requestId,
     );
     await _json(request.response, 200, <String, Object?>{
       ...result.toJson(),

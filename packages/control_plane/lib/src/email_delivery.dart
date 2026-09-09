@@ -1,13 +1,11 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'human_auth.dart';
+import 'notifications.dart';
 
-/// Production delivery for the existing human-auth message seams.
-///
-/// Keplars owns queueing and delivery. The control plane owns token creation,
-/// persistence, expiry, and purpose separation. Raw tokens are included only
-/// in the intended recipient message and are never logged or persisted here.
+/// Compatibility delivery for deployments that have not enabled the durable
+/// encrypted notification queue. It still uses the shared Hyfens renderer and
+/// sender policy; the notification worker is preferred in managed Cloud.
 final class KeplarsHumanMessageDelivery
     implements HumanAuthMessageDelivery, HumanDeletionMessageDelivery {
   KeplarsHumanMessageDelivery({
@@ -17,29 +15,27 @@ final class KeplarsHumanMessageDelivery
     required Uri dashboardOrigin,
     required Uri marketingOrigin,
     HttpClient Function()? clientFactory,
-  }) : _apiKey = apiKey,
-       _from = from,
-       _dashboardOrigin = dashboardOrigin,
-       _marketingOrigin = marketingOrigin,
-       _clientFactory = clientFactory ?? HttpClient.new {
-    if (_apiKey.trim().isEmpty) {
+  }) : _provider = KeplarsNotificationProvider(
+         apiKey: apiKey,
+         from: from,
+         fromName: fromName,
+         clientFactory: clientFactory,
+       ),
+       _renderer = NotificationRenderer(
+         dashboardOrigin: dashboardOrigin,
+         marketingOrigin: marketingOrigin,
+       ) {
+    if (apiKey.trim().isEmpty) {
       throw ArgumentError.value(apiKey, 'apiKey', 'must not be empty');
     }
-    if (_from.trim().isEmpty) {
+    if (from.trim().isEmpty) {
       throw ArgumentError.value(from, 'from', 'must not be empty');
     }
-    _requireHttps(_dashboardOrigin, 'dashboardOrigin');
-    _requireHttps(_marketingOrigin, 'marketingOrigin');
   }
 
-  static final Uri _apiBase = Uri.parse('https://api.keplars.com/api/v1');
-
-  final String _apiKey;
-  final String _from;
+  final KeplarsNotificationProvider _provider;
+  final NotificationRenderer _renderer;
   final String fromName;
-  final Uri _dashboardOrigin;
-  final Uri _marketingOrigin;
-  final HttpClient Function() _clientFactory;
 
   /// Returns null for self-hosted deployments that intentionally have no
   /// production message provider. A managed Cloud deployment with a Keplars
@@ -67,6 +63,7 @@ final class KeplarsHumanMessageDelivery
     return KeplarsHumanMessageDelivery(
       apiKey: apiKey,
       from: from,
+      fromName: values['HYFENS_EMAIL_FROM_NAME'] ?? 'Hyfens',
       dashboardOrigin: dashboard,
       marketingOrigin: marketing,
     );
@@ -78,10 +75,16 @@ final class KeplarsHumanMessageDelivery
     required String token,
     required DateTime expiresAt,
   }) => _send(
-    priority: 'instant',
+    key: 'auth.email.verification_requested',
+    stableKey:
+        'verification:$email:${expiresAt.toUtc().toIso8601String()}:$token',
     to: email,
-    subject: 'Verify your Hyfens Cloud account',
-    body: _verificationBody(token: token, expiresAt: expiresAt),
+    variables: <String, Object?>{
+      'token': token,
+      'expires_at': expiresAt.toUtc().toIso8601String(),
+      'action_url': _renderer.dashboardOrigin.toString(),
+      'action_label': 'Open Hyfens Cloud',
+    },
   );
 
   @override
@@ -90,10 +93,15 @@ final class KeplarsHumanMessageDelivery
     required String token,
     required DateTime expiresAt,
   }) => _send(
-    priority: 'instant',
+    key: 'auth.password.recovery_requested',
+    stableKey: 'recovery:$email:${expiresAt.toUtc().toIso8601String()}:$token',
     to: email,
-    subject: 'Recover your Hyfens Cloud account',
-    body: _recoveryBody(token: token, expiresAt: expiresAt),
+    variables: <String, Object?>{
+      'token': token,
+      'expires_at': expiresAt.toUtc().toIso8601String(),
+      'action_url': _renderer.dashboardOrigin.toString(),
+      'action_label': 'Open Hyfens Cloud',
+    },
   );
 
   @override
@@ -101,135 +109,63 @@ final class KeplarsHumanMessageDelivery
     required String email,
     required String token,
     required DateTime expiresAt,
-  }) {
-    final link = _marketingOrigin
-        .replace(
-          path: '/account-deletion',
-          queryParameters: <String, String>{'token': token},
-        )
-        .toString();
-    return _send(
-      priority: 'high',
-      to: email,
-      subject: 'Verify your Hyfens account-deletion request',
-      body: _deletionBody(link: link, expiresAt: expiresAt),
-    );
-  }
+  }) => _send(
+    key: 'account.deletion.requested',
+    stableKey: 'deletion:$email:${expiresAt.toUtc().toIso8601String()}:$token',
+    to: email,
+    variables: <String, Object?>{
+      'token': token,
+      'expires_at': expiresAt.toUtc().toIso8601String(),
+      'action_url': _renderer.marketingOrigin
+          .replace(
+            path: '/account-deletion',
+            queryParameters: <String, String>{'token': token},
+          )
+          .toString(),
+      'action_label': 'Review deletion request',
+      'message': 'Someone requested deletion of a Hyfens Cloud account associated with this address.',
+    },
+  );
 
   Future<void> sendEnterpriseInquiryNotification({
     required Iterable<String> recipients,
     required Map<String, Object?> inquiry,
   }) async {
-    final body = _enterpriseInquiryBody(inquiry);
     for (final recipient in recipients) {
       await _send(
-        priority: 'high',
+        key: 'ops.enterprise.inquiry_received',
+        stableKey: 'enterprise:${inquiry['id']}:$recipient',
         to: recipient,
-        subject: 'New Hyfens Enterprise inquiry',
-        body: body,
+        variables: <String, Object?>{
+          'inquiry_id': inquiry['id'],
+          'contact': inquiry['email'],
+          'organization': inquiry['organization'],
+          'message': inquiry['message'],
+        },
       );
     }
   }
 
   Future<void> _send({
-    required String priority,
+    required String key,
+    required String stableKey,
     required String to,
-    required String subject,
-    required String body,
+    required Map<String, Object?> variables,
   }) async {
-    final client = _clientFactory();
-    try {
-      final request = await client.postUrl(
-        _apiBase.replace(path: '${_apiBase.path}/send-email/$priority'),
-      );
-      request.headers
-        ..set(HttpHeaders.authorizationHeader, 'Bearer $_apiKey')
-        ..contentType = ContentType.json;
-      request.add(
-        utf8.encode(
-          jsonEncode(<String, Object?>{
-            // Keplars accepts recipients as a collection. Sending a scalar
-            // string is parsed as an iterable of characters by the provider.
-            'to': <String>[to],
-            'subject': subject,
-            'body': body,
-            'from': _from,
-            'from_name': fromName,
-          }),
-        ),
-      );
-      final response = await request.close();
-      await response.drain<void>();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw StateError(
-          'Transactional email provider rejected the message '
-          '(${response.statusCode})',
-        );
-      }
-    } finally {
-      client.close(force: true);
-    }
+    final event = NotificationEvent(
+      key: key,
+      stableKey: stableKey,
+      recipientEmails: <String>[to],
+      variables: variables,
+      occurredAt: DateTime.now().toUtc(),
+      source: 'human_auth',
+      sensitive: key.startsWith('auth.') || key.startsWith('account.deletion'),
+    );
+    await _provider.send(
+      _renderer.messageFor(event, to),
+      idempotencyKey: event.id,
+    );
   }
-
-  String _verificationBody({
-    required String token,
-    required DateTime expiresAt,
-  }) => _messageShell(
-    title: 'Verify your Hyfens Cloud account',
-    content:
-        '''
-      <p>Use this one-time verification code to finish creating your Hyfens Cloud workspace:</p>
-      <p><strong>${_escape(token)}</strong></p>
-      <p><a href="${_escape(_dashboardOrigin.toString())}">Open Hyfens Cloud</a> and enter the code.</p>
-      <p>This code expires at ${_escape(expiresAt.toUtc().toIso8601String())}.</p>
-    ''',
-  );
-
-  String _recoveryBody({required String token, required DateTime expiresAt}) =>
-      _messageShell(
-        title: 'Recover your Hyfens Cloud account',
-        content:
-            '''
-      <p>Use this one-time recovery code to choose a new password:</p>
-      <p><strong>${_escape(token)}</strong></p>
-      <p><a href="${_escape(_dashboardOrigin.toString())}">Open Hyfens Cloud</a> and enter the code.</p>
-      <p>This code expires at ${_escape(expiresAt.toUtc().toIso8601String())}.</p>
-    ''',
-      );
-
-  String _deletionBody({required String link, required DateTime expiresAt}) =>
-      _messageShell(
-        title: 'Verify your account-deletion request',
-        content:
-            '''
-      <p>Someone requested deletion of a Hyfens Cloud account associated with this address.</p>
-      <p><a href="${_escape(link)}">Review and verify the request</a>.</p>
-      <p>This link expires at ${_escape(expiresAt.toUtc().toIso8601String())} and can be used once.</p>
-      <p>If you did not request this, no action is required.</p>
-    ''',
-      );
-
-  String _enterpriseInquiryBody(Map<String, Object?> inquiry) => _messageShell(
-    title: 'New Hyfens Enterprise inquiry',
-    content:
-        '''
-      <p>A new Enterprise inquiry was received through Hyfens Cloud.</p>
-      <p><strong>Inquiry reference:</strong> ${_escape(_inquiryText(inquiry, 'id'))}</p>
-      <p><strong>Contact:</strong> ${_escape(_inquiryText(inquiry, 'email'))}</p>
-      <p><strong>Name:</strong> ${_escape(_inquiryText(inquiry, 'name'))}</p>
-      <p><strong>Organization:</strong> ${_escape(_inquiryText(inquiry, 'organization'))}</p>
-      <p><strong>Message:</strong></p>
-      <p>${_escape(_inquiryText(inquiry, 'message')).replaceAll('\n', '<br>')}</p>
-    ''',
-  );
-
-  static String _inquiryText(Map<String, Object?> inquiry, String key) {
-    final value = inquiry[key];
-    return value is String ? value : '';
-  }
-
-  String _messageShell({required String title, required String content}) =>
-      '<!doctype html><html><body><h1>${_escape(title)}</h1>$content</body></html>';
 
   static String? _meaningful(String? value) {
     final normalized = value?.trim();
@@ -243,17 +179,4 @@ final class KeplarsHumanMessageDelivery
       .where((item) => item.scheme == 'https' && item.host.isNotEmpty)
       .map((item) => item.replace(path: '', query: null, fragment: null))
       .toList(growable: false);
-
-  static void _requireHttps(Uri value, String label) {
-    if (value.scheme != 'https' || value.host.isEmpty) {
-      throw ArgumentError('$label must be an HTTPS origin');
-    }
-  }
-
-  static String _escape(String value) => value
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;');
 }

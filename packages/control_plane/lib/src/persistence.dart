@@ -156,6 +156,28 @@ abstract interface class BillingRefundTransactionStore {
   );
 }
 
+/// Optional durable claim/compare-and-set support for notification delivery.
+///
+/// A worker must claim a delivery before calling an external provider. The
+/// lease lets another worker recover a process that stopped while the provider
+/// call was in flight, while the claim check prevents that stale worker from
+/// overwriting the newer worker's result. Stores without this seam retain the
+/// single-process dispatcher fallback.
+abstract interface class NotificationDeliveryClaimStore {
+  Future<Map<String, Object?>?> claimNotificationDelivery({
+    required String deliveryId,
+    required DateTime now,
+    required DateTime leaseUntil,
+    required String claimId,
+  });
+
+  Future<bool> updateClaimedNotificationDelivery({
+    required String deliveryId,
+    required String claimId,
+    required Map<String, Object?> value,
+  });
+}
+
 abstract interface class ControlPlaneStore
     implements ArtifactStore, ObservationStore, RolloutTransitionStore {
   Future<void> initialize();
@@ -225,11 +247,13 @@ final class FileControlPlaneStore
         JsonRecordDeletion,
         OneTimeTokenConsumption,
         BoundedObservationDeletion,
-        BillingRefundTransactionStore {
+        BillingRefundTransactionStore,
+        NotificationDeliveryClaimStore {
   FileControlPlaneStore(this.root);
 
   final Directory root;
   Future<void> _sessionOperationTail = Future<void>.value();
+  Future<void> _notificationOperationTail = Future<void>.value();
   final Map<String, Future<void>> _billingRefundTails =
       <String, Future<void>>{};
 
@@ -278,6 +302,8 @@ final class FileControlPlaneStore
       'organization_deletion_requests',
       'deletion_artifact_items',
       'deletion_evidence',
+      'notification_events',
+      'notification_deliveries',
     ]) {
       await Directory(p.join(root.path, name)).create(recursive: true);
     }
@@ -304,6 +330,43 @@ final class FileControlPlaneStore
       }
     }
   }
+
+  @override
+  Future<Map<String, Object?>?> claimNotificationDelivery({
+    required String deliveryId,
+    required DateTime now,
+    required DateTime leaseUntil,
+    required String claimId,
+  }) => _notificationOperation(() async {
+    const collection = 'notification_deliveries';
+    final current = await readJson(collection, deliveryId);
+    if (current == null || !_notificationClaimIsEligible(current, now)) {
+      return null;
+    }
+    final updated = <String, Object?>{
+      ...current,
+      'state': 'processing',
+      'attempts': (current['attempts'] as int? ?? 0) + 1,
+      'claimId': claimId,
+      'processingAt': now.toUtc().toIso8601String(),
+      'processingLeaseUntil': leaseUntil.toUtc().toIso8601String(),
+    };
+    await replaceJson(collection, deliveryId, updated);
+    return updated;
+  });
+
+  @override
+  Future<bool> updateClaimedNotificationDelivery({
+    required String deliveryId,
+    required String claimId,
+    required Map<String, Object?> value,
+  }) => _notificationOperation(() async {
+    const collection = 'notification_deliveries';
+    final current = await readJson(collection, deliveryId);
+    if (current == null || current['claimId'] != claimId) return false;
+    await replaceJson(collection, deliveryId, value);
+    return true;
+  });
 
   @override
   Future<void> checkReadiness() async {
@@ -708,6 +771,33 @@ final class FileControlPlaneStore
       onError: (Object _, StackTrace __) {},
     );
     return result;
+  }
+
+  Future<T> _notificationOperation<T>(Future<T> Function() action) {
+    final result = _notificationOperationTail.then((_) => action());
+    _notificationOperationTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return result;
+  }
+
+  bool _notificationClaimIsEligible(
+    Map<String, Object?> delivery,
+    DateTime now,
+  ) {
+    final state = delivery['state'];
+    if (state == 'pending' || state == 'soft_failed') {
+      final nextAttemptAt = delivery['nextAttemptAt'];
+      final next = nextAttemptAt is String
+          ? DateTime.tryParse(nextAttemptAt)
+          : null;
+      return next == null || !next.isAfter(now.toUtc());
+    }
+    if (state != 'processing') return false;
+    final lease = delivery['processingLeaseUntil'];
+    final leaseUntil = lease is String ? DateTime.tryParse(lease) : null;
+    return leaseUntil == null || !leaseUntil.isAfter(now.toUtc());
   }
 
   File _jsonFile(String collection, String id) =>

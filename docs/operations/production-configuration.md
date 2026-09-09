@@ -30,6 +30,12 @@ operator/provider selection.
 | `HYFENS_AUTH_VERIFY_KEYS` | key rotation | JSON map of retained key IDs to base64 public keys | no | VERIFIED LOCALLY |
 | `HYFENS_AUTH_ACCESS_TTL` | optional | short-lived access JWT lifetime; default `15m` | no | VERIFIED LOCALLY |
 | `HYFENS_AUTH_SESSION_TTL` | optional | revocable session lifetime; default `30d` | no | VERIFIED LOCALLY |
+| `KEPLARS_API_KEY` | managed transactional email | Keplars API credential | yes | PROVIDER DEPENDENT |
+| `KEPLARS_WEBHOOK_SECRET` | managed transactional email callbacks | Keplars HMAC secret | yes | PROVIDER DEPENDENT |
+| `HYFENS_EMAIL_FROM` | managed transactional email | approved sender; default `no-reply@hyfens.com` | no | VERIFIED LOCALLY |
+| `HYFENS_EMAIL_FROM_NAME` | managed transactional email | sender display name | no | VERIFIED LOCALLY |
+| `HYFENS_WEB_ORIGINS` | notification links | comma-separated HTTPS dashboard/marketing origins | no | VERIFIED LOCALLY |
+| `HYFENS_NOTIFICATION_PAYLOAD_KEY` | queued verification/recovery/deletion messages | base64-encoded 32-byte AES-GCM key | yes | VERIFIED LOCALLY + PROTECTED CONFIG REQUIRED |
 
 `HYFENS_DATABASE_URL` and the artifact endpoint are mutually composable: the
 metadata store and artifact store remain separate authorities. A patch signing
@@ -107,3 +113,28 @@ owner for an existing scope with the supported `--bootstrap-owner
 credentials, access JWTs, and private auth signing seeds remain outside the
 repository. The existing opaque control/delivery credentials remain supported
 for bootstrap, service accounts, automation, and delivery compatibility.
+
+## Notification worker
+
+Managed Cloud invokes the bounded notification dispatcher separately from the
+HTTP process:
+
+```text
+dart run bin/control_plane.dart --process-notifications
+```
+
+The worker requires `KEPLARS_API_KEY`. Queueing verification, recovery, or
+deletion messages additionally requires `HYFENS_NOTIFICATION_PAYLOAD_KEY`; the
+HTTP process then stores encrypted payloads and the worker decrypts them only
+in memory immediately before rendering. Provider callbacks, when enabled, are
+posted to `POST /v1/notifications/webhooks/keplars` with the raw-body HMAC in
+`X-Keplars-Signature` and `KEPLARS_WEBHOOK_SECRET`.
+
+For a local provider-free template preview, use:
+
+```text
+dart run bin/control_plane.dart --preview-notification billing.payment.failed
+```
+
+Preview mode renders deterministic HTML and plain text and does not initialize
+the database or send an email.

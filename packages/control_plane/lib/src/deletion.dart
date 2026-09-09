@@ -8,6 +8,7 @@ import 'domain.dart';
 import 'encoding.dart';
 import 'errors.dart';
 import 'human_auth.dart';
+import 'notifications.dart';
 import 'persistence.dart';
 
 const String accountDeletionRequestCollection = 'account_deletion_requests';
@@ -113,6 +114,7 @@ final class AccountDeletionService {
     this.humanAuth,
     required this.billing,
     required this.deploymentModel,
+    this.notifications,
     this.policy = const DeletionPolicy(),
     DateTime Function()? clock,
   }) : _clock = clock ?? (() => DateTime.now().toUtc()) {
@@ -130,6 +132,7 @@ final class AccountDeletionService {
   final HumanAuthService? humanAuth;
   final BillingService billing;
   final DeploymentModel deploymentModel;
+  final NotificationService? notifications;
   final DeletionPolicy policy;
   final DateTime Function() _clock;
   Future<void> _writeTail = Future<void>.value();
@@ -207,6 +210,23 @@ final class AccountDeletionService {
         'source': source,
         'ownership_required_count': requiredOwnership.length,
         'status': request['status'],
+      },
+    );
+    await _notify(
+      key: 'account.deletion.requested',
+      stableKey: accountRequestId,
+      recipient: user.email,
+      organizationId: auditOrganizationId == 'system'
+          ? null
+          : auditOrganizationId,
+      entityType: 'account_deletion_request',
+      entityId: accountRequestId,
+      correlationId: requestId,
+      variables: <String, Object?>{
+        'message': requiredOwnership.isNotEmpty
+            ? 'Your account deletion request needs ownership resolution before it can proceed.'
+            : 'Your account deletion request is scheduled. You can cancel it during the grace period.',
+        'effective_at': request['gracePeriodEndsAt'],
       },
     );
     return request;
@@ -393,6 +413,20 @@ final class AccountDeletionService {
         'billing_status': request['billingStop'],
       },
     );
+    await _notify(
+      key: 'organization.deletion.requested',
+      stableKey: id,
+      recipient: user.email,
+      organizationId: organizationId,
+      entityType: 'organization_deletion_request',
+      entityId: id,
+      correlationId: requestId,
+      variables: <String, Object?>{
+        'organization': organization.name,
+        'message': 'Deletion of this Cloud organization is scheduled. Customer data remains available during the grace period.',
+        'effective_at': request['gracePeriodEndsAt'],
+      },
+    );
     return request;
   });
 
@@ -457,6 +491,21 @@ final class AccountDeletionService {
       resourceId: id,
       metadata: const <String, Object?>{},
     );
+    final user = await store.readJson('users', userId);
+    if (user?['email'] is String) {
+      await _notify(
+        key: 'account.deletion.cancelled',
+        stableKey: id,
+        recipient: user!['email']! as String,
+        organizationId: await _auditOrganizationForUser(userId),
+        entityType: 'account_deletion_request',
+        entityId: id,
+        correlationId: requestId,
+        variables: const <String, Object?>{
+          'message': 'Your Hyfens account deletion request was cancelled.',
+        },
+      );
+    }
     return updated;
   });
 
@@ -525,6 +574,21 @@ final class AccountDeletionService {
       resourceId: id,
       metadata: const <String, Object?>{},
     );
+    if (user.email.isNotEmpty) {
+      await _notify(
+        key: 'organization.deletion.cancelled',
+        stableKey: id,
+        recipient: user.email,
+        organizationId: organizationId,
+        entityType: 'organization_deletion_request',
+        entityId: id,
+        correlationId: requestId,
+        variables: <String, Object?>{
+          'organization': organizationId,
+          'message': 'Your Cloud organization deletion request was cancelled.',
+        },
+      );
+    }
     return updated;
   });
 
@@ -828,6 +892,20 @@ final class AccountDeletionService {
       resourceId: requestId,
       metadata: const <String, Object?>{'retention': 'classified'},
     );
+    await _notify(
+      key: 'account.deleted',
+      stableKey: requestId,
+      recipient: user.email,
+      organizationId: _auditOrganization(user) == 'system'
+          ? null
+          : _auditOrganization(user),
+      entityType: 'account_deletion_request',
+      entityId: requestId,
+      correlationId: requestId,
+      variables: const <String, Object?>{
+        'message': 'Your Hyfens account deletion is complete.',
+      },
+    );
     return completed;
   }
 
@@ -999,7 +1077,66 @@ final class AccountDeletionService {
         'artifact_bytes': 'shared_reference_checked',
       },
     );
+    final ownerId = request['requestedBy'];
+    final owner = ownerId is String
+        ? await store.readJson('users', ownerId)
+        : null;
+    if (owner?['email'] is String) {
+      await _notify(
+        key: 'organization.deleted',
+        stableKey: requestId,
+        recipient: owner!['email']! as String,
+        organizationId: organizationId,
+        entityType: 'organization_deletion_request',
+        entityId: requestId,
+        correlationId: requestId,
+        variables: <String, Object?>{
+          'organization': 'Deleted organization',
+          'message': 'Deletion of the Hyfens Cloud organization and its customer-owned data is complete. Required evidence remains according to policy.',
+        },
+      );
+    }
     return completed;
+  }
+
+  Future<void> _notify({
+    required String key,
+    required String stableKey,
+    required String recipient,
+    required String? organizationId,
+    required String entityType,
+    required String entityId,
+    required String correlationId,
+    required Map<String, Object?> variables,
+  }) async {
+    final service = notifications;
+    if (service == null) return;
+    try {
+      await service.enqueue(
+        NotificationEvent(
+          key: key,
+          stableKey: stableKey,
+          recipientEmails: <String>[recipient],
+          variables: variables,
+          occurredAt: _now(),
+          organizationId: organizationId,
+          entityType: entityType,
+          entityId: entityId,
+          source: 'deletion',
+          correlationId: correlationId,
+        ),
+      );
+    } on Object catch (error) {
+      await _audit(
+        requestId: correlationId,
+        organizationId: organizationId ?? 'system',
+        actorId: 'hyfens:notification-worker',
+        action: 'notification.enqueue_failed',
+        resourceType: entityType,
+        resourceId: entityId,
+        metadata: <String, Object?>{'error': error.runtimeType.toString()},
+      );
+    }
   }
 
   Future<void> _deleteArtifactRecord(

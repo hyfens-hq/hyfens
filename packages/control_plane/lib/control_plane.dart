@@ -21,6 +21,7 @@ export 'src/enterprise_billing.dart';
 export 'src/errors.dart';
 export 'src/http.dart';
 export 'src/human_auth.dart';
+export 'src/notifications.dart';
 export 'src/observation.dart';
 export 'src/operator_overview.dart';
 export 'src/p3e5_integration.dart';

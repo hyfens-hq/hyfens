@@ -883,6 +883,16 @@ abstract interface class HumanDeletionMessageDelivery {
   });
 }
 
+/// Provider-neutral hook for security notifications emitted by the auth
+/// domain. The auth service remains the authority for password changes; a
+/// notification sink only records the consequence for later delivery.
+abstract interface class HumanAuthNotificationSink {
+  Future<void> sendPasswordChanged({
+    required HumanUserRecord user,
+    required DateTime occurredAt,
+  });
+}
+
 final class HumanRegistrationResult {
   const HumanRegistrationResult({required this.expiresAt});
 
@@ -1112,6 +1122,7 @@ final class HumanAuthService {
     required this.config,
     this.messageDelivery,
     this.deletionMessageDelivery,
+    this.notificationSink,
     Random? random,
     DateTime Function()? clock,
   }) : _random = random ?? Random.secure(),
@@ -1145,6 +1156,7 @@ final class HumanAuthService {
   final HumanAuthConfig config;
   final HumanAuthMessageDelivery? messageDelivery;
   final HumanDeletionMessageDelivery? deletionMessageDelivery;
+  HumanAuthNotificationSink? notificationSink;
   final Random _random;
   final DateTime Function() _clock;
   final Ed25519 _ed25519 = DartEd25519();
@@ -1166,6 +1178,12 @@ final class HumanAuthService {
     Future<void> Function(String organizationId)? check,
   ) {
     _memberAdmissionCheck = check;
+  }
+
+  /// Installs the notification consequence sink without making authentication
+  /// depend on a concrete mail provider or queue implementation.
+  void setNotificationSink(HumanAuthNotificationSink? sink) {
+    notificationSink = sink;
   }
 
   Future<void> initialize() async {
@@ -1938,6 +1956,16 @@ final class HumanAuthService {
         expectedSecretHash: session.secretHash,
         revokedAt: now,
       );
+    }
+    try {
+      await notificationSink?.sendPasswordChanged(
+        user: updated,
+        occurredAt: now,
+      );
+    } on Object {
+      // The password mutation and session revocation are authoritative. A
+      // provider/queue outage must not make a completed password change look
+      // unsuccessful; the notification worker can reconcile the failure.
     }
   });
 

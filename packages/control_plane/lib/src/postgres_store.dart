@@ -160,7 +160,8 @@ final class PostgresControlPlaneStore
         JsonRecordDeletion,
         OneTimeTokenConsumption,
         BoundedObservationDeletion,
-        BillingRefundTransactionStore {
+        BillingRefundTransactionStore,
+        NotificationDeliveryClaimStore {
   PostgresControlPlaneStore(
     String connectionString, {
     ArtifactStore? artifacts,
@@ -337,6 +338,70 @@ final class PostgresControlPlaneStore
     // workers to approve more than the captured balance.
     await session.execute('SELECT pg_advisory_xact_lock(7812452)');
     return action(_PostgresBillingRefundTransaction(session, this));
+  });
+
+  @override
+  Future<Map<String, Object?>?> claimNotificationDelivery({
+    required String deliveryId,
+    required DateTime now,
+    required DateTime leaseUntil,
+    required String claimId,
+  }) => _pool.runTx((session) async {
+    final result = await session.execute(
+      Sql.named(
+        'SELECT body::text AS body_json FROM control_plane_records '
+        'WHERE collection = \'notification_deliveries\' '
+        'AND record_id = @id:text FOR UPDATE',
+      ),
+      parameters: <String, Object?>{'id': deliveryId},
+    );
+    if (result.isEmpty) return null;
+    final current = _decodeBody(result.first.toColumnMap()['body_json']);
+    if (!_notificationClaimIsEligible(current, now)) return null;
+    final updated = <String, Object?>{
+      ...current,
+      'state': 'processing',
+      'attempts': (current['attempts'] as int? ?? 0) + 1,
+      'claimId': claimId,
+      'processingAt': now.toUtc().toIso8601String(),
+      'processingLeaseUntil': leaseUntil.toUtc().toIso8601String(),
+    };
+    await session.execute(
+      Sql.named(
+        'UPDATE control_plane_records SET organization_id = @organization:text, '
+        'body = @body:jsonb, updated_at = now() '
+        'WHERE collection = \'notification_deliveries\' AND record_id = @id:text',
+      ),
+      parameters: <String, Object?>{
+        'organization': updated['organizationId'],
+        'body': updated,
+        'id': deliveryId,
+      },
+    );
+    return updated;
+  });
+
+  @override
+  Future<bool> updateClaimedNotificationDelivery({
+    required String deliveryId,
+    required String claimId,
+    required Map<String, Object?> value,
+  }) => _pool.runTx((session) async {
+    final result = await session.execute(
+      Sql.named(
+        'UPDATE control_plane_records SET organization_id = @organization:text, '
+        'body = @body:jsonb, updated_at = now() '
+        'WHERE collection = \'notification_deliveries\' '
+        'AND record_id = @id:text AND body->>\'claimId\' = @claim:text',
+      ),
+      parameters: <String, Object?>{
+        'organization': value['organizationId'],
+        'body': value,
+        'id': deliveryId,
+        'claim': claimId,
+      },
+    );
+    return result.affectedRows == 1;
   });
 
   @override
@@ -1035,6 +1100,24 @@ final class PostgresControlPlaneStore
     return decoded.map<String, Object?>(
       (key, value) => MapEntry('$key', value),
     );
+  }
+
+  bool _notificationClaimIsEligible(
+    Map<String, Object?> delivery,
+    DateTime now,
+  ) {
+    final state = delivery['state'];
+    if (state == 'pending' || state == 'soft_failed') {
+      final nextAttemptAt = delivery['nextAttemptAt'];
+      final next = nextAttemptAt is String
+          ? DateTime.tryParse(nextAttemptAt)
+          : null;
+      return next == null || !next.isAfter(now.toUtc());
+    }
+    if (state != 'processing') return false;
+    final lease = delivery['processingLeaseUntil'];
+    final leaseUntil = lease is String ? DateTime.tryParse(lease) : null;
+    return leaseUntil == null || !leaseUntil.isAfter(now.toUtc());
   }
 
   bool _sameBytes(List<int> left, List<int> right) {

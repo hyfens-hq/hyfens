@@ -18,6 +18,7 @@ import 'domain.dart';
 import 'encoding.dart';
 import 'errors.dart';
 import 'human_auth.dart';
+import 'notifications.dart';
 import 'observation.dart';
 import 'p3e_auto_halt.dart';
 import 'p3e_auto_halt_applicability.dart';
@@ -64,6 +65,7 @@ final class ControlPlaneService {
     BillingService? billingService,
     RazorpayBillingConfig? razorpayBilling,
     this.billingProvider,
+    this.notifications,
     this.deletionPolicy = const DeletionPolicy(),
   }) : _random = random ?? Random.secure(),
        _clock = clock ?? (() => DateTime.now().toUtc()) {
@@ -93,6 +95,7 @@ final class ControlPlaneService {
             )
           : null,
     );
+    humanAuth?.setNotificationSink(notifications);
     deletion = humanAuth == null
         ? null
         : AccountDeletionService(
@@ -100,6 +103,7 @@ final class ControlPlaneService {
             humanAuth: humanAuth,
             billing: billing,
             deploymentModel: deploymentModel,
+            notifications: notifications,
             policy: deletionPolicy,
             clock: _clock,
           );
@@ -113,6 +117,7 @@ final class ControlPlaneService {
   final HumanAuthService? humanAuth;
   final DeploymentModel deploymentModel;
   final BillingProviderBridgeConfig? billingProvider;
+  final NotificationService? notifications;
   final DeletionPolicy deletionPolicy;
   final ArtifactRetentionPolicy artifactRetentionPolicy =
       const ArtifactRetentionPolicy();
@@ -449,6 +454,28 @@ final class ControlPlaneService {
         idempotencyKey: 'first-org:${verification.user.id}',
         requestId: requestId,
       );
+      final notificationService = notifications;
+      if (notificationService != null) {
+        await notificationService.enqueue(
+          NotificationEvent(
+            key: 'auth.registration.completed',
+            stableKey: 'registration:${verification.user.id}',
+            recipientEmails: <String>[verification.user.email],
+            variables: <String, Object?>{
+              'organization': name,
+              'action_url': notificationService.renderer.dashboardOrigin
+                  .toString(),
+            },
+            occurredAt: _clock(),
+            organizationId: verification.user.memberships.isEmpty
+                ? null
+                : verification.user.memberships.first.organizationId,
+            source: 'human_auth',
+            entityType: 'human_user',
+            entityId: verification.user.id,
+          ),
+        );
+      }
       return auth.issueSessionForVerifiedUser(userId: verification.user.id);
     });
   }
