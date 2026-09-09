@@ -350,10 +350,11 @@ final class AuthClient {
 
   Future<AuthSession> refresh({
     Uri? endpoint,
+    String? profileName,
     String? caCertPath,
     SecurityContext? securityContext,
   }) async {
-    final storedProfile = await storage.readProfile();
+    final storedProfile = await storage.readProfile(name: profileName);
     final target = endpoint ?? storedProfile?.endpoint;
     if (target == null) {
       throw ToolFailure.single(
@@ -411,9 +412,22 @@ final class AuthClient {
     final refreshedProfile = _hasIdentity(payload)
         ? _profile(payload, storedProfile?.endpoint ?? normalizedTarget)
         : storedProfile;
-    await storage.writeProfile(
-      refreshedProfile ?? Profile(endpoint: normalizedTarget),
-    );
+    final profile = refreshedProfile ?? Profile(endpoint: normalizedTarget);
+    if (profileName == null) {
+      await storage.writeProfile(profile);
+    } else {
+      await storage.writeNamedProfile(
+        CliProfile(
+          name: profileName,
+          endpoint: profile.endpoint,
+          managed: profile.managed ?? false,
+          organizationId: profile.organizationId,
+          applicationId: profile.applicationId,
+          environmentId: profile.environmentId,
+        ),
+        makeActive: false,
+      );
+    }
     await storage.writeSession(refreshed, endpoint: normalizedTarget);
     return refreshed;
   }
@@ -456,8 +470,11 @@ final class AuthClient {
   /// An expired access token is refreshed through the stored session token;
   /// the helper is asynchronous so Deploy does not need to know the storage
   /// or refresh protocol.
-  Future<String?> accessTokenOrNull({Uri? endpoint}) async {
-    final profile = await storage.readProfile();
+  Future<String?> accessTokenOrNull({
+    Uri? endpoint,
+    String? profileName,
+  }) async {
+    final profile = await storage.readProfile(name: profileName);
     final target = endpoint ?? profile?.endpoint;
     if (target == null) return null;
     if (endpoint != null && profile != null) {
@@ -471,7 +488,10 @@ final class AuthClient {
     if (session == null || session.isSessionExpired) return null;
     if (!session.isExpired) return session.accessToken;
     if (session.sessionToken == null) return null;
-    final refreshed = await refresh(endpoint: normalizedTarget);
+    final refreshed = await refresh(
+      endpoint: normalizedTarget,
+      profileName: profileName,
+    );
     return refreshed.accessToken;
   }
 
@@ -553,9 +573,7 @@ final class AuthClient {
     final metadata = CliProfile(
       name: name,
       endpoint: endpoint,
-      managed:
-          controlPlaneEndpointKey(endpoint) ==
-          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase)),
+      managed: isManagedCloudEndpoint(endpoint),
       organizationId: profile.organizationId,
       applicationId: profile.applicationId,
       environmentId: profile.environmentId,
@@ -653,7 +671,7 @@ final class AuthClient {
   }
 
   void _requireMatchingEndpoint(Uri target, Uri stored) {
-    if (controlPlaneEndpointKey(target) == controlPlaneEndpointKey(stored)) {
+    if (controlPlaneEndpointsMatch(target, stored)) {
       return;
     }
     throw ToolFailure.single(
@@ -852,8 +870,7 @@ void _validateToken(String token, String field) {
 }
 
 String _defaultProfileName(Uri endpoint) {
-  return controlPlaneEndpointKey(endpoint) ==
-          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase))
+  return isManagedCloudEndpoint(endpoint)
       ? managedCloudProfileName
       : 'self-hosted';
 }

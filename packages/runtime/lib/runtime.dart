@@ -28,7 +28,7 @@ final class PatchFormatV1E0Bridge {
   PatchFormatV1E0Bridge._();
 
   static const int version = 1;
-  static const String encoding = 'e0-patch-container-v9-bytes';
+  static const String encoding = 'e0-patch-container-v10-bytes';
 
   /// Extracts the exact per-function E0 containers from one already parsed
   /// Patch Format v1 artifact. Signature verification remains the caller's

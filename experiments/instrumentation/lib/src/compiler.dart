@@ -63,10 +63,21 @@ final class E0PatchCompiler {
         );
       }
       final method = methods.single;
-      final isWidgetBuild = e0IsWidgetBuildMethod(method);
+      final isWidgetBuildMethod = e0IsWidgetBuildMethod(method);
+      final isFlutterWidgetBuild =
+          isWidgetBuildMethod &&
+          !allowSyntheticWidgetTypes &&
+          _hasCanonicalFlutterWidgetImport(parsed.unit) &&
+          manifest.functions.any(
+            (item) =>
+                item.name == functionName &&
+                item.receiver.ownerClass == className &&
+                item.signature == e0FlutterWidgetBuildSignature,
+          );
       final unsupported = e0UnsupportedMethodReason(
         method,
-        allowWidgetBuild: isWidgetBuild,
+        allowWidgetBuild: isWidgetBuildMethod,
+        widgetBuildWithContext: isFlutterWidgetBuild,
       );
       if (unsupported != null) {
         throw FormatException(
@@ -75,7 +86,8 @@ final class E0PatchCompiler {
       }
       signature = e0SignatureForMethodDeclaration(
         method,
-        allowWidgetBuild: isWidgetBuild,
+        allowWidgetBuild: isWidgetBuildMethod,
+        widgetBuildWithContext: isFlutterWidgetBuild,
       );
       parameterList = method.parameters!;
       body = method.body;
@@ -111,7 +123,9 @@ final class E0PatchCompiler {
     }
     final arguments = <String, (int, E0ValueSchema)>{};
     final parameters = parameterList.parameters;
-    final isWidgetBuild = signature == e0WidgetBuildSignature;
+    final isWidgetBuild =
+        signature == e0WidgetBuildSignature ||
+        signature == e0FlutterWidgetBuildSignature;
     if (isWidgetBuild && !allowSyntheticWidgetTypes) {
       _validateFlutterWidgetPatchLibrary(
         parsed.unit,
@@ -122,7 +136,7 @@ final class E0PatchCompiler {
       throw const FormatException('Widget ABI is reserved for build methods');
     }
     for (var index = 0; index < parameters.length; index++) {
-      if (isWidgetBuild) break;
+      if (signature == e0WidgetBuildSignature) break;
       arguments[parameters[index].name!.lexeme] = (
         index,
         signature.parameters[index],
@@ -143,13 +157,17 @@ final class E0PatchCompiler {
       declaredWidgetFactories: manifest.widgetFactories,
       isWidgetBuild: isWidgetBuild,
     );
-    if (!_blockDefinitelyReturns(body.block)) {
+    if (signature.returnSchema.kind != E0ValueKind.voidValue &&
+        !_blockDefinitelyReturns(body.block)) {
       throw const FormatException(
         'Patch body must return a value on every reachable path',
       );
     }
     for (final statement in body.block.statements) {
       emitter.statement(statement);
+    }
+    if (signature.returnSchema.kind == E0ValueKind.voidValue) {
+      emitter.implicitVoidReturn();
     }
     final program = E0PatchProgram(
       functionId: function.id,
@@ -180,21 +198,18 @@ void _validateFlutterWidgetPatchLibrary(
   CompilationUnit unit,
   Set<String> factoryNames,
 ) {
-  final flutterImports = unit.directives.whereType<ImportDirective>().where(
-    (directive) =>
-        directive.uri.stringValue?.startsWith('package:flutter/') ?? false,
-  );
-  if (flutterImports.length != 1 ||
-      flutterImports.single.prefix != null ||
-      flutterImports.single.combinators.isNotEmpty) {
+  if (!_hasCanonicalFlutterWidgetImport(unit)) {
     throw const FormatException(
-      'Widget patches require one unprefixed, unfiltered package:flutter import',
+      'Widget patches require a canonical package:flutter import: '
+      'package:flutter/material.dart or package:flutter/widgets.dart',
     );
   }
   final forbidden = <String>{
     'Widget',
     'BuildContext',
     'StatelessWidget',
+    'StatefulWidget',
+    'State',
     ...factoryNames,
   };
   for (final declaration in unit.declarations) {
@@ -224,12 +239,29 @@ bool e0IsWidgetBuildMethod(MethodDeclaration declaration) {
           'BuildContext';
 }
 
+bool _hasCanonicalFlutterWidgetImport(CompilationUnit unit) {
+  final imports = unit.directives.whereType<ImportDirective>().where(
+    (directive) =>
+        directive.uri.stringValue?.startsWith('package:flutter/') ?? false,
+  );
+  return imports.any(
+    (directive) =>
+        directive.prefix == null &&
+        directive.combinators.isEmpty &&
+        (directive.uri.stringValue == 'package:flutter/material.dart' ||
+            directive.uri.stringValue == 'package:flutter/widgets.dart'),
+  );
+}
+
 E0FunctionSignature e0SignatureForMethodDeclaration(
   MethodDeclaration declaration, {
   bool allowWidgetBuild = false,
+  bool widgetBuildWithContext = false,
 }) {
   if (allowWidgetBuild && e0IsWidgetBuildMethod(declaration)) {
-    return e0WidgetBuildSignature;
+    return widgetBuildWithContext
+        ? e0FlutterWidgetBuildSignature
+        : e0WidgetBuildSignature;
   }
   return _signatureFor(
     returnType: declaration.returnType,
@@ -241,6 +273,7 @@ E0FunctionSignature e0SignatureForMethodDeclaration(
 String? e0UnsupportedMethodReason(
   MethodDeclaration declaration, {
   bool allowWidgetBuild = false,
+  bool widgetBuildWithContext = false,
 }) {
   if (declaration.isStatic) return 'static method target';
   if (declaration.isGetter || declaration.isSetter) return 'accessor target';
@@ -255,6 +288,7 @@ String? e0UnsupportedMethodReason(
     final signature = e0SignatureForMethodDeclaration(
       declaration,
       allowWidgetBuild: allowWidgetBuild,
+      widgetBuildWithContext: widgetBuildWithContext,
     );
     if (body.isAsynchronous != signature.isAsync) {
       return 'async body must declare Future<T>, and Future<T> patches must use async';
@@ -385,6 +419,71 @@ String? _futureElementSource(String source) {
     );
   }
   return element;
+}
+
+int _futureDelayMilliseconds(Expression expression) {
+  if (expression is ParenthesizedExpression) {
+    return _futureDelayMilliseconds(expression.expression);
+  }
+  if (expression is PrefixedIdentifier &&
+      expression.toSource() == 'Duration.zero') {
+    return 0;
+  }
+  if (expression is! InstanceCreationExpression ||
+      expression.constructorName.type.toSource() != 'Duration' ||
+      expression.constructorName.name != null) {
+    throw const FormatException(
+      'Future.delayed requires a bounded Duration.zero or const Duration literal',
+    );
+  }
+  var microseconds = 0;
+  for (final argument in expression.argumentList.arguments) {
+    if (argument is! NamedExpression) {
+      throw const FormatException(
+        'Future.delayed Duration arguments must be named integer literals',
+      );
+    }
+    final value = _durationInteger(argument.expression);
+    final multiplier = switch (argument.name.label.name) {
+      'days' => Duration.microsecondsPerDay,
+      'hours' => Duration.microsecondsPerHour,
+      'minutes' => Duration.microsecondsPerMinute,
+      'seconds' => Duration.microsecondsPerSecond,
+      'milliseconds' => Duration.microsecondsPerMillisecond,
+      'microseconds' => 1,
+      _ => throw FormatException(
+        'Unsupported Duration component ${argument.name.label.name}',
+      ),
+    };
+    microseconds += value * multiplier;
+    if (microseconds > e0MaxFutureDelayMilliseconds * 1000) {
+      throw const FormatException(
+        'Future.delayed duration exceeds the five-minute patch limit',
+      );
+    }
+  }
+  if (microseconds < 0) {
+    throw const FormatException('Future.delayed duration may not be negative');
+  }
+  final milliseconds = (microseconds + 999) ~/ 1000;
+  if (milliseconds > e0MaxFutureDelayMilliseconds) {
+    throw const FormatException(
+      'Future.delayed duration exceeds the five-minute patch limit',
+    );
+  }
+  return milliseconds;
+}
+
+int _durationInteger(Expression expression) {
+  if (expression is IntegerLiteral && expression.value != null) {
+    if (expression.value! < 0) {
+      throw const FormatException('Duration components may not be negative');
+    }
+    return expression.value!;
+  }
+  throw const FormatException(
+    'Future.delayed Duration components must be integer literals',
+  );
 }
 
 E0ValueSchema e0HostSchemaForType(String source, String position) {
@@ -542,6 +641,11 @@ final class _Emitter {
     if (statement is ReturnStatement) {
       final expression = statement.expression;
       if (expression == null) {
+        if (returnSchema.kind == E0ValueKind.voidValue) {
+          _emitConstant(null, E0ValueSchema.voidValue);
+          code.add(E0Opcode.returnValue.code);
+          return;
+        }
         throw const FormatException('Missing return value');
       }
       if (expression is ThrowExpression) {
@@ -644,6 +748,15 @@ final class _Emitter {
       'Unsupported statement ${statement.runtimeType}; '
       'v6 supports typed locals, structured control flow, bounded exceptions, and typed async capabilities',
     );
+  }
+
+  /// Emits the implicit fall-through return permitted by a Dart `void`
+  /// function. It is deliberately explicit in the guest program so the
+  /// verifier and rollback path still observe a typed return value.
+  void implicitVoidReturn() {
+    if (returnSchema.kind != E0ValueKind.voidValue) return;
+    _emitConstant(null, E0ValueSchema.voidValue);
+    code.add(E0Opcode.returnValue.code);
   }
 
   void _emitTry(TryStatement statement) {
@@ -750,7 +863,7 @@ final class _Emitter {
           : _localSchema(type.toSource());
       if (schema == null) {
         final inferred = emitExpression(initializer!);
-        if (!inferred.isSupportedHostSignature) {
+        if (!inferred.isSupportedLocalSchema) {
           throw FormatException(
             'Inferred local ${declaration.name.lexeme} has unsupported type $inferred',
           );
@@ -807,6 +920,9 @@ final class _Emitter {
           : (expression as PostfixExpression).operator.lexeme;
       if (operand is SimpleIdentifier &&
           (operator == '++' || operator == '--')) {
+        if (isInstanceMethod && receiverMembers.containsKey(operand.name)) {
+          _rejectReceiverWrite();
+        }
         final local = _lookupLocal(operand.name);
         if (!local.isMutable) {
           throw FormatException('Cannot modify final local ${operand.name}');
@@ -866,6 +982,9 @@ final class _Emitter {
     final target = expression.leftHandSide;
     if (_isReceiverOrigin(target)) _rejectReceiverWrite();
     if (target is SimpleIdentifier) {
+      if (isInstanceMethod && receiverMembers.containsKey(target.name)) {
+        _rejectReceiverWrite();
+      }
       if (_findLocal(target.name) == null &&
           arguments.containsKey(target.name)) {
         throw FormatException(
@@ -1131,6 +1250,49 @@ final class _Emitter {
         throw const FormatException('await requires an async patch function');
       }
       final operand = expression.expression;
+      if (operand is InstanceCreationExpression) {
+        final futureElement = _futureElementSource(
+          operand.constructorName.type.toSource(),
+        );
+        final constructorName = operand.constructorName.name?.name;
+        if (futureElement != null && constructorName == 'value') {
+          if (operand.argumentList.arguments.length != 1 ||
+              operand.argumentList.arguments.single is NamedExpression) {
+            throw const FormatException(
+              'Future<T>.value requires one positional argument',
+            );
+          }
+          final result = e0HostSchemaForType(
+            futureElement,
+            'Future element return',
+          );
+          final value = emitExpression(
+            operand.argumentList.arguments.single,
+            context: result,
+          );
+          if (!result.accepts(value)) {
+            throw FormatException(
+              'Future<T>.value result $value does not match $result',
+            );
+          }
+          code.add(E0Opcode.futureValue.code);
+          return _emitAwaitPoint(result);
+        }
+        if (futureElement != null && constructorName == 'delayed') {
+          if (futureElement != 'void' ||
+              operand.argumentList.arguments.length != 1 ||
+              operand.argumentList.arguments.single is NamedExpression) {
+            throw const FormatException(
+              'Future<T>.delayed patching supports only Future<void> with one bounded Duration',
+            );
+          }
+          final milliseconds = _futureDelayMilliseconds(
+            operand.argumentList.arguments.single,
+          );
+          code.addAll(<int>[E0Opcode.futureDelay.code, milliseconds]);
+          return _emitAwaitPoint(E0ValueSchema.voidValue);
+        }
+      }
       if (operand is MethodInvocation &&
           operand.target is SimpleIdentifier &&
           (operand.target! as SimpleIdentifier).name == 'Future' &&
@@ -1148,9 +1310,31 @@ final class _Emitter {
         code.add(E0Opcode.futureValue.code);
         return _emitAwaitPoint(value);
       }
+      if (operand is MethodInvocation &&
+          operand.target is SimpleIdentifier &&
+          (operand.target! as SimpleIdentifier).name == 'Future' &&
+          operand.methodName.name == 'delayed') {
+        if (operand.argumentList.arguments.length != 1 ||
+            operand.argumentList.arguments.single is NamedExpression) {
+          throw const FormatException(
+            'Future.delayed patching supports one bounded Duration',
+          );
+        }
+        final milliseconds = _futureDelayMilliseconds(
+          operand.argumentList.arguments.single,
+        );
+        code.addAll(<int>[E0Opcode.futureDelay.code, milliseconds]);
+        return _emitAwaitPoint(E0ValueSchema.voidValue);
+      }
+      if (operand is PropertyAccess &&
+          operand.toSource() == 'WidgetsBinding.instance.endOfFrame') {
+        code.add(E0Opcode.flutterEndOfFrame.code);
+        return _emitAwaitPoint(E0ValueSchema.voidValue);
+      }
       if (operand is! MethodInvocation || operand.target != null) {
         throw const FormatException(
-          'await supports Future.value or direct calls to registered async capabilities',
+          'await supports bounded Future.value, Future.delayed, '
+          'WidgetsBinding.instance.endOfFrame, or direct calls to registered async capabilities',
         );
       }
       final matches = _declaredCapabilities
@@ -1269,18 +1453,22 @@ final class _Emitter {
         return local.schema;
       }
       final argument = arguments[expression.name];
-      if (argument == null) {
-        if (isInstanceMethod) {
-          throw FormatException(
-            'Unknown identifier ${expression.name}; unqualified receiver '
-            'access is unsupported. Use an explicitly release-selected '
-            'this.property read',
-          );
-        }
-        throw FormatException('Unknown identifier ${expression.name}');
+      if (argument != null) {
+        code.addAll(<int>[E0Opcode.loadArgument.code, argument.$1]);
+        return argument.$2;
       }
-      code.addAll(<int>[E0Opcode.loadArgument.code, argument.$1]);
-      return argument.$2;
+      final receiverMember = receiverMembers[expression.name];
+      if (receiverMember != null) {
+        code.addAll(<int>[E0Opcode.loadReceiver.code, receiverMember.$1]);
+        return receiverMember.$2;
+      }
+      if (isInstanceMethod) {
+        throw FormatException(
+          'Unknown identifier ${expression.name}; receiver access was not '
+          'selected by the release descriptor',
+        );
+      }
+      throw FormatException('Unknown identifier ${expression.name}');
     }
     if (expression is PrefixedIdentifier) {
       final target = emitExpression(expression.prefix);
@@ -1315,10 +1503,15 @@ final class _Emitter {
       );
     }
     if (expression is FunctionExpression) {
+      final closureReturn =
+          context?.kind == E0ValueKind.host &&
+              context?.hostType == 'VoidCallback'
+          ? E0ValueSchema.voidValue
+          : context;
       return _emitClosure(
         expression,
         expectedParameters: null,
-        returnSchema: context,
+        returnSchema: closureReturn,
       );
     }
     if (expression is FunctionExpressionInvocation) {
@@ -1812,9 +2005,16 @@ final class _Emitter {
     required List<E0ValueSchema>? expectedParameters,
     required E0ValueSchema? returnSchema,
   }) {
+    final closureIsAsync = expression.body.isAsynchronous;
     if (isAsync) {
       throw const FormatException(
         'Closures inside async patches are deferred until async closure suspension is modeled',
+      );
+    }
+    if (closureIsAsync &&
+        (returnSchema == null || returnSchema.kind != E0ValueKind.voidValue)) {
+      throw const FormatException(
+        'Async closures require the bounded void host-callback contract',
       );
     }
     final parameters = _closureParameterSchemas(
@@ -1876,7 +2076,7 @@ final class _Emitter {
       receiverMembers,
       receiver: receiver,
       isInstanceMethod: isInstanceMethod,
-      isAsync: false,
+      isAsync: closureIsAsync,
       declaredCapabilities: _declaredCapabilities,
       declaredWidgetFactories: _declaredWidgetFactories,
       isWidgetBuild: isWidgetBuild,
@@ -1894,18 +2094,23 @@ final class _Emitter {
       }
       nested.code.add(E0Opcode.returnValue.code);
     } else if (body is BlockFunctionBody) {
-      if (body.isAsynchronous || body.isGenerator) {
-        throw const FormatException(
-          'Async and generator closures are unsupported',
-        );
+      if (body.isGenerator) {
+        throw const FormatException('Generator closures are unsupported');
       }
-      if (!_blockDefinitelyReturns(body.block)) {
+      if (body.isAsynchronous != closureIsAsync) {
+        throw const FormatException('Closure async marker is inconsistent');
+      }
+      if (nestedReturn.kind != E0ValueKind.voidValue &&
+          !_blockDefinitelyReturns(body.block)) {
         throw const FormatException(
           'Closure must return on every reachable path',
         );
       }
       for (final statement in body.block.statements) {
         nested.statement(statement);
+      }
+      if (nestedReturn.kind == E0ValueKind.voidValue) {
+        nested.implicitVoidReturn();
       }
     } else {
       throw const FormatException('Unsupported closure body');
@@ -1929,6 +2134,8 @@ final class _Emitter {
         locals: nested.locals,
         handlers: nested.handlers,
         receiver: receiver,
+        isAsync: closureIsAsync,
+        asyncPoints: nested.asyncPoints,
       ),
     );
     code.addAll(<int>[E0Opcode.makeClosure.code, index]);
@@ -2059,6 +2266,63 @@ final class _Emitter {
           }
           properties['mainAxisSize'] = (mainAxisSize, E0ValueSchema.string);
         }
+      case 'Row':
+        if (positional.isNotEmpty) {
+          throw const FormatException(
+            'Row positional arguments are unsupported',
+          );
+        }
+        final childrenExpression = named.remove('children');
+        if (childrenExpression is! ListLiteral) {
+          throw const FormatException('Row requires a literal children list');
+        }
+        if (childrenExpression.elements.length >
+            E0WidgetFactoryRegistry.maxChildren) {
+          throw const FormatException('Row children limit exceeded');
+        }
+        for (final child in childrenExpression.elements) {
+          if (child is! Expression) {
+            throw const FormatException(
+              'Widget spreads and collection controls are unsupported',
+            );
+          }
+          children.add(child);
+        }
+        final mainAxisSize = named.remove('mainAxisSize');
+        if (mainAxisSize != null) {
+          final value = mainAxisSize.toSource();
+          if (value != 'MainAxisSize.min' && value != 'MainAxisSize.max') {
+            throw const FormatException('Unsupported Row.mainAxisSize');
+          }
+          properties['mainAxisSize'] = (mainAxisSize, E0ValueSchema.string);
+        }
+      case 'Center':
+        if (positional.isNotEmpty) {
+          throw const FormatException(
+            'Center positional arguments are unsupported',
+          );
+        }
+        final child = named.remove('child');
+        if (child == null) {
+          throw const FormatException('Center requires one child');
+        }
+        children.add(child);
+      case 'SizedBox':
+        if (positional.isNotEmpty) {
+          throw const FormatException(
+            'SizedBox positional arguments are unsupported',
+          );
+        }
+        final width = named.remove('width');
+        if (width != null) {
+          properties['width'] = (width, E0ValueSchema.doubleValue);
+        }
+        final height = named.remove('height');
+        if (height != null) {
+          properties['height'] = (height, E0ValueSchema.doubleValue);
+        }
+        final child = named.remove('child');
+        if (child != null) children.add(child);
       case 'ElevatedButton':
         if (positional.isNotEmpty) {
           throw const FormatException(
@@ -2066,9 +2330,21 @@ final class _Emitter {
           );
         }
         final callback = named.remove('onPressed');
-        if (callback is! NullLiteral) {
+        if (callback is FunctionExpression) {
+          if (!factory.properties.any(
+            (property) =>
+                property.name == 'onPressed' &&
+                property.schema == E0ValueSchema.hostCallback,
+          )) {
+            throw const FormatException(
+              'Patched button callbacks must remain host-owned; this widget '
+              'contract does not expose a callback boundary',
+            );
+          }
+          properties['onPressed'] = (callback, E0ValueSchema.hostCallback);
+        } else if (callback is! NullLiteral) {
           throw const FormatException(
-            'Patched button callbacks must remain host-owned; only null is supported',
+            'ElevatedButton.onPressed must be null or a bounded zero-argument closure',
           );
         }
         final child = named.remove('child');

@@ -192,6 +192,9 @@ Future<void> main(List<String> arguments) async {
     ),
     auditRetentionDays: config.auditRetentionDays,
     allowInsecureAuth: config.allowInsecureAuth,
+    runtimeReceiptSettlement: runtimeReceiptSettlement,
+    cloudOnboarding: config.cloudOnboarding,
+    cloudSignupDelivery: cloudSignupDelivery,
   );
   final bound = await server.bind(host: config.host, port: config.port);
   stdout.writeln(

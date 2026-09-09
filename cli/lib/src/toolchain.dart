@@ -14,14 +14,16 @@ import 'diagnostics.dart';
 import 'discovery.dart';
 import 'graph.dart';
 import 'instrumentation.dart';
+import 'patch_compatibility.dart';
 import 'project.dart';
+import 'resource_snapshot.dart';
+import 'runtime_bundle.dart';
 import 'signing.dart';
 import 'source_fingerprints.dart';
 
-// Phase 1C runtime hardening changes the release-embedded interpreter and
-// lifecycle behavior. The tool version is part of release identity, so a
-// hardened release cannot be confused with a Phase 1B runtime baseline.
-const hyfensToolVersion = '0.1.0-phase1c.1';
+// The CLI version is part of release identity and must match cli/pubspec.yaml
+// and the version used by the release workflows.
+const hyfensToolVersion = '0.1.10';
 const _bridgeExtensionType = 9;
 const _rollbackStateVersion = 1;
 const _rollbackTargetBaseAot = 'base-aot';
@@ -1025,6 +1027,10 @@ final class ReleaseRecord {
     'diagnostics': diagnostics.map((item) => item.toJson()).toList(),
     'configFingerprint': configFingerprint,
     'nativeFingerprints': nativeFingerprints,
+    if (resourceSnapshot != null)
+      'resourceSnapshot': resourceSnapshot!.toJson(),
+    if (flutterEngineRevision != null)
+      'flutterEngineRevision': flutterEngineRevision,
   };
 
   static ReleaseRecord decode(String source) {
@@ -1055,7 +1061,9 @@ final class ReleaseRecord {
         raw['sourceFingerprints'] is! Map<String, Object?> ||
         raw['instrumentation'] is! Map<String, Object?> ||
         raw['build'] is! Map<String, Object?> ||
-        raw['nativeFingerprints'] is! Map<String, Object?>) {
+        raw['nativeFingerprints'] is! Map<String, Object?> ||
+        (raw['flutterEngineRevision'] != null &&
+            raw['flutterEngineRevision'] is! String)) {
       throw const FormatException('Invalid release metadata fields');
     }
     final sources = (raw['sources']! as List<Object?>)
@@ -1302,12 +1310,14 @@ final class ToolEnvironmentSnapshot {
     required this.dartStatus,
     required this.androidStatus,
     required this.xcodeStatus,
+    this.flutterEngineRevision = 'unknown',
     this.gitStatus = 'NOT TESTED',
     this.runtimeStatus = 'NOT TESTED',
   });
 
   final String flutterVersion;
   final String dartVersion;
+  final String flutterEngineRevision;
   final String flutterStatus;
   final String dartStatus;
   final String androidStatus;
@@ -1318,6 +1328,7 @@ final class ToolEnvironmentSnapshot {
   Map<String, Object> toJson() => <String, Object>{
     'flutterVersion': flutterVersion,
     'dartVersion': dartVersion,
+    'flutterEngineRevision': flutterEngineRevision,
     'flutterStatus': flutterStatus,
     'dartStatus': dartStatus,
     'androidStatus': androidStatus,
@@ -1330,6 +1341,7 @@ final class ToolEnvironmentSnapshot {
       ToolEnvironmentSnapshot(
         flutterVersion: flutterVersion,
         dartVersion: dartVersion,
+        flutterEngineRevision: flutterEngineRevision,
         flutterStatus: flutterStatus,
         dartStatus: dartStatus,
         androidStatus: androidStatus,
@@ -1389,10 +1401,12 @@ final class ToolEnvironment {
     final flutter = _versionSync('flutter', const ['--version']);
     final dart = _versionSync('dart', const ['--version']);
     final flutterVersion = extractFlutterVersion(flutter.$1);
+    final flutterEngineRevision = extractFlutterEngineRevision(flutter.$1);
     final dartVersion = extractDartVersion(dart.$1);
     return ToolEnvironmentSnapshot(
       flutterVersion: flutterVersion ?? 'unknown',
       dartVersion: dartVersion ?? 'unknown',
+      flutterEngineRevision: flutterEngineRevision ?? 'unknown',
       flutterStatus: flutterToolchainStatus(flutter.$2, flutterVersion),
       dartStatus: dartToolchainStatus(dart.$2, dartVersion),
       androidStatus: 'NOT TESTED',
@@ -1406,6 +1420,7 @@ final class ToolEnvironment {
     final dart = await _version('dart', const ['--version']);
     final git = await _version('git', const ['--version']);
     final flutterVersion = extractFlutterVersion(flutter.$1);
+    final flutterEngineRevision = extractFlutterEngineRevision(flutter.$1);
     final dartVersion = extractDartVersion(dart.$1);
     final xcode =
         Platform.isMacOS &&
@@ -1425,6 +1440,7 @@ final class ToolEnvironment {
     return ToolEnvironmentSnapshot(
       flutterVersion: flutterVersion ?? 'unknown',
       dartVersion: dartVersion ?? 'unknown',
+      flutterEngineRevision: flutterEngineRevision ?? 'unknown',
       flutterStatus: flutterToolchainStatus(flutter.$2, flutterVersion),
       dartStatus: dartToolchainStatus(dart.$2, dartVersion),
       androidStatus: android,
@@ -1478,8 +1494,26 @@ final class AnalysisItem {
   final int? column;
   final ToolDiagnostic? diagnostic;
 
+  PatchCompatibilityDecision get compatibility =>
+      PatchCompatibilityAnalyzer.forAnalysis(
+        classification: classification.name,
+        detail: detail,
+      );
+
+  String get compatibilityReasonCode => PatchCompatibilityAnalyzer.reasonCode(
+    decision: compatibility,
+    diagnosticCode: diagnostic?.code,
+    detail: detail,
+  );
+
+  String get compatibilityExplanation =>
+      PatchCompatibilityAnalyzer.explainExclusion(detail);
+
   Map<String, Object?> toJson() => <String, Object?>{
     'classification': classification.name,
+    'compatibility': compatibility.label,
+    'reasonCode': compatibilityReasonCode,
+    'explanation': compatibilityExplanation,
     'path': path,
     'detail': detail,
     'functionIds': functionIds,
@@ -1525,11 +1559,16 @@ final class AnalysisResult {
 
   bool get canPatch =>
       items.any(
-        (item) => item.classification == ChangeClassification.patchable,
+        (item) =>
+            item.classification == ChangeClassification.patchable ||
+            item.compatibility ==
+                PatchCompatibilityDecision.patchableRestartRequired,
       ) &&
       items.every(
         (item) =>
-            item.classification == ChangeClassification.patchable ||
+            item.compatibility == PatchCompatibilityDecision.patchable ||
+            item.compatibility ==
+                PatchCompatibilityDecision.patchableRestartRequired ||
             item.classification == ChangeClassification.noEffect,
       ) &&
       diagnostics.every((item) => item.severity != DiagnosticSeverity.error);
@@ -1541,6 +1580,7 @@ final class AnalysisResult {
     'entrypoint': release.entrypointPath,
     'flavor': release.flavor,
     'result': canPatch ? 'PATCHABLE' : 'PATCH_BLOCKED',
+    'compatibilityModel': patchCompatibilityModel,
     'currentSourceFingerprint': currentSourceFingerprint,
     'currentGraphFingerprint': currentGraphFingerprint,
     'items': items.map((item) => item.toJson()).toList(),
@@ -1573,6 +1613,35 @@ final class HyfensToolchain {
 
   FlutterProject project({String? projectPath}) =>
       _discovery.discover(projectPath: projectPath);
+
+  ProjectDiscoveryReport projectReport({String? projectPath}) =>
+      _discovery.inspect(projectPath: projectPath);
+
+  FlutterTargetSelection resolveTarget({
+    required String target,
+    String? projectPath,
+    String? flavor,
+    String? entrypointPath,
+  }) {
+    final current = project(projectPath: projectPath);
+    final config = this.config(current);
+    final binding = _bindingFor(current);
+    _validatePersistedProject(current, binding);
+    final persistedTarget = binding?.selectionFor(target);
+    return current.resolveTarget(
+      target: target,
+      flavor: flavor,
+      entrypointPath: entrypointPath,
+      persistedFlavor: binding?.targetSelections.isEmpty == true
+          ? binding?.flavor
+          : null,
+      persistedEntrypoint: binding?.targetSelections.isEmpty == true
+          ? binding?.entrypointPath
+          : null,
+      persistedTarget: persistedTarget,
+      configuredEntrypoints: config.entrypoints[target],
+    );
+  }
 
   ToolConfig config(FlutterProject project) =>
       ToolConfig.load(project.configFile);
@@ -1656,9 +1725,7 @@ final class HyfensToolchain {
   Future<ToolEnvironmentSnapshot> doctor({String? projectPath}) async {
     final current = project(projectPath: projectPath);
     final snapshot = await _environment.inspect(current);
-    final runtime = Isolate.resolvePackageUriSync(
-      Uri.parse('package:instrumentation_e0/e0_runtime.dart'),
-    );
+    final runtime = _runtimePackageFile();
     return snapshot.withRuntimeStatus(
       runtime == null ? 'NOT AVAILABLE' : 'SUPPORTED',
     );
@@ -1787,6 +1854,7 @@ final class HyfensToolchain {
 
   Future<InitResult> init({
     String? projectPath,
+    String? applicationId,
     bool dryRun = false,
     bool force = false,
   }) async {
@@ -1815,8 +1883,15 @@ final class HyfensToolchain {
         action: 'Review it or pass --force to replace only the tool-owned configuration.',
       );
     }
-    final configText = ToolConfig(applicationId: current.applicationId)
-        .encode();
+    final configText = ToolConfig(
+      applicationId: applicationId ?? current.applicationId,
+      applicationIds: <String, Map<String, String>>{
+        if (current.androidApplicationIds.isNotEmpty)
+          'android': current.androidApplicationIds,
+        if (current.iosApplicationIds.isNotEmpty)
+          'ios': current.iosApplicationIds,
+      },
+    ).encode();
     final actions = <String>[
       '${existingConfig ? 'replace' : 'create'} ${current.relative(current.configFile)}',
       'create ${current.relative(store.root)}',
@@ -2513,6 +2588,29 @@ final class HyfensToolchain {
       entrypointPath: selection.entrypointPath,
     );
     final environment = await _environment.inspect(current);
+    late final ResourceSnapshot sourceResourceSnapshot;
+    try {
+      sourceResourceSnapshot = ResourceSnapshot.capture(
+        project: current,
+        graph: graph,
+        target: target,
+      );
+    } on ResourceSnapshotFailure catch (failure) {
+      throw ToolFailure(
+        exitCode: ToolExitCode.environment,
+        diagnostics: <ToolDiagnostic>[failure.toDiagnostic()],
+      );
+    }
+    if (!metadataOnly && environment.flutterEngineRevision == 'unknown') {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: ToolDiagnosticCodes.engineRevisionUnavailable,
+        summary: 'Flutter engine revision is unavailable',
+        detail: 'The release cannot establish an exact engine identity.',
+        action: 'Use a Flutter SDK that reports its engine revision, then retry the release.',
+        storeReleaseRequired: true,
+      );
+    }
     final targetName = '$target-$architecture-$buildMode';
     final graphFingerprint = graph.fingerprint;
     final native = _nativeSnapshot(current, graph);
@@ -2522,9 +2620,11 @@ final class HyfensToolchain {
     final dependencyFingerprint = digestJson(<String, Object?>{
       'graph': graphFingerprint,
       'flutter': environment.flutterVersion,
+      'engine': environment.flutterEngineRevision,
       'dart': environment.dartVersion,
       'config': configFingerprint,
       'native': digestJson(native),
+      'resources': sourceResourceSnapshot.fingerprint,
       'toolVersion': hyfensToolVersion,
       'formatVersion': patchFormatV1,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
@@ -2546,11 +2646,13 @@ final class HyfensToolchain {
       'target': targetName,
       'applicationId': applicationId,
       'flutter': environment.flutterVersion,
+      'engine': environment.flutterEngineRevision,
       'dart': environment.dartVersion,
       'tool': hyfensToolVersion,
       'runtime': patchFormatRuntimeCompatibilityV1,
       'format': patchFormatV1,
       'graph': graphFingerprint,
+      'resources': sourceResourceSnapshot.fingerprint,
       'signingKeyId': trustedPublicKey?.keyId ?? 'unconfigured',
       'entrypoint': selection.entrypointPath,
       'flavor': selection.flavor,
@@ -2594,6 +2696,7 @@ final class HyfensToolchain {
             flavor: selection.flavor,
             environment: environment,
             graph: graph,
+            usesMaterialDesign: sourceResourceSnapshot.usesMaterialDesign,
             artifactStagingDirectory: Directory(
               p.join(current.toolDirectory.path, '.builds', releaseId),
             ),
@@ -2605,6 +2708,12 @@ final class HyfensToolchain {
     };
     final stagedArtifactPath = build.remove('artifactPath');
     if (stagedArtifactPath is String) stagedArtifact = File(stagedArtifactPath);
+    final resourceEvidence = build['resourceEvidence'];
+    final resourceSnapshot = resourceEvidence is Map<String, Object?>
+        ? sourceResourceSnapshot.withArtifactEvidence(
+            ResourceArtifactEvidence.fromJson(resourceEvidence),
+          )
+        : sourceResourceSnapshot;
     final functions = _functionRecords(current, plan);
     final record = ReleaseRecord(
       applicationId: applicationId,
@@ -2705,7 +2814,60 @@ final class HyfensToolchain {
     final paths = <String>{...baselineSources.keys, ...currentSources.keys};
     final items = <AnalysisItem>[];
     final diagnostics = <ToolDiagnostic>[...plan.diagnostics];
+    ToolDiagnostic? identityDiagnostic;
+    try {
+      final resolvedId = resolveApplicationId(
+        project: current,
+        target: release.target,
+        flavor: release.flavor,
+        validateBinding: false,
+      );
+      if (resolvedId != release.applicationId) {
+        identityDiagnostic = const ToolDiagnostic(
+          code: 'H1205',
+          severity: DiagnosticSeverity.error,
+          summary: 'Application identity differs from the release baseline',
+          detail: 'The selected native/configured identity cannot retarget an existing release.',
+          action: 'Create a new base release for the intended native identity.',
+          storeReleaseRequired: true,
+        );
+      }
+    } on ToolFailure catch (failure) {
+      identityDiagnostic = failure.diagnostics.single;
+    }
+    if (identityDiagnostic != null) {
+      diagnostics.add(identityDiagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: '<application identity>',
+          detail: identityDiagnostic.detail,
+          functionIds: const <String>[],
+          diagnostic: identityDiagnostic,
+        ),
+      );
+    }
     final environment = _environment.inspectVersionsSync();
+    ResourceSnapshot? currentResourceSnapshot;
+    try {
+      currentResourceSnapshot = ResourceSnapshot.capture(
+        project: current,
+        graph: graph,
+        target: release.target,
+      );
+    } on ResourceSnapshotFailure catch (failure) {
+      final diagnostic = failure.toDiagnostic();
+      diagnostics.add(diagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: failure.path,
+          detail: failure.detail,
+          functionIds: const <String>[],
+          diagnostic: diagnostic,
+        ),
+      );
+    }
     if (environment.flutterStatus != 'SUPPORTED' ||
         environment.dartStatus != 'SUPPORTED') {
       final diagnostic = ToolDiagnostic(
@@ -2770,6 +2932,125 @@ final class HyfensToolchain {
           diagnostic: diagnostic,
         ),
       );
+    }
+    if (environment.flutterStatus == 'SUPPORTED' &&
+        (release.flutterEngineRevision == null ||
+            release.flutterEngineRevision == 'unknown' ||
+            environment.flutterEngineRevision == 'unknown' ||
+            release.flutterEngineRevision !=
+                environment.flutterEngineRevision)) {
+      final diagnostic = ToolDiagnostic(
+        code: ToolDiagnosticCodes.engineRevisionUnavailable,
+        severity: DiagnosticSeverity.error,
+        summary: 'Flutter engine identity differs from the release',
+        detail:
+            'Release Flutter ${release.flutterVersion}/${release.flutterEngineRevision ?? 'missing'}; current Flutter ${environment.flutterVersion}/${environment.flutterEngineRevision}.',
+        action: 'Use the exact Flutter framework/engine toolchain or create a new base release.',
+        storeReleaseRequired: true,
+      );
+      diagnostics.add(diagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: '<toolchain>',
+          detail: diagnostic.detail,
+          functionIds: const <String>[],
+          diagnostic: diagnostic,
+        ),
+      );
+    }
+    if (release.resourceSnapshot == null) {
+      final diagnostic = ToolDiagnostic(
+        code: ToolDiagnosticCodes.resourceSnapshotMissing,
+        severity: DiagnosticSeverity.error,
+        summary: 'Release baseline has no resource snapshot',
+        detail:
+            'Packaged assets, fonts, and native resources were not recorded.',
+        action:
+            'Create a new base release before generating an OTA code patch.',
+        storeReleaseRequired: true,
+      );
+      diagnostics.add(diagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: '<resource snapshot>',
+          detail: diagnostic.detail,
+          functionIds: const <String>[],
+          diagnostic: diagnostic,
+        ),
+      );
+    } else if (release.build['metadataOnly'] != true &&
+        release.resourceSnapshot!.artifactEvidence?.status != 'COMPLETE') {
+      final evidence = release.resourceSnapshot!.artifactEvidence;
+      final diagnostic = ToolDiagnostic(
+        code: ToolDiagnosticCodes.resourceArtifactEvidenceUnavailable,
+        severity: DiagnosticSeverity.error,
+        summary: 'Release baseline has incomplete Flutter artifact evidence',
+        detail: evidence == null
+            ? 'The mobile build did not record its asset/font manifests.'
+            : 'Artifact resource evidence status is ${evidence.status}.',
+        path: '<resource artifact evidence>',
+        action: 'Create a new base release with complete Flutter artifact evidence before patching.',
+        storeReleaseRequired: true,
+      );
+      diagnostics.add(diagnostic);
+      items.add(
+        AnalysisItem(
+          classification: ChangeClassification.storeReleaseRequired,
+          path: diagnostic.path!,
+          detail: diagnostic.detail,
+          functionIds: const <String>[],
+          diagnostic: diagnostic,
+        ),
+      );
+    } else if (currentResourceSnapshot != null) {
+      final changes = release.resourceSnapshot!.diff(currentResourceSnapshot);
+      for (final kind in ResourceInputKind.values) {
+        final kindChanges = changes.changes
+            .where((change) => change.kind == kind)
+            .toList(growable: false);
+        if (kindChanges.isEmpty) continue;
+        final labels = kindChanges
+            .take(16)
+            .map((change) => '${change.displayPath} (${change.reason})');
+        final remainder = kindChanges.length - labels.length;
+        final detail = StringBuffer(labels.join('; '));
+        if (remainder > 0) detail.write('; ... $remainder more');
+        final diagnostic = ToolDiagnostic(
+          code: switch (kind) {
+            ResourceInputKind.asset => ToolDiagnosticCodes.resourceAssetChanged,
+            ResourceInputKind.font => ToolDiagnosticCodes.resourceFontChanged,
+            ResourceInputKind.native =>
+              ToolDiagnosticCodes.resourceNativeChanged,
+          },
+          severity: DiagnosticSeverity.error,
+          summary: switch (kind) {
+            ResourceInputKind.asset =>
+              'Packaged asset inputs differ from the release baseline',
+            ResourceInputKind.font => 'Packaged font or Material icon inputs differ from the release baseline',
+            ResourceInputKind.native => 'Native packaged resource inputs differ from the release baseline',
+          },
+          detail: detail.toString(),
+          path: switch (kind) {
+            ResourceInputKind.asset => '<packaged assets>',
+            ResourceInputKind.font => '<packaged fonts>',
+            ResourceInputKind.native => '<native resources>',
+          },
+          action: 'Create a new base release; packaged resources are not OTA patch content.',
+          storeReleaseRequired: true,
+        );
+        diagnostics.add(diagnostic);
+        items.add(
+          AnalysisItem(
+            classification: ChangeClassification.storeReleaseRequired,
+            path: diagnostic.path!,
+            detail: diagnostic.detail,
+            functionIds: const <String>[],
+            diagnostic: diagnostic,
+          ),
+        );
+      }
     }
     for (final path in paths.toList()..sort()) {
       final before = baselineSources[path];
@@ -3023,17 +3304,39 @@ final class HyfensToolchain {
           (function) => function.id == functionIds.first,
         );
         final location = _functionLocation(after.file, firstFunction.name);
-        items.add(
-          AnalysisItem(
-            classification: ChangeClassification.patchable,
-            path: path,
-            detail: '${functionIds.length} function(s) selected',
-            functionIds: functionIds,
-            libraryUri: after.libraryUri,
-            line: location?.line,
-            column: location?.column,
-          ),
+        final compilerDiagnostic = _patchCompilerPreflight(
+          plan: plan,
+          release: release,
+          path: path,
+          functionIds: functionIds,
         );
+        if (compilerDiagnostic != null) {
+          diagnostics.add(compilerDiagnostic);
+          items.add(
+            AnalysisItem(
+              classification: ChangeClassification.unsupported,
+              path: path,
+              detail: compilerDiagnostic.detail,
+              functionIds: const <String>[],
+              libraryUri: after.libraryUri,
+              line: location?.line,
+              column: location?.column,
+              diagnostic: compilerDiagnostic,
+            ),
+          );
+        } else {
+          items.add(
+            AnalysisItem(
+              classification: ChangeClassification.patchable,
+              path: path,
+              detail: '${functionIds.length} function(s) selected',
+              functionIds: functionIds,
+              libraryUri: after.libraryUri,
+              line: location?.line,
+              column: location?.column,
+            ),
+          );
+        }
       }
     }
     if (graph.fingerprint != release.graphFingerprint) {
@@ -3180,7 +3483,12 @@ final class HyfensToolchain {
     }
     final sequence = store.nextSequence(analysis.release.releaseId);
     final changed = analysis.items
-        .where((item) => item.classification == ChangeClassification.patchable)
+        .where(
+          (item) =>
+              item.compatibility == PatchCompatibilityDecision.patchable ||
+              item.compatibility ==
+                  PatchCompatibilityDecision.patchableRestartRequired,
+        )
         .expand((item) => item.functionIds)
         .toSet();
     if (changed.isEmpty) {
@@ -3219,16 +3527,28 @@ final class HyfensToolchain {
           detail: planned.manifest.id,
         );
       }
-      final bytes = HyfensCompiler().compile(
-        PatchCompileRequest(
-          source: planned.source.file.readAsStringSync(),
-          manifest: planned.sourceManifest(analysis.plan),
-          functionName: planned.manifest.name,
-          className: planned.manifest.identity.ownerName,
-          canonicalLibraryUri: planned.source.libraryUri,
-          patchSequence: sequence,
-        ),
-      );
+      late final List<int> bytes;
+      try {
+        bytes = HyfensCompiler().compile(
+          PatchCompileRequest(
+            source: planned.source.file.readAsStringSync(),
+            manifest: planned.sourceManifest(analysis.plan),
+            functionName: planned.manifest.name,
+            className: planned.manifest.identity.ownerName,
+            canonicalLibraryUri: planned.source.libraryUri,
+            patchSequence: sequence,
+          ),
+        );
+      } on FormatException catch (error) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.compatibility,
+          code: ToolDiagnosticCodes.patchCompilerUnsupported,
+          summary: 'Patch compiler rejected a selected function',
+          detail: '${planned.manifest.name}: ${error.message}',
+          path: planned.source.relativeTo(current),
+          action: 'Create a new base release or change only a supported method body.',
+        );
+      }
       final program = E0PatchContainer.decode(
         bytes,
         expectedAppId: analysis.release.applicationId,
@@ -3238,15 +3558,15 @@ final class HyfensToolchain {
         expectedSignatures: expectedSignatures,
         expectedReceivers: expectedReceivers,
       );
-      if (program.capabilities.isNotEmpty ||
-          program.widgetFactories.isNotEmpty) {
+      if (program.capabilities.isNotEmpty) {
         throw ToolFailure.single(
           exitCode: ToolExitCode.analysis,
           code: 'P2011',
           summary: 'Compiled patch requires an undeclared host contract',
-          detail:
-              '${program.capabilities.length} capabilities, ${program.widgetFactories.length} widget factories',
-          action: 'Use only capabilities declared by the release contract or create a normal store release.',
+          detail: '${program.capabilities.length} runtime capabilities',
+          action:
+              'Use only capabilities declared by the release contract or create a normal store release. '
+              'Widget constructors must come from the immutable Flutter widget ABI.',
         );
       }
       compiled[planned.manifest.id] = bytes;
@@ -3261,7 +3581,7 @@ final class HyfensToolchain {
     patchFunctions.sort((left, right) => left.id.compareTo(right.id));
     final bridge = <String, Object?>{
       'bridgeVersion': 1,
-      'encoding': 'e0-patch-container-v9-bytes',
+      'encoding': 'e0-patch-container-v10-bytes',
       'functions': <String, Object?>{
         for (final id in compiled.keys.toList()..sort())
           id: base64.encode(compiled[id]!),
@@ -3585,7 +3905,8 @@ final class HyfensToolchain {
       for (final entity in root.listSync(recursive: true, followLinks: false)) {
         if (entity is! File) continue;
         final relative = relativePath(project.root, entity);
-        if (_nativeInput(relative) && !_volatileNativePath(relative)) {
+        if (isNativeBuildInputPath(relative) &&
+            !_volatileNativePath(relative)) {
           paths.add(relative);
         }
       }
@@ -3608,7 +3929,8 @@ final class HyfensToolchain {
         )) {
           if (entity is! File) continue;
           final relative = relativePath(package.root!, entity);
-          if (_nativeInput(relative) && !_volatileNativePath(relative)) {
+          if (isNativeBuildInputPath(relative) &&
+              !_volatileNativePath(relative)) {
             packageFiles['package:${package.name}/$relative'] = entity;
           }
         }
@@ -3637,6 +3959,7 @@ final class HyfensToolchain {
     String? flavor,
     required ToolEnvironmentSnapshot environment,
     required ProjectGraph graph,
+    required bool usesMaterialDesign,
     required Directory artifactStagingDirectory,
   }) async {
     if (environment.flutterStatus != 'SUPPORTED') {
@@ -3654,8 +3977,31 @@ final class HyfensToolchain {
       await _copyTree(
         project.root,
         workspace,
-        skip: <String>{'.git', '.tool', 'build', '.dart_tool'},
+        skip: <String>{
+          '.git',
+          '.tool',
+          'build',
+          '.dart_tool',
+          // Flutter's iOS SPM/CocoaPods staging tree contains symlinks to
+          // the developer's package cache. It must be regenerated in the
+          // isolated workspace rather than copied as a partial tree.
+          'ephemeral',
+        },
       );
+      final iosEphemeral = Directory(
+        p.join(project.root.path, 'ios', 'Flutter', 'ephemeral'),
+      );
+      if (iosEphemeral.existsSync()) {
+        // Flutter's iOS SPM staging tree contains symlinks into the local
+        // package cache. Resolve those links into the isolated workspace so
+        // Xcode sees a complete, self-contained package tree.
+        await _copyTree(
+          iosEphemeral,
+          Directory(p.join(workspace.path, 'ios', 'Flutter', 'ephemeral')),
+          skip: <String>{'.DS_Store', '.swiftpm'},
+          resolveLinks: true,
+        );
+      }
       await _copyTree(
         Directory(p.join(project.root.path, '.dart_tool')),
         Directory(p.join(workspace.path, '.dart_tool')),
@@ -3827,6 +4173,23 @@ final class HyfensToolchain {
       );
       await destination.parent.create(recursive: true);
       await output.copy(destination.path);
+      final resourceEvidence = captureFlutterArtifactEvidence(
+        workspace,
+        usesMaterialDesign: usesMaterialDesign,
+      );
+      if (resourceEvidence.status != 'COMPLETE') {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.environment,
+          code: ToolDiagnosticCodes.resourceArtifactEvidenceUnavailable,
+          summary: 'Flutter release resource evidence is incomplete',
+          detail:
+              'Asset manifest: ${resourceEvidence.assetManifestPresent}; '
+              'font manifest: ${resourceEvidence.fontManifestPresent}; '
+              'Material icon font: ${resourceEvidence.materialIconFontPresent}.',
+          action: 'Use a complete Flutter mobile build output and retry; no patchable base was recorded.',
+          storeReleaseRequired: true,
+        );
+      }
       return <String, Object?>{
         'metadataOnly': false,
         'status': 'SUCCESS',
@@ -3834,6 +4197,7 @@ final class HyfensToolchain {
         'elapsedMs': DateTime.now().difference(started).inMilliseconds,
         'artifact': p.basename(output.path),
         'artifactPath': destination.path,
+        'resourceEvidence': resourceEvidence.toJson(),
       };
     } finally {
       if (workspace.existsSync()) {
@@ -3849,6 +4213,7 @@ final class HyfensToolchain {
       'HYFENS_APPLICATION_ID',
       'HYFENS_ENVIRONMENT_ID',
       'HYFENS_PLATFORM_ID',
+      'HYFENS_INSTALL_RECEIPT_MODE',
     ];
     final arguments = <String>[];
     final recordedArguments = <String>[];
@@ -3930,10 +4295,8 @@ final class HyfensToolchain {
       rewritten.add(<String, Object?>{...item, 'rootUri': rootUri.toString()});
     }
     if (!hasInstrumentationRuntime) {
-      final runtimeFile = Isolate.resolvePackageUriSync(
-        Uri.parse('package:instrumentation_e0/e0_runtime.dart'),
-      );
-      if (runtimeFile == null || runtimeFile.scheme != 'file') {
+      final runtimeFile = _runtimePackageFile();
+      if (runtimeFile == null) {
         throw ToolFailure.single(
           exitCode: ToolExitCode.environment,
           code: 'T1605',
@@ -3942,7 +4305,7 @@ final class HyfensToolchain {
           action: 'Install the tool with its runtime package and retry.',
         );
       }
-      final runtimeRoot = Directory.fromUri(runtimeFile).parent.parent;
+      final runtimeRoot = runtimeFile.parent.parent;
       rewritten.add(<String, Object?>{
         'name': 'instrumentation_e0',
         'rootUri': Directory(runtimeRoot.resolveSymbolicLinksSync())
@@ -3953,6 +4316,7 @@ final class HyfensToolchain {
         'languageVersion': '3.13',
       });
     }
+    _appendPackagedRuntimePackages(rewritten);
     _appendToolRuntimePackages(rewritten);
     final output = <String, Object?>{...raw, 'packages': rewritten};
     await writeAtomicText(
@@ -4351,6 +4715,42 @@ public final class GeneratedPluginRegistrant {
     }
   }
 
+  void _appendPackagedRuntimePackages(List<Object?> rewritten) {
+    final packages = RuntimePackageBundle.installedPackages();
+    if (packages.isEmpty) return;
+    final existing = <String>{
+      for (final item in rewritten)
+        if (item is Map<String, Object?> && item['name'] is String)
+          item['name']! as String,
+    };
+    for (final name in RuntimePackageBundle.packageNames) {
+      final root = packages[name];
+      if (root == null || !existing.add(name)) continue;
+      rewritten.add(<String, Object?>{
+        'name': name,
+        'rootUri': Directory(root.resolveSymbolicLinksSync()).absolute.uri
+            .toString(),
+        'packageUri': 'lib/',
+        'languageVersion': '3.13',
+      });
+    }
+  }
+
+  File? _runtimePackageFile() {
+    final packaged =
+        RuntimePackageBundle.installedPackages()['instrumentation_e0'];
+    if (packaged != null) {
+      final file = File(p.join(packaged.path, 'lib', 'e0_runtime.dart'));
+      if (file.existsSync()) return file;
+    }
+    final resolved = Isolate.resolvePackageUriSync(
+      Uri.parse('package:instrumentation_e0/e0_runtime.dart'),
+    );
+    if (resolved == null || resolved.scheme != 'file') return null;
+    final file = File.fromUri(resolved);
+    return file.existsSync() ? file : null;
+  }
+
   /// Rebuilds the temporary package graph after adding the runtime package.
   ///
   /// Flutter's plugin discovery follows `.dart_tool/package_graph.json`, not
@@ -4731,33 +5131,6 @@ final class PatchInspection {
   };
 }
 
-bool _nativeInput(String relative) {
-  final lower = relative.toLowerCase();
-  final basename = p.basename(lower);
-  return lower.endsWith('androidmanifest.xml') ||
-      lower.endsWith('podfile.lock') ||
-      basename == 'podfile' ||
-      lower.endsWith('.plist') ||
-      lower.endsWith('.pbxproj') ||
-      lower.endsWith('.entitlements') ||
-      lower.endsWith('.xcconfig') ||
-      lower.endsWith('.gradle') ||
-      lower.endsWith('.gradle.kts') ||
-      lower.endsWith('gradle.properties') ||
-      lower.endsWith('settings.gradle') ||
-      lower.endsWith('settings.gradle.kts') ||
-      lower.endsWith('.podfile') ||
-      lower.endsWith('.podspec') ||
-      lower.endsWith('.kt') ||
-      lower.endsWith('.swift') ||
-      lower.endsWith('.java') ||
-      lower.endsWith('.mm') ||
-      lower.endsWith('.m') ||
-      lower.endsWith('.h') ||
-      lower.endsWith('.cpp') ||
-      lower.endsWith('.c');
-}
-
 bool _volatileNativePath(String relative) {
   final segments = relative
       .replaceAll(r'\', '/')
@@ -4802,6 +5175,7 @@ Future<void> _copyTree(
   Directory source,
   Directory destination, {
   required Set<String> skip,
+  bool resolveLinks = false,
 }) async {
   await destination.create(recursive: true);
   final entries = source.listSync(followLinks: false)
@@ -4812,10 +5186,32 @@ Future<void> _copyTree(
     final target = p.join(destination.path, name);
     switch (FileSystemEntity.typeSync(entry.path, followLinks: false)) {
       case FileSystemEntityType.directory:
-        await _copyTree(Directory(entry.path), Directory(target), skip: skip);
+        await _copyTree(
+          Directory(entry.path),
+          Directory(target),
+          skip: skip,
+          resolveLinks: resolveLinks,
+        );
       case FileSystemEntityType.file:
         await File(entry.path).copy(target);
       case FileSystemEntityType.link:
+        if (!resolveLinks) break;
+        final resolvedPath = entry.resolveSymbolicLinksSync();
+        if (resolvedPath == entry.path) break;
+        switch (FileSystemEntity.typeSync(resolvedPath)) {
+          case FileSystemEntityType.directory:
+            await _copyTree(
+              Directory(resolvedPath),
+              Directory(target),
+              skip: skip,
+              resolveLinks: true,
+            );
+          case FileSystemEntityType.file:
+            await File(resolvedPath).copy(target);
+          case FileSystemEntityType.link:
+          case FileSystemEntityType.notFound:
+            break;
+        }
       case FileSystemEntityType.notFound:
         break;
     }
@@ -4887,6 +5283,95 @@ ToolDiagnostic _diagnosticFromJson(Object? value) {
     action: value['action'] as String?,
     storeReleaseRequired: value['storeReleaseRequired'] as bool? ?? false,
   );
+}
+
+ToolDiagnostic? _patchCompilerPreflight({
+  required InstrumentationPlan plan,
+  required ReleaseRecord release,
+  required String path,
+  required List<String> functionIds,
+}) {
+  final expectedFunctions = <String, int>{
+    for (final function in release.functions) function.id: function.slot,
+  };
+  final expectedSignatures = <String, E0FunctionSignature>{};
+  final expectedReceivers = <String, E0ReceiverDescriptor>{};
+  for (final function in release.functions) {
+    final manifest = E0FunctionManifest.fromJson(function.manifest);
+    expectedSignatures[function.id] = manifest.signature;
+    expectedReceivers[function.id] = manifest.receiver;
+  }
+  for (final functionId in functionIds) {
+    final candidates = plan.functions.where(
+      (function) => function.manifest.id == functionId,
+    );
+    final planned = candidates.isEmpty ? null : candidates.first;
+    if (planned == null) {
+      return ToolDiagnostic(
+        code: 'P2009',
+        severity: DiagnosticSeverity.error,
+        summary: 'Changed function is not in the release baseline',
+        detail: functionId,
+        path: path,
+        action: 'Create a new store release for the changed function table.',
+      );
+    }
+    try {
+      final bytes = const HyfensCompiler().compile(
+        PatchCompileRequest(
+          source: planned.source.file.readAsStringSync(),
+          manifest: planned.sourceManifest(plan),
+          functionName: planned.manifest.name,
+          className: planned.manifest.identity.ownerName,
+          canonicalLibraryUri: planned.source.libraryUri,
+          patchSequence: 1,
+        ),
+      );
+      final program = E0PatchContainer.decode(
+        bytes,
+        expectedAppId: release.applicationId,
+        expectedReleaseId: release.releaseId,
+        expectedBuildFingerprint: release.buildFingerprint,
+        expectedFunctions: expectedFunctions,
+        expectedSignatures: expectedSignatures,
+        expectedReceivers: expectedReceivers,
+      );
+      if (program.capabilities.isNotEmpty) {
+        return ToolDiagnostic(
+          code: 'P2011',
+          severity: DiagnosticSeverity.error,
+          summary: 'Compiled patch requires an undeclared host contract',
+          detail: '${program.capabilities.length} runtime capabilities',
+          path: path,
+          action: 'Use only capabilities declared by the release contract or create a normal store release.',
+        );
+      }
+    } on FormatException catch (error) {
+      return ToolDiagnostic(
+        code: ToolDiagnosticCodes.patchCompilerUnsupported,
+        severity: DiagnosticSeverity.error,
+        summary:
+            'Changed function uses an unsupported patch compiler construct',
+        detail:
+            'Unsupported patch compiler construct in ${planned.manifest.name}: '
+            '${error.message}',
+        path: path,
+        action:
+            'Create a new base release or change only a supported method body.',
+      );
+    } on Object catch (error) {
+      return ToolDiagnostic(
+        code: ToolDiagnosticCodes.patchCompilerPreflightFailed,
+        severity: DiagnosticSeverity.error,
+        summary: 'Patch compiler preflight failed',
+        detail:
+            'Patch compiler preflight failed in ${planned.manifest.name}: $error',
+        path: path,
+        action: 'Create a new base release or report the compiler failure with this diagnostic.',
+      );
+    }
+  }
+  return null;
 }
 
 extension on PlannedFunction {

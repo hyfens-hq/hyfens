@@ -125,9 +125,7 @@ class AuthStorage {
       legacy.endpoint,
       operation: 'stored profile',
     );
-    final managed =
-        controlPlaneEndpointKey(endpoint) ==
-        controlPlaneEndpointKey(Uri.parse(managedCloudApiBase));
+    final managed = isManagedCloudEndpoint(endpoint);
     // A legacy ProfileScope name identifies a membership, not a control-plane
     // endpoint. Give migrated endpoint metadata a stable public profile name.
     final name = managed ? managedCloudProfileName : 'self-hosted';
@@ -207,17 +205,14 @@ class AuthStorage {
         ? (remainingProfiles.isEmpty ? null : remainingProfiles.first.name)
         : catalog.activeProfile;
     final endpointStillUsed = remainingProfiles.any(
-      (item) =>
-          controlPlaneEndpointKey(item.endpoint) ==
-          controlPlaneEndpointKey(profile.endpoint),
+      (item) => controlPlaneEndpointsMatch(item.endpoint, profile.endpoint),
     );
     // Keep endpoint-bound credentials while another named profile still uses
     // the same control plane. This matters for multiple scopes on one host.
     if (!endpointStillUsed) {
       await clearSession(endpoint: profile.endpoint);
       if (legacy != null &&
-          controlPlaneEndpointKey(legacy.endpoint) ==
-              controlPlaneEndpointKey(profile.endpoint)) {
+          controlPlaneEndpointsMatch(legacy.endpoint, profile.endpoint)) {
         await clearProfile();
       }
     }
@@ -242,8 +237,7 @@ class AuthStorage {
       final legacy = await _readLegacyProfile();
       final legacyForEndpoint =
           legacy != null &&
-              controlPlaneEndpointKey(legacy.endpoint) ==
-                  controlPlaneEndpointKey(selected.endpoint)
+              controlPlaneEndpointsMatch(legacy.endpoint, selected.endpoint)
           ? legacy
           : null;
       // Keep the legacy identity projection for compatibility when it is
@@ -283,16 +277,41 @@ class AuthStorage {
     final target = endpoint ?? await _sessionEndpoint();
     final credentials = await _readCredentials();
     if (target != null) {
-      final encoded = credentials[controlPlaneEndpointKey(target)];
+      final normalizedTarget = validateControlPlaneEndpoint(
+        target,
+        operation: 'credential lookup',
+      );
+      final canonicalTarget = canonicalizeManagedCloudEndpoint(
+        normalizedTarget,
+      );
+      final canonicalKey = controlPlaneEndpointKey(canonicalTarget);
+      final encoded = credentials[canonicalKey];
       if (encoded != null) return _decodeSession(encoded);
+      // v0.1.1 and earlier keyed managed Cloud credentials by the legacy
+      // deployment prefix. Migrate only that exact managed alias; arbitrary
+      // self-hosted `/p2/` endpoints remain separate credential identities.
+      if (isManagedCloudEndpoint(normalizedTarget)) {
+        final legacyKey = controlPlaneEndpointKey(
+          Uri.parse(legacyManagedCloudApiBase),
+        );
+        final legacyEncoded = credentials[legacyKey];
+        if (legacyEncoded != null && legacyKey != canonicalKey) {
+          credentials[canonicalKey] = legacyEncoded;
+          credentials.remove(legacyKey);
+          await _writeJson(credentialsFile, credentials, code: 'A1006');
+          return _decodeSession(legacyEncoded);
+        }
+      }
       // A legacy session file predates endpoint-keyed storage and has no
       // binding metadata. Keep it readable for the existing migration path;
       // every canonical credential entry remains keyed and explicit endpoint
       // reads below still reject a different host.
       final legacyProfile = await _readLegacyProfile();
       if (legacyProfile == null ||
-          controlPlaneEndpointKey(legacyProfile.endpoint) !=
-              controlPlaneEndpointKey(target)) {
+          !controlPlaneEndpointsMatch(
+            legacyProfile.endpoint,
+            normalizedTarget,
+          )) {
         return null;
       }
     }
@@ -316,8 +335,15 @@ class AuthStorage {
       endpoint,
       operation: 'credential storage',
     );
+    final canonicalTarget = canonicalizeManagedCloudEndpoint(target);
     final credentials = await _readCredentials();
-    credentials[controlPlaneEndpointKey(target)] = session.toJson();
+    final canonicalKey = controlPlaneEndpointKey(canonicalTarget);
+    credentials[canonicalKey] = session.toJson();
+    if (isManagedCloudEndpoint(target)) {
+      credentials.remove(
+        controlPlaneEndpointKey(Uri.parse(legacyManagedCloudApiBase)),
+      );
+    }
     await _writeJson(credentialsFile, credentials, code: 'A1006');
     // Keep the old projection for scripts that only inspect the active
     // session file. Reads use the keyed store whenever it exists.
@@ -332,8 +358,20 @@ class AuthStorage {
       await _delete(sessionFile);
       return;
     }
+    final target = validateControlPlaneEndpoint(
+      endpoint,
+      operation: 'credential removal',
+    );
     final credentials = await _readCredentials();
-    credentials.remove(controlPlaneEndpointKey(endpoint));
+    credentials.remove(controlPlaneEndpointKey(target));
+    if (isManagedCloudEndpoint(target)) {
+      credentials.remove(
+        controlPlaneEndpointKey(Uri.parse(managedCloudApiBase)),
+      );
+      credentials.remove(
+        controlPlaneEndpointKey(Uri.parse(legacyManagedCloudApiBase)),
+      );
+    }
     if (credentials.isEmpty) {
       await _delete(credentialsFile);
     } else {
@@ -344,8 +382,7 @@ class AuthStorage {
     // profile would log out the active legacy projection as a side effect.
     final legacyProfile = await _readLegacyProfile();
     if (legacyProfile == null ||
-        controlPlaneEndpointKey(legacyProfile.endpoint) ==
-            controlPlaneEndpointKey(endpoint)) {
+        controlPlaneEndpointsMatch(legacyProfile.endpoint, target)) {
       await _delete(sessionFile);
     }
   }

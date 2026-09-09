@@ -321,6 +321,9 @@ final class ControlPlaneConfig {
     this.artifactUseTaskRole = false,
     this.artifactKeyPrefix = '',
     this.artifactRegion = 'us-east-1',
+    this.artifactAdmissionUrl,
+    this.artifactAdmissionServiceToken,
+    this.artifactAdmissionRequired = false,
     this.maxJsonBodyBytes = 256 * 1024,
     this.maxArtifactBytes = 4 * 1024 * 1024,
     this.rateLimitPerMinute = 600,
@@ -328,6 +331,7 @@ final class ControlPlaneConfig {
     this.reconciliationPeriodic = const ReconciliationPeriodicConfig(),
     this.auth,
     this.allowInsecureAuth = false,
+    this.runtimeAcceptanceEnvironmentIds = const <String>{},
     this.discovery = const ControlPlaneDiscoveryConfig(),
     this.deploymentModel = DeploymentModel.selfHosted,
     this.razorpayBilling,
@@ -347,6 +351,9 @@ final class ControlPlaneConfig {
   final bool artifactUseTaskRole;
   final String artifactKeyPrefix;
   final String artifactRegion;
+  final Uri? artifactAdmissionUrl;
+  final String? artifactAdmissionServiceToken;
+  final bool artifactAdmissionRequired;
   final int maxJsonBodyBytes;
   final int maxArtifactBytes;
   final int rateLimitPerMinute;
@@ -358,7 +365,12 @@ final class ControlPlaneConfig {
   /// HTTP requests. It is disabled by default; remote deployments must use
   /// HTTPS at the public edge.
   final bool allowInsecureAuth;
+
+  /// Explicit development-only environments for non-billable runtime
+  /// acceptance receipts. An empty set keeps receipt settlement disabled.
+  final Set<String> runtimeAcceptanceEnvironmentIds;
   final ControlPlaneDiscoveryConfig discovery;
+  final CloudOnboardingConfig cloudOnboarding;
 
   /// Cloud is opt-in. The default protects existing OSS/self-hosted
   /// deployments from accidentally receiving Cloud subscription semantics.
@@ -388,6 +400,9 @@ final class ControlPlaneConfig {
       env,
       'HYFENS_AUTH_ALLOW_INSECURE_HTTP',
       false,
+    );
+    final runtimeAcceptanceEnvironmentIds = _parseRuntimeAcceptanceEnvironments(
+      env['HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS'],
     );
     final periodic = ReconciliationPeriodicConfig.fromEnvironment(env);
     final auth = HumanAuthConfig.fromEnvironment(env);
@@ -431,6 +446,42 @@ final class ControlPlaneConfig {
             (endpoint.scheme != 'http' && endpoint.scheme != 'https'))) {
       throw ArgumentError('HYFENS_ARTIFACT_ENDPOINT must be a URI');
     }
+    final artifactAdmissionRequired = _bool(
+      env,
+      'HYFENS_ARTIFACT_ADMISSION_REQUIRED',
+      false,
+    );
+    final artifactAdmissionUrl = _artifactAdmissionUrl(
+      env['HYFENS_ARTIFACT_ADMISSION_URL'],
+    );
+    final rawArtifactAdmissionToken =
+        env['HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN'];
+    final artifactAdmissionServiceToken =
+        rawArtifactAdmissionToken == null || rawArtifactAdmissionToken.isEmpty
+        ? null
+        : rawArtifactAdmissionToken;
+    final admissionPartiallyConfigured =
+        artifactAdmissionUrl != null || artifactAdmissionServiceToken != null;
+    if (artifactAdmissionRequired &&
+        (artifactAdmissionUrl == null ||
+            artifactAdmissionServiceToken == null)) {
+      throw ArgumentError(
+        'Artifact admission URL and service token are required when admission is required',
+      );
+    }
+    if (admissionPartiallyConfigured &&
+        (artifactAdmissionUrl == null ||
+            artifactAdmissionServiceToken == null)) {
+      throw ArgumentError(
+        'Artifact admission URL and service token must be configured together',
+      );
+    }
+    if (artifactAdmissionServiceToken != null &&
+        !_validArtifactAdmissionToken(artifactAdmissionServiceToken)) {
+      throw ArgumentError(
+        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN must be a 32-256 character base64url value',
+      );
+    }
     final accessKey = env['HYFENS_ARTIFACT_ACCESS_KEY'];
     final secretKey = env['HYFENS_ARTIFACT_SECRET_KEY'];
     final useTaskRole = _bool(env, 'HYFENS_ARTIFACT_USE_TASK_ROLE', false);
@@ -465,6 +516,9 @@ final class ControlPlaneConfig {
       artifactUseTaskRole: useTaskRole,
       artifactKeyPrefix: env['HYFENS_ARTIFACT_KEY_PREFIX'] ?? '',
       artifactRegion: env['HYFENS_ARTIFACT_REGION'] ?? 'us-east-1',
+      artifactAdmissionUrl: artifactAdmissionUrl,
+      artifactAdmissionServiceToken: artifactAdmissionServiceToken,
+      artifactAdmissionRequired: artifactAdmissionRequired,
       maxJsonBodyBytes: maxJson,
       maxArtifactBytes: maxArtifact,
       rateLimitPerMinute: rate,
@@ -472,6 +526,7 @@ final class ControlPlaneConfig {
       reconciliationPeriodic: periodic,
       auth: auth,
       allowInsecureAuth: allowInsecureAuth,
+      runtimeAcceptanceEnvironmentIds: runtimeAcceptanceEnvironmentIds,
       discovery: discovery,
       deploymentModel: deploymentModel,
       razorpayBilling: razorpayBilling,
@@ -489,6 +544,50 @@ final class ControlPlaneConfig {
       _ => throw ArgumentError('$key must be true or false'),
     };
   }
+
+  static Set<String> _parseRuntimeAcceptanceEnvironments(String? value) {
+    if (value == null || value.isEmpty) return const <String>{};
+    final result = <String>{};
+    for (final raw in value.split(',')) {
+      final id = raw.trim();
+      if (!RegExp(r'^[a-z][a-z0-9_]{1,63}$').hasMatch(id)) {
+        throw ArgumentError(
+          'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS contains an invalid environment ID',
+        );
+      }
+      result.add(id);
+    }
+    return Set.unmodifiable(result);
+  }
+
+  static Uri? _artifactAdmissionUrl(String? value) {
+    if (value == null || value.isEmpty) return null;
+    if (value.length > 2048 || value.contains(RegExp(r'[\u0000\r\n]'))) {
+      throw ArgumentError(
+        'HYFENS_ARTIFACT_ADMISSION_URL must be a private HTTPS endpoint',
+      );
+    }
+    final uri = Uri.tryParse(value);
+    final loopback =
+        uri != null &&
+        (uri.host.toLowerCase() == 'localhost' ||
+            (InternetAddress.tryParse(uri.host)?.isLoopback ?? false));
+    if (uri == null ||
+        !uri.hasAuthority ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        uri.path != '/internal/runtime/artifact-admission' ||
+        !(uri.scheme == 'https' || uri.scheme == 'http' && loopback)) {
+      throw ArgumentError(
+        'HYFENS_ARTIFACT_ADMISSION_URL must be a private HTTPS or loopback HTTP endpoint',
+      );
+    }
+    return uri;
+  }
+
+  static bool _validArtifactAdmissionToken(String value) =>
+      RegExp(r'^[A-Za-z0-9_-]{32,256}$').hasMatch(value);
 
   static String? _databaseUrlFromComponents(Map<String, String> env) {
     final host = env['HYFENS_DATABASE_HOST'];

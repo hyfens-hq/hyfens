@@ -8,18 +8,14 @@ Future<Directory> _createOverlayProject() async {
   final root = await Directory.systemTemp.createTemp(
     'hyfens-release-overlay-plugin-',
   );
-  final create = await Process.run(
-    'flutter',
-    <String>[
-      'create',
-      '--no-pub',
-      '--platforms=android',
-      '--project-name=overlay_app',
-      '--org=dev.example',
-      '.',
-    ],
-    workingDirectory: root.path,
-  );
+  final create = await Process.run('flutter', <String>[
+    'create',
+    '--no-pub',
+    '--platforms=android',
+    '--project-name=overlay_app',
+    '--org=dev.example',
+    '.',
+  ], workingDirectory: root.path);
   if (create.exitCode != 0) {
     throw StateError('${create.stdout}\n${create.stderr}');
   }
@@ -51,25 +47,33 @@ void main() {
 }
 ''');
 
-  final pubGet = await Process.run(
-    'flutter',
-    <String>['pub', 'get'],
-    workingDirectory: root.path,
-  );
+  final pubGet = await Process.run('flutter', <String>[
+    'pub',
+    'get',
+  ], workingDirectory: root.path);
   if (pubGet.exitCode != 0) {
     throw StateError('${pubGet.stdout}\n${pubGet.stderr}');
   }
   return root;
 }
 
-Future<ProcessResult> _runTool(
-  Directory project,
-  List<String> arguments,
-) => Process.run(
-  Platform.resolvedExecutable,
-  <String>['run', 'bin/tool.dart', '--project', project.path, ...arguments],
-  workingDirectory: Directory.current.path,
-);
+Future<ProcessResult> _runTool(Directory project, List<String> arguments) {
+  final packagedCli = Platform.environment['HYFENS_TEST_PACKAGED_CLI'];
+  if (packagedCli != null && packagedCli.isNotEmpty) {
+    return Process.run(packagedCli, <String>[
+      '--project',
+      project.path,
+      ...arguments,
+    ], workingDirectory: Directory.current.path);
+  }
+  return Process.run(Platform.resolvedExecutable, <String>[
+    'run',
+    'bin/tool.dart',
+    '--project',
+    project.path,
+    ...arguments,
+  ], workingDirectory: Directory.current.path);
+}
 
 void main() {
   test(
@@ -80,19 +84,25 @@ void main() {
 
       final init = await _runTool(project, <String>['init', '--json']);
       expect(init.exitCode, 0, reason: '${init.stdout}\n${init.stderr}');
-      final keys = await _runTool(project, <String>['keys', 'generate', '--json']);
+      final keys = await _runTool(project, <String>[
+        'keys',
+        'generate',
+        '--json',
+      ]);
       expect(keys.exitCode, 0, reason: '${keys.stdout}\n${keys.stderr}');
 
-      final release = await _runTool(
-        project,
-        <String>['release', 'android', '--json'],
-      );
+      final release = await _runTool(project, <String>[
+        'release',
+        'android',
+        '--json',
+      ]);
       expect(
         release.exitCode,
         0,
         reason: '${release.stdout}\n${release.stderr}',
       );
-      final body = jsonDecode(release.stdout.toString()) as Map<String, dynamic>;
+      final body =
+          jsonDecode(release.stdout.toString()) as Map<String, dynamic>;
       final build = body['build'] as Map<String, dynamic>;
       expect(build['status'], 'SUCCESS');
       expect(build['artifact'], endsWith('.apk'));
@@ -101,6 +111,8 @@ void main() {
         isTrue,
       );
     },
-    timeout: const Timeout(Duration(minutes: 3)),
+    // This invokes real Dart subprocesses and a cold Flutter/Gradle release
+    // build, not a unit-level operation. Keep a bounded integration deadline.
+    timeout: const Timeout(Duration(minutes: 10)),
   );
 }

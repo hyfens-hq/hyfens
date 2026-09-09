@@ -163,5 +163,7 @@ instrumentation: false
       expect(decoded['runtime'], isA<Map<String, Object?>>());
       expect(result.stdout.toString(), isNot(contains(root.path)));
     },
+    // Includes compilation of the real CLI, not only the local status read.
+    timeout: const Timeout(Duration(seconds: 90)),
   );
 }

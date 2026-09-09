@@ -360,6 +360,38 @@ The distribution response may include `ETag`, `Digest`, `Content-Length`,
 `Cache-Control: immutable`, and a request ID. A 304 is only a transport/cache
 result; the runtime never treats it as proof of validity.
 
+### Optional delivery admission hook
+
+A deployment may configure a generic admission adapter in the artifact-fetch
+path. The control plane resolves and checks the authenticated tenant,
+application, environment, release, patch, and artifact context first; the
+adapter is called before artifact bytes are read and returned. Clients may
+send these optional opaque headers:
+
+```http
+X-Hyfens-Install-Admission: <opaque-admission-id>
+X-Hyfens-Install-Proof: <opaque-proof-value>
+```
+
+The control plane forwards those values without parsing or verifying them.
+They are not evidence that a client executed code, is healthy, or passed an
+attestation check, and they never replace Patch Format v1 verification of the
+returned bytes.
+
+The hook is configured only through deployment environment variables:
+
+```text
+HYFENS_ARTIFACT_ADMISSION_REQUIRED=false
+HYFENS_ARTIFACT_ADMISSION_URL=<full HTTPS URL; loopback HTTP is allowed locally>
+HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN=<opaque base64url value, 32–256 characters>
+```
+
+With the URL and token unset, the hook is disabled and the existing self-hosted
+artifact-fetch behavior remains unchanged. The URL and token must be supplied
+together. Setting `HYFENS_ARTIFACT_ADMISSION_REQUIRED=true` without both
+values fails closed during process startup; when configured, an admission
+denial or unavailable adapter prevents artifact bytes from being returned.
+
 ## 8. Observation intake
 
 Observations are optional, bounded, deduplicated facts. They do not drive
@@ -451,7 +483,10 @@ body hash. Repeating the same key/body returns the original status and body;
 reusing it with a different body returns `409 IDEMPOTENCY_KEY_REUSED`. The
 retention window is a deployment policy with a documented minimum of 24 hours
 for release, patch, artifact, rollout, and key commands. Event IDs provide
-the equivalent deduplication for observations.
+the equivalent deduplication for observations. For secret-producing credential
+and invitation commands, a successful replay returns
+`409 ONE_TIME_SECRET_UNAVAILABLE`: the operation is not repeated, and the
+plaintext secret/bearer link is never persisted or replayed.
 
 Resources expose strong ETags derived from their canonical version. Commands
 that can change delivery, trust, policy, or environment state require:

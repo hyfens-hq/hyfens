@@ -1,4 +1,4 @@
-FROM dart:stable
+FROM dart:3.13.0@sha256:8b6175f6c6b89aaf31ffdace4a22d17715c07f1cf3a772dadb10c658f779e23d AS build
 
 WORKDIR /opt/hyfens/packages/control_plane
 ENV HOME=/tmp
@@ -9,7 +9,15 @@ COPY packages/control_plane /opt/hyfens/packages/control_plane
 COPY experiments/instrumentation /opt/hyfens/experiments/instrumentation
 COPY experiments/patch_loading /opt/hyfens/experiments/patch_loading
 
-RUN dart pub get
+RUN dart pub get --enforce-lockfile --no-example
+RUN mkdir -p /opt/hyfens/bin \
+    && dart compile exe bin/control_plane.dart -o /opt/hyfens/bin/control-plane
+
+FROM dart:3.13.0@sha256:8b6175f6c6b89aaf31ffdace4a22d17715c07f1cf3a772dadb10c658f779e23d
+
+WORKDIR /opt/hyfens
+ENV DART_SUPPRESS_ANALYTICS=1
+COPY --from=build /opt/hyfens/bin/control-plane /opt/hyfens/bin/control-plane
 
 # Keep redistribution terms with the published image as well as in the
 # source repository.
@@ -18,4 +26,4 @@ COPY THIRD_PARTY_NOTICES.md /opt/hyfens/THIRD_PARTY_NOTICES.md
 
 USER 65532:65532
 EXPOSE 18081
-ENTRYPOINT ["dart", "run", "bin/control_plane.dart"]
+ENTRYPOINT ["/opt/hyfens/bin/control-plane"]

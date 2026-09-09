@@ -2407,6 +2407,44 @@ html[data-theme="light"] body {
   font-size: 0.66rem;
 }
 
+.resource-actions {
+  display: grid;
+  gap: 8px;
+  min-width: 170px;
+}
+
+.inline-action-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.support-message-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.support-message {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface-soft);
+}
+
+.support-message p {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.74rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .status-tag {
   display: inline-flex;
   align-items: center;

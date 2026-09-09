@@ -206,6 +206,62 @@ void main() {
     expect(value?['name'], anyOf('first', 'second'));
   });
 
+  test(
+    'runtime receipt and usage settlement is cross-process idempotent',
+    () async {
+      final receiptId = 'runtime-receipt-race-$runId';
+      final usageEventId = 'runtime-usage-race-$runId';
+      final receipt = <String, Object?>{
+        'organizationId': 'org_pg_$runId',
+        'receiptId': receiptId,
+        'body': <String, Object?>{'receipt_id': receiptId},
+        'usageEventId': usageEventId,
+        'billable': false,
+        'trustLevel': 'DEVELOPMENT_ACCEPTANCE',
+      };
+      final usageEvent = <String, Object?>{
+        'organizationId': 'org_pg_$runId',
+        'eventType': 'successful_patch_install',
+        'eventId': usageEventId,
+        'billable': false,
+        'financialUsageUnits': 0,
+      };
+      final first = PostgresControlPlaneStore(connectionString);
+      final second = PostgresControlPlaneStore(connectionString);
+      await Future.wait(<Future<void>>[
+        first.initialize(),
+        second.initialize(),
+      ]);
+      addTearDown(() async {
+        await first.close();
+        await second.close();
+      });
+
+      final results = await Future.wait(<Future<RuntimeReceiptCommitResult>>[
+        first.commitRuntimeReceipt(
+          receiptId: receiptId,
+          receipt: receipt,
+          usageEventId: usageEventId,
+          usageEvent: usageEvent,
+        ),
+        second.commitRuntimeReceipt(
+          receiptId: receiptId,
+          receipt: receipt,
+          usageEventId: usageEventId,
+          usageEvent: usageEvent,
+        ),
+      ]);
+
+      expect(results.where((result) => result.createdReceipt), hasLength(1));
+      expect(results.where((result) => !result.createdReceipt), hasLength(1));
+      expect(await store.readJson('runtime_receipts', receiptId), isNotNull);
+      expect(
+        await store.readJson('runtime_usage_events', usageEventId),
+        isNotNull,
+      );
+    },
+  );
+
   test('observation uniqueness and retention are durable', () async {
     final event = ObservationEvent(
       schemaVersion: 1,

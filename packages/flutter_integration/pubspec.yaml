@@ -5,9 +5,12 @@ publish_to: none
 
 environment:
   sdk: ^3.13.0
+  flutter: '>=3.38.4'
 
 dependencies:
   crypto: ^3.0.7
+  flutter:
+    sdk: flutter
   hyfens_patch_format:
     path: ../patch_format
   instrumentation_e0:
@@ -18,6 +21,7 @@ dependencies:
 
 dev_dependencies:
   cryptography: ^2.9.0
+  pointycastle: ^3.9.1
   hyfens_control_plane:
     path: ../control_plane
   hyfens_runtime:
@@ -30,3 +34,12 @@ dev_dependencies:
 # independent of that early-JNI ordering.
 dependency_overrides:
   path_provider_android: 2.2.23
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: dev.hyfens.hyfens_flutter_integration
+        pluginClass: HyfensInstallationIdentityPlugin
+      ios:
+        pluginClass: HyfensInstallationIdentityPlugin

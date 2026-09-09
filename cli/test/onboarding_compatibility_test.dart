@@ -217,6 +217,7 @@ instrumentation: false
           'mcp',
           'doctor',
           'status',
+          'mcp',
           'login',
           'logout',
           'profile',

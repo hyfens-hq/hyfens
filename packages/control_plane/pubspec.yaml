@@ -14,6 +14,7 @@ dependencies:
   patch_loading_e1:
     path: ../../experiments/patch_loading
   path: ^1.9.1
+  pointycastle: ^3.9.1
   postgres: ^3.5.9
 
 dev_dependencies:

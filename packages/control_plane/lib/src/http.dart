@@ -20,7 +20,9 @@ import 'reconciliation_observability.dart';
 import 'reconciliation_periodic.dart';
 import 'release_bundle.dart';
 import 'rollout.dart';
+import 'runtime_receipts.dart';
 import 'service.dart';
+import 'support.dart';
 
 final class ControlPlaneHttpLimits {
   const ControlPlaneHttpLimits({
@@ -223,6 +225,9 @@ final class ControlPlaneHttpServer {
     this.periodicRunner,
     this.auditRetentionDays = 365,
     this.allowInsecureAuth = false,
+    this.runtimeReceiptSettlement,
+    CloudOnboardingConfig? cloudOnboarding,
+    CloudSignupVerificationDelivery? cloudSignupDelivery,
   }) : limits = limits,
        discovery =
            discovery ??
@@ -238,6 +243,7 @@ final class ControlPlaneHttpServer {
   final ControlPlaneDiscoveryConfig discovery;
   final int auditRetentionDays;
   final bool allowInsecureAuth;
+  final RuntimeReceiptSettlement? runtimeReceiptSettlement;
   final ReconciliationObservability? reconciliationObservability;
   final ReconciliationPeriodicRunner? periodicRunner;
   final OperatorOverviewProjection _operatorOverview;
@@ -485,6 +491,20 @@ final class ControlPlaneHttpServer {
       }
       if (request.method == 'POST' && apiPath == '/auth/device/approve') {
         await _authDeviceApprove(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'cloud', 'signup'])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _cloudSignup(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'cloud', 'verify'])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _cloudVerify(request, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -2041,6 +2061,7 @@ final class ControlPlaneHttpServer {
       applicationId: _optionalString(body, 'application_id'),
       environmentId: _optionalString(body, 'environment_id'),
       expiresAt: _optionalDateTime(body, 'expires_at'),
+      idempotencyKey: _idempotency(request),
       requestId: requestId,
     );
     await _json(request.response, 201, <String, Object?>{
@@ -4277,6 +4298,16 @@ final class ControlPlaneHttpServer {
       artifactId: artifactId,
       applicationId: applicationId,
       environmentId: environmentId,
+      admissionId: _optionalArtifactHeader(
+        request,
+        artifactAdmissionIdHeader,
+        maxLength: 256,
+      ),
+      downloadProof: _optionalArtifactHeader(
+        request,
+        artifactDownloadProofHeader,
+        maxLength: 4096,
+      ),
     );
     final responseBody = _artifactResponseSlice(request, result.bytes);
     await service.recordArtifactDelivery(
@@ -5189,6 +5220,14 @@ final class ControlPlaneHttpServer {
     return value;
   }
 
+  int _queryInt(Map<String, String> query, String key, int fallback) {
+    final value = query[key];
+    if (value == null) return fallback;
+    final parsed = int.tryParse(value);
+    if (parsed == null) throw FormatException('Invalid $key');
+    return parsed;
+  }
+
   String _apiPath(String suffix) =>
       '${discovery.apiBasePath.endsWith('/') ? discovery.apiBasePath : '${discovery.apiBasePath}/'}$suffix';
 
@@ -5454,6 +5493,52 @@ final class ControlPlaneHttpServer {
     return token;
   }
 
+  String? _optionalArtifactHeader(
+    HttpRequest request,
+    String name, {
+    required int maxLength,
+  }) {
+    final values = request.headers[name] ?? const <String>[];
+    if (values.isEmpty) return null;
+    if (values.length != 1) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Artifact admission headers are invalid',
+      );
+    }
+    final value = values.single;
+    if (value.isEmpty ||
+        value.length > maxLength ||
+        value.contains(RegExp(r'[\u0000\r\n]'))) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Artifact admission headers are invalid',
+      );
+    }
+    return value;
+  }
+
+  String? _optionalBearer(HttpRequest request) {
+    final value = request.headers.value('authorization');
+    if (value == null) return null;
+    if (!value.startsWith('Bearer ')) {
+      throw const ControlPlaneException(
+        'UNAUTHORIZED',
+        'Bearer credential is invalid',
+        statusCode: 401,
+      );
+    }
+    final token = value.substring(7);
+    if (token.isEmpty || token.contains(RegExp(r'[\r\n]'))) {
+      throw const ControlPlaneException(
+        'UNAUTHORIZED',
+        'Bearer credential is invalid',
+        statusCode: 401,
+      );
+    }
+    return token;
+  }
+
   String _idempotency(HttpRequest request) {
     final value = request.headers.value('idempotency-key');
     if (value == null) {
@@ -5644,11 +5729,22 @@ final class ControlPlaneHttpServer {
         'level': 'ERROR',
         'operation': ControlPlaneMetrics._operation(request),
         'method': request.method,
-        'path': request.uri.path,
+        'path': _redactedLogPath(request.uri.path),
         'code': code,
         'durationMicros': durationMicros,
       }),
     );
+  }
+
+  static String _redactedLogPath(String path) {
+    final segments = Uri.parse(path).pathSegments;
+    if (segments.length == 3 &&
+        segments[0] == 'v1' &&
+        (segments[1] == 'organization-invitations' ||
+            segments[1] == 'platform-staff-invitations')) {
+      return '/v1/${segments[1]}/:token';
+    }
+    return path;
   }
 
   String _string(Map<String, Object?> body, String key) {

@@ -6,6 +6,13 @@ This document defines the control-plane vocabulary and the hard tenant
 boundary. It does not change the Flutter runtime, Patch Format v1, capability
 contract v1, or the controller-owned state-v4 lifecycle.
 
+Current product note: `Application` is the authoritative customer resource.
+“Project” may be used as a developer-facing synonym in customer UI and CLI
+guidance, but the current control plane has no separate Project record or
+`Project → Application` API hierarchy. The Project row and relationship below
+are retained as design-only future grouping concepts, not an implementation
+requirement.
+
 ## 1. Domain boundary
 
 An **Organization** is the customer tenant. Every customer-owned object is

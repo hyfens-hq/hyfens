@@ -4,8 +4,17 @@ import 'package:hyfens_flutter_integration/flutter_integration.dart';
 import 'package:hyfens_flutter_integration/src/runtime_storage.dart';
 import 'package:test/test.dart';
 
+const _receiptModeDefine = String.fromEnvironment(
+  'HYFENS_INSTALL_RECEIPT_MODE',
+);
+
 void main() {
   group('generated bootstrap', () {
+    test('unset or explicitly disabled receipt mode stays local', () {
+      expect(_receiptModeDefine, anyOf('', 'disabled'));
+      expect(HyfensControlPlaneConfiguration.fromEnvironment(), isNull);
+    });
+
     test('invocation source is deterministic and release-bound', () {
       final source = HyfensFlutterIntegration.invocationSource(
         appId: 'com.example.app',

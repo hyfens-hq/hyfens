@@ -108,6 +108,28 @@ void main() {
     );
   });
 
+  test('runtime acceptance environments are explicit and bounded', () {
+    final config = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS': 'env_dev, env_test,env_dev',
+    });
+    expect(config.runtimeAcceptanceEnvironmentIds, <String>{
+      'env_dev',
+      'env_test',
+    });
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS': 'env_dev,,env_test',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS': 'ENV_DEV',
+      }),
+      throwsArgumentError,
+    );
+  });
+
   test('human auth configuration is explicit and bounded', () {
     final config = ControlPlaneConfig.fromEnvironment(<String, String>{
       'HYFENS_AUTH_SIGNING_KEY': base64.encode(List<int>.filled(32, 3)),
@@ -211,6 +233,48 @@ void main() {
     );
   });
 
+  test('managed Cloud signup requires explicit verification delivery', () {
+    final token = List<String>.filled(32, 'a').join();
+    final configured = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_CLOUD_SIGNUP_ENABLED': 'true',
+      'HYFENS_CLOUD_SIGNUP_VERIFICATION_URL':
+          'https://app.hyfens.com/verify-email',
+      'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_URL':
+          'https://mail.example.test/hyfens',
+      'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_TOKEN': token,
+      'HYFENS_CLOUD_SIGNUP_VERIFICATION_TTL_MINUTES': '45',
+    });
+    expect(configured.cloudOnboarding.enabled, isTrue);
+    expect(
+      configured.cloudOnboarding.verificationUrl,
+      Uri.parse('https://app.hyfens.com/verify-email'),
+    );
+    expect(
+      configured.cloudOnboarding.verificationTtl,
+      const Duration(minutes: 45),
+    );
+
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_CLOUD_SIGNUP_ENABLED': 'true',
+        'HYFENS_CLOUD_SIGNUP_VERIFICATION_URL':
+            'https://app.hyfens.com/verify-email',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_CLOUD_SIGNUP_ENABLED': 'true',
+        'HYFENS_CLOUD_SIGNUP_VERIFICATION_URL':
+            'https://app.hyfens.com/verify-email',
+        'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_URL':
+            'https://mail.example.test/hyfens',
+        'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_TOKEN': 'too-short',
+      }),
+      throwsArgumentError,
+    );
+  });
+
   test('database and object configuration are injectable', () {
     final config = ControlPlaneConfig.fromEnvironment(<String, String>{
       'HYFENS_HOST': '0.0.0.0',
@@ -259,6 +323,61 @@ void main() {
       }),
       throwsArgumentError,
     );
+  });
+
+  test('artifact admission configuration is neutral and fail-closed', () {
+    final unconfigured = ControlPlaneConfig.fromEnvironment(<String, String>{});
+    expect(unconfigured.artifactAdmissionRequired, isFalse);
+    expect(unconfigured.artifactAdmissionUrl, isNull);
+    expect(unconfigured.artifactAdmissionServiceToken, isNull);
+
+    final token = List<String>.filled(32, 'a').join();
+    final configured = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_ARTIFACT_ADMISSION_URL':
+          'http://127.0.0.1:18192/internal/runtime/artifact-admission',
+      'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': token,
+      'HYFENS_ARTIFACT_ADMISSION_REQUIRED': 'true',
+    });
+    expect(
+      configured.artifactAdmissionUrl,
+      Uri.parse('http://127.0.0.1:18192/internal/runtime/artifact-admission'),
+    );
+    expect(configured.artifactAdmissionServiceToken, token);
+    expect(configured.artifactAdmissionRequired, isTrue);
+
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_ARTIFACT_ADMISSION_REQUIRED': 'true',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_ARTIFACT_ADMISSION_URL':
+            'http://admission.example/internal/runtime/artifact-admission',
+        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': token,
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_ARTIFACT_ADMISSION_URL':
+            'https://admission.example/internal/runtime/artifact-admission?x=1',
+        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': token,
+      }),
+      throwsArgumentError,
+    );
+    const invalidToken = 'short-secret';
+    try {
+      ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_ARTIFACT_ADMISSION_URL':
+            'https://admission.example/internal/runtime/artifact-admission',
+        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': invalidToken,
+      });
+      fail('expected invalid artifact admission token');
+    } on ArgumentError catch (error) {
+      expect(error.toString(), isNot(contains(invalidToken)));
+    }
   });
 
   test('invalid limits and ports fail closed', () {
