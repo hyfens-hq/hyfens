@@ -2107,6 +2107,21 @@ final class BillingService {
       256,
     );
     final eventName = _providerText(body['event'], 'Razorpay event name', 128);
+    return _applyRazorpayWebhookBody(
+      rawBody: rawBody,
+      body: body,
+      eventId: eventId,
+      eventName: eventName,
+    );
+  }
+
+  Future<BillingProviderEventResult> _applyRazorpayWebhookBody({
+    required List<int> rawBody,
+    required Map<String, Object?> body,
+    required String eventId,
+    required String eventName,
+    bool processSubscriptionPayment = true,
+  }) async {
     final paymentEntity = _providerPaymentEntity(body);
     if (paymentEntity != null && eventName.startsWith('payment.')) {
       return _applyRazorpayPaymentWebhook(
@@ -2115,6 +2130,41 @@ final class BillingService {
         rawBody: rawBody,
         eventId: eventId,
         eventName: eventName,
+      );
+    }
+    if (processSubscriptionPayment &&
+        paymentEntity != null &&
+        (eventName == 'subscription.charged' ||
+            eventName == 'subscription.completed')) {
+      final subscriptionEntity = _providerSubscriptionEntity(body);
+      final subscriptionResult = await _applyRazorpayWebhookBody(
+        rawBody: rawBody,
+        body: body,
+        eventId: eventId,
+        eventName: eventName,
+        processSubscriptionPayment: false,
+      );
+      final paymentResult = await _applyRazorpayPaymentWebhook(
+        body: body,
+        entity: paymentEntity,
+        providerSubscriptionIdOverride: _providerString(
+          subscriptionEntity['id'],
+        ),
+        recordProviderEvent: false,
+        rawBody: rawBody,
+        eventId: eventId,
+        eventName: eventName,
+      );
+      return BillingProviderEventResult(
+        status: subscriptionResult.status,
+        eventId: eventId,
+        organizationId: subscriptionResult.organizationId,
+        subscription: subscriptionResult.subscription,
+        checkout: subscriptionResult.checkout,
+        enterpriseContract: subscriptionResult.enterpriseContract,
+        payment: paymentResult.payment,
+        refund: subscriptionResult.refund,
+        scheduledPlanChange: subscriptionResult.scheduledPlanChange,
       );
     }
     final refundEntity = _providerRefundEntity(body);
@@ -2396,6 +2446,8 @@ final class BillingService {
   Future<BillingProviderEventResult> _applyRazorpayPaymentWebhook({
     required Map<String, Object?> body,
     required Map<String, Object?> entity,
+    String? providerSubscriptionIdOverride,
+    bool recordProviderEvent = true,
     required List<int> rawBody,
     required String eventId,
     required String eventName,
@@ -2405,7 +2457,9 @@ final class BillingService {
       'Razorpay payment ID',
       128,
     );
-    final providerSubscriptionId = _providerString(entity['subscription_id']);
+    final providerSubscriptionId =
+        _providerString(entity['subscription_id']) ??
+        providerSubscriptionIdOverride;
     final subscriptionIdFromPayload = providerSubscriptionId;
     if (subscriptionIdFromPayload == null) {
       throw const ControlPlaneException(
@@ -2520,16 +2574,18 @@ final class BillingService {
     final occurredAt = _providerTimestamp(
       body['created_at'] ?? entity['created_at'],
     );
-    final created = await recordEvent(
-      organizationId: organizationId,
-      provider: 'razorpay',
-      eventId: eventId,
-      eventName: eventName,
-      payloadDigest: sha256Digest(rawBody),
-      providerSubscriptionId: subscriptionIdFromPayload,
-      providerPaymentId: providerPaymentId,
-      occurredAt: occurredAt,
-    );
+    final created = recordProviderEvent
+        ? await recordEvent(
+            organizationId: organizationId,
+            provider: 'razorpay',
+            eventId: eventId,
+            eventName: eventName,
+            payloadDigest: sha256Digest(rawBody),
+            providerSubscriptionId: subscriptionIdFromPayload,
+            providerPaymentId: providerPaymentId,
+            occurredAt: occurredAt,
+          )
+        : true;
     final paymentId = _paymentId(organizationId, providerPaymentId);
     final current = await store.readJson('billing_payments', paymentId);
     if (!created && current != null) {

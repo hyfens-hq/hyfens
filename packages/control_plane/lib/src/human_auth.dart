@@ -913,15 +913,21 @@ final class HumanRecoveryRequestResult {
 }
 
 final class HumanIdentity {
-  const HumanIdentity({required this.user, required this.profiles});
+  const HumanIdentity({
+    required this.user,
+    required this.profiles,
+    required this.authorizationAudience,
+  });
 
   final HumanUserRecord user;
   final List<HumanAuthProfile> profiles;
+  final String authorizationAudience;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'user_id': user.id,
     'email': user.email,
     'email_verified': user.emailVerified,
+    'authorization_audience': authorizationAudience,
     'profiles': profiles.map((item) => item.toJson()).toList(),
   };
 }
@@ -3248,6 +3254,7 @@ final class HumanAuthService {
     String audience = customerAuthorizationAudience,
   }) => HumanIdentity(
     user: user,
+    authorizationAudience: audience,
     profiles: user.memberships
         .where((membership) => membership.audience == audience)
         .map(

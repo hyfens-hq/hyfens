@@ -351,6 +351,25 @@ void main() {
     expect(preparation['amountMinor'], 4900);
   });
 
+  test('subscription.charged persists its nested captured payment', () async {
+    final payment = await _createCapturedPayment(
+      service,
+      customerScope,
+      store,
+      suffix: 'subscription-charged',
+      eventName: 'subscription.charged',
+      includeSubscriptionEntity: true,
+    );
+
+    expect(payment['status'], 'captured');
+    expect(payment['amountMinor'], 4900);
+    expect(payment['currency'], 'USD');
+    expect(
+      payment['providerSubscriptionId'],
+      'sub_refund_subscription-charged',
+    );
+  });
+
   test(
     'provider failure is retryable without a second refund for one attempt',
     () async {
@@ -465,6 +484,8 @@ Future<Map<String, Object?>> _createCapturedPayment(
   BootstrapResult scope,
   FileControlPlaneStore store, {
   required String suffix,
+  String eventName = 'payment.captured',
+  bool includeSubscriptionEntity = false,
 }) async {
   final checkout = await service.billing.startCheckout(
     organizationId: scope.organization.id,
@@ -483,13 +504,24 @@ Future<Map<String, Object?>> _createCapturedPayment(
   final rawBody = utf8.encode(
     jsonEncode(<String, Object?>{
       'id': 'evt_payment_refund_$suffix',
-      'event': 'payment.captured',
+      'event': eventName,
       'created_at': 1788861600,
       'payload': <String, Object?>{
+        if (includeSubscriptionEntity)
+          'subscription': <String, Object?>{
+            'entity': <String, Object?>{
+              'id': 'sub_refund_$suffix',
+              'plan_id': 'rzp_plan_starter_refund',
+              'status': 'active',
+              'current_start': 1788861600,
+              'current_end': 1788861600 + 2592000,
+            },
+          },
         'payment': <String, Object?>{
           'entity': <String, Object?>{
             'id': 'pay_refund_$suffix',
-            'subscription_id': 'sub_refund_$suffix',
+            if (!includeSubscriptionEntity)
+              'subscription_id': 'sub_refund_$suffix',
             'amount': 4900,
             'currency': 'USD',
             'status': 'captured',

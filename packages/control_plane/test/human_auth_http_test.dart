@@ -74,6 +74,7 @@ void main() {
       );
       expect(me.statusCode, 200, reason: jsonEncode(me.body));
       expect(me.body['email'], 'operator@example.com');
+      expect(me.body['authorization_audience'], 'customer');
 
       final release = await _jsonRequest(
         client,
