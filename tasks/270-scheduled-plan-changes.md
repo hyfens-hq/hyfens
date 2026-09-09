@@ -1,6 +1,6 @@
 # Task 270 — Scheduled plan changes and provider transition semantics
 
-Status: [x] Completed — CODE_VERIFIED
+Status: [x] Completed — TEST_MODE_VERIFIED; production activation remains unauthorized
 
 ## Goal
 
@@ -70,21 +70,21 @@ Codex, with billing/provider and maintainer review.
   webhook secret, billing bridge token, or private API configuration appeared
   in `.next/static`.
 - `git diff --check` — passed.
-- Real Razorpay TEST MODE Team → Starter evidence — not run; the protected
-  managed provider deployment remains an external dependency and is not
-  required for `CODE_VERIFIED`.
+- Real Razorpay TEST MODE evidence — Team → Starter cycle-end scheduling was
+  accepted by the provider; the customer remained on Team, “Keep Team”
+  cancelled the pending provider update, and no refund was created. A separate
+  cycle-end cancellation was accepted while paid access remained active.
 
 ## Next Action
 
-Run the real Razorpay TEST MODE Team → Starter cycle-end update against the
-protected managed deployment when that external environment is available.
-That evidence may advance this task from `CODE_VERIFIED` to
-`TEST_MODE_VERIFIED`; it is not required to change the code-verified state.
+Keep LIVE provider activation disabled. Production plan changes remain behind
+Task 259 and Task 256B authorization; the managed TEST provider acceptance for
+this task is complete.
 
 ## Blockers
 
-Real Razorpay TEST cycle-end update/cancellation evidence and protected managed
-deployment acceptance remain external dependencies; no pricing change is
+Production LIVE activation, final policy approval, tax treatment, and customer
+workspace cutover remain external dependencies; no pricing change is
 authorized.
 
 ## Outcome
@@ -104,9 +104,13 @@ The customer billing surface now displays current and scheduled state,
 effective timing, and the reversible Team → Starter action. Provider failures
 remain retryable, repeated requests are idempotent, superseded/late events
 cannot reactivate an old target, and lower-plan transitions preserve
-over-limit resources while blocking only new constrained growth. No real
-Razorpay TEST scheduled update was claimed because the protected managed
-provider environment is still external.
+over-limit resources while blocking only new constrained growth.
+
+Post-completion correction (2026-09-09): the protected managed Razorpay TEST
+environment accepted a real Team → Starter scheduled update and its
+provider-supported cancellation. The current Team entitlement remained active
+throughout; no ordinary refund was created. Status advanced to
+`TEST_MODE_VERIFIED`.
 
 ## References
 
@@ -124,3 +128,7 @@ provider environment is still external.
   Razorpay cycle-end update/cancel mapping, customer UI, provider-ordering
   guards, supersession behavior, and focused billing tests. Marked
   `CODE_VERIFIED`; real Razorpay TEST acceptance remains external.
+- 2026-09-09 — Managed TEST provider acceptance completed for Team → Starter
+  scheduling, Keep Team cancellation, and cycle-end cancellation evidence.
+  Status advanced to `TEST_MODE_VERIFIED`; LIVE activation remains
+  unauthorized.

@@ -1,6 +1,6 @@
 # Task 261 — Razorpay checkout and customer billing acceptance
 
-Status: [x] Completed — BILLING_STATE_VERIFIED
+Status: [x] Completed — TEST_MODE_VERIFIED; production activation remains unauthorized
 
 ## Goal
 
@@ -76,23 +76,29 @@ Completed:
 - Cloud web typecheck, lint, production build, and `git diff --check`;
 - provider-adapter contract checks through the control-plane fixture and
   browser-safe static bundle scan; and
-- Razorpay test-mode browser acceptance was attempted but could not run because
-  this environment has no Razorpay credentials, provider plan IDs, webhook
-  secret, control-plane bridge token, or approved deployment configuration.
+- managed Razorpay TEST browser acceptance completed: a disposable Free
+  organization completed Starter checkout and trusted webhook activation; the
+  same organization then completed Starter → Team and retained its application
+  and environment history;
+- Starter entitlement was verified by successfully creating a second
+  environment after activation; scheduled Team → Starter and cycle-end
+  cancellation were also accepted by the TEST provider without an ordinary
+  refund;
+- browser bundle/provider secret scan remained clear, and no LIVE provider
+  configuration or production workspace cutover was used.
 
 ## Next Action
 
-Provision the protected Razorpay test-mode configuration and matching USD
-provider plans, then run the manual customer browser acceptance against a
-reachable HTTPS webhook. Do not promote the current result beyond
-`BILLING_STATE_VERIFIED` without that evidence.
+Keep the LIVE provider disabled and continue the remaining Task 259
+operational/policy gates. This task's TEST provider acceptance is complete;
+Task 256B remains separately authorized.
 
 ## Blockers
 
-Razorpay test-mode credentials, provider plan IDs, webhook reachability,
-control-plane bridge authorization, and protected `HYFENS_PUBLIC_BILLING_CURRENCY=USD`
-are not present in this environment. They must be supplied through deployment
-configuration; no provider state was fabricated.
+Production LIVE credentials, final policy approval, tax treatment, and launch
+operations remain external gates. TEST credentials, USD plans, protected
+bridge configuration, and the TEST webhook were used only on the managed test
+composition.
 
 ## Outcome
 
@@ -105,10 +111,10 @@ webhook paths remain server-authoritative. Customer billing responses expose
 only the browser-safe key, provider subscription ID, plan summary, mode, and
 status projection; bridge tokens and provider secrets remain server-only.
 
-The current result is intentionally `BILLING_STATE_VERIFIED`, not
-`TEST_MODE_VERIFIED`: compilation and fixture evidence passed, but a real
-Razorpay test-mode payment could not be attempted without deployment
-credentials and webhook configuration.
+Post-completion correction (2026-09-09): managed TEST browser acceptance
+completed. Real Razorpay TEST payment/subscription evidence and signed webhook
+activation moved the task to `TEST_MODE_VERIFIED`; no production payment or
+customer-workspace cutover was performed.
 
 ## References
 
@@ -137,3 +143,7 @@ credentials and webhook configuration.
   production build successfully; the result remains
   `BILLING_STATE_VERIFIED` until real Razorpay TEST MODE configuration is
   provisioned.
+- 2026-09-09: Protected TEST deployment and real browser/provider acceptance
+  completed for Free → Starter and Starter → Team, including signed webhook
+  activation and same-organization entitlement/resource checks. Status
+  advanced to `TEST_MODE_VERIFIED`; LIVE activation remains unauthorized.

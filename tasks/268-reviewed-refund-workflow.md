@@ -1,6 +1,6 @@
 # Task 268 — Reviewed refund workflow
 
-Status: [x] Completed — CODE_VERIFIED; real Razorpay TEST refund remains an external provider/deployment acceptance
+Status: [x] Completed — TEST_MODE_VERIFIED; production refund execution remains unauthorized
 
 ## Goal
 
@@ -63,20 +63,25 @@ Codex, with billing operator and maintainer/legal review.
   passed);
 - `git diff --check` in both repositories;
 - browser-bundle secret-name scan (clear);
+- managed Razorpay TEST acceptance on 2026-09-09: a disposable customer made a
+  captured USD 49.00 payment, requested a USD 1.00 partial refund, and an
+  authorized platform operator approved it through the Hyfens review route;
+  the deployed route returned HTTP 200 with `refunded`;
+- Razorpay read-only evidence confirmed one processed USD 1.00 refund against
+  that captured payment, and the refreshed customer billing projection showed
+  a USD 48.00 refundable balance while Starter remained active;
 - read-only live checks: Terms, Privacy, and Pricing returned 200; live
   `/refund-policy` and `/pricing.md` returned 404 and were not changed here.
 
 ## Next Action
 
-When the protected managed Razorpay TEST environment is available, execute one
-real provider refund and append the result without changing this domain model.
+Keep production refunds disabled until Task 259's production policy,
+operational ownership, and live-provider authorization gates are approved.
 
 ## Blockers
 
-Real Razorpay TEST refund execution remains blocked by the protected managed
-provider environment/configuration and is not claimed here. Production refund
-execution, public policy deployment, tax, and payment operations remain Task
-259 dependencies.
+Production refund execution, public policy deployment, tax, and payment
+operations remain Task 259 dependencies. No live refund or live key was used.
 
 ## Outcome
 
@@ -93,6 +98,12 @@ billing workspace includes a narrow review/execution surface. The live
 production `https://hyfens.com/refund-policy` check returned HTTP 404 on
 2026-09-08; the live `/pricing.md` check also returned HTTP 404. Both are
 recorded for Task 259 rather than silently rewriting deployed policy/content.
+
+Post-completion correction (2026-09-09): the managed Razorpay TEST refund
+workflow was executed successfully. The initial managed failure was caused by
+the Cloud web server module importing `recordValue` from a `use client` auth
+module; the helper is now local to the server billing module. This correction
+does not change the refund domain or entitlement/refund separation.
 
 ## References
 
@@ -120,3 +131,7 @@ recorded for Task 259 rather than silently rewriting deployed policy/content.
   transport/ambiguous Razorpay failures, moved idempotent request replay ahead
   of balance recalculation, and added full-refund plus provider-ID-conflict
   coverage. Final focused validation passed.
+- 2026-09-09 — Managed TEST acceptance completed for a reviewed partial refund;
+  Razorpay reported the refund as processed and the customer projection
+  reconciled the reduced refundable balance. Status advanced to
+  `TEST_MODE_VERIFIED`; production refunds remain out of scope.
