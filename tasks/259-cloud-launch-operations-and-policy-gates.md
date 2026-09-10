@@ -415,3 +415,17 @@ deletion is partially managed-verified, account deletion remains partial,
 backup retention remains unverified, and the deployed/test billing and route
 evidence do not constitute LIVE or public-cutover approval. Task 256B remains
 `DO_NOT_CUT_OVER`.
+
+### Managed acceptance delta matrix
+
+This append-only delta supersedes the older pre-deployment rows above without
+rewriting their historical evidence:
+
+| Workflow | Current managed state | Current operational state |
+| --- | --- | --- |
+| Organization deletion | Partial: cancellation and staged completion runs passed | No backup/resurrection proof; no public launch |
+| Account deletion | Partial: no-login/ownership gates covered; final personal deletion not run | Email/cadence and ownership operations still incomplete |
+| Deletion worker | Verified for bounded managed cancellation replay and completion | Timer active; retry/failure ownership not assigned |
+| Deletion notifications | Mailbox receipt observed once for verification, acknowledgement, day 5, day 7, and completion | Provider delivery telemetry remains subject to the external Keplars correlation blocker |
+| Backup/restore | Not verified | No proven managed backup, off-host rotation, isolated restore, or resurrection rehearsal |
+| Policy/catalog | Routes deployed and reachable | Legal approval pending; public free-plan naming is `developer` in `/api/pricing` vs approved `Free` copy |
