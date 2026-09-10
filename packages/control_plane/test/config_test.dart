@@ -13,26 +13,97 @@ void main() {
     expect(config.artifactAuthorization, isNull);
     expect(config.fileRoot, isA<Directory>());
     expect(config.auth, isNull);
+    expect(config.deploymentModel, DeploymentModel.selfHosted);
+    expect(config.billingProvider, isNull);
   });
 
-  test('runtime acceptance environments are explicit and bounded', () {
+  test('empty optional billing environment remains disabled', () {
     final config = ControlPlaneConfig.fromEnvironment(<String, String>{
-      'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS': 'env_dev, env_test,env_dev',
+      'HYFENS_BILLING_PROVIDER_TOKEN_HASH': '',
+      'HYFENS_RAZORPAY_STARTER_PLAN_ID': '',
+      'HYFENS_RAZORPAY_TEAM_PLAN_ID': '',
+      'HYFENS_RAZORPAY_WEBHOOK_SECRET': '',
+      'HYFENS_RAZORPAY_CURRENCY': '',
+      'HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR': '',
+      'HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR': '',
     });
-    expect(config.runtimeAcceptanceEnvironmentIds, <String>{
-      'env_dev',
-      'env_test',
+    expect(config.billingProvider, isNull);
+    expect(config.razorpayBilling, isNull);
+  });
+
+  test('billing provider bridge uses a hashed deployment credential', () {
+    const token = 'billing-bridge-test-token';
+    final hash = CredentialService.tokenHash(token);
+    final bridge = BillingProviderBridgeConfig.fromEnvironment(<String, String>{
+      'HYFENS_BILLING_PROVIDER_TOKEN_HASH': hash,
     });
+    expect(bridge, isNotNull);
+    expect(bridge!.matches(token), isTrue);
+    expect(bridge.matches('another-token'), isFalse);
+    expect(bridge.principal.id, 'billing-provider');
+    expect(bridge.principal.scopes, contains(billingProviderScope));
+    expect(
+      () => BillingProviderBridgeConfig.fromEnvironment(<String, String>{
+        'HYFENS_BILLING_PROVIDER_TOKEN_HASH': 'not-a-sha256',
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('Cloud deployment mode is explicit and bounded', () {
+    final config = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_DEPLOYMENT_MODEL': 'cloud',
+    });
+    expect(config.deploymentModel, DeploymentModel.cloud);
     expect(
       () => ControlPlaneConfig.fromEnvironment(<String, String>{
-        'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS': 'env_dev,,env_test',
+        'HYFENS_DEPLOYMENT_MODEL': 'self-hosted',
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('Razorpay checkout requires explicit currency configuration', () {
+    expect(
+      () => RazorpayBillingConfig.fromEnvironment(<String, String>{
+        'HYFENS_RAZORPAY_STARTER_PLAN_ID': 'rzp_plan_starter',
+        'HYFENS_RAZORPAY_TEAM_PLAN_ID': 'rzp_plan_team',
+        'HYFENS_RAZORPAY_WEBHOOK_SECRET': 'secret',
+      }),
+      throwsArgumentError,
+    );
+    final config = RazorpayBillingConfig.fromEnvironment(<String, String>{
+      'HYFENS_RAZORPAY_STARTER_PLAN_ID': 'rzp_plan_starter',
+      'HYFENS_RAZORPAY_TEAM_PLAN_ID': 'rzp_plan_team',
+      'HYFENS_RAZORPAY_WEBHOOK_SECRET': 'secret',
+      'HYFENS_RAZORPAY_CURRENCY': 'USD',
+      'HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR': '4900',
+      'HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR': '19900',
+    });
+    expect(config, isNotNull);
+    expect(config!.currency, 'USD');
+    expect(config.starterAmountMinor, 4900);
+    expect(config.teamAmountMinor, 19900);
+    expect(
+      () => RazorpayBillingConfig.fromEnvironment(<String, String>{
+        'HYFENS_RAZORPAY_STARTER_PLAN_ID': 'rzp_plan_starter',
+        'HYFENS_RAZORPAY_TEAM_PLAN_ID': 'rzp_plan_team',
+        'HYFENS_RAZORPAY_WEBHOOK_SECRET': 'secret',
+        'HYFENS_RAZORPAY_CURRENCY': 'INR',
+        'HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR': '4900',
+        'HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR': '19900',
       }),
       throwsArgumentError,
     );
     expect(
-      () => ControlPlaneConfig.fromEnvironment(<String, String>{
-        'HYFENS_RUNTIME_ACCEPTANCE_ENVIRONMENTS': 'ENV_DEV',
-      }),
+      () => RazorpayBillingConfig(
+        starterPlanId: 'rzp_plan_starter',
+        teamPlanId: 'rzp_plan_team',
+        webhookSecret: 'secret',
+        currency: 'INR',
+        starterAmountMinor: 4900,
+        teamAmountMinor: 19900,
+      ),
       throwsArgumentError,
     );
   });
@@ -140,48 +211,6 @@ void main() {
     );
   });
 
-  test('managed Cloud signup requires explicit verification delivery', () {
-    final token = List<String>.filled(32, 'a').join();
-    final configured = ControlPlaneConfig.fromEnvironment(<String, String>{
-      'HYFENS_CLOUD_SIGNUP_ENABLED': 'true',
-      'HYFENS_CLOUD_SIGNUP_VERIFICATION_URL':
-          'https://app.hyfens.com/verify-email',
-      'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_URL':
-          'https://mail.example.test/hyfens',
-      'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_TOKEN': token,
-      'HYFENS_CLOUD_SIGNUP_VERIFICATION_TTL_MINUTES': '45',
-    });
-    expect(configured.cloudOnboarding.enabled, isTrue);
-    expect(
-      configured.cloudOnboarding.verificationUrl,
-      Uri.parse('https://app.hyfens.com/verify-email'),
-    );
-    expect(
-      configured.cloudOnboarding.verificationTtl,
-      const Duration(minutes: 45),
-    );
-
-    expect(
-      () => ControlPlaneConfig.fromEnvironment(<String, String>{
-        'HYFENS_CLOUD_SIGNUP_ENABLED': 'true',
-        'HYFENS_CLOUD_SIGNUP_VERIFICATION_URL':
-            'https://app.hyfens.com/verify-email',
-      }),
-      throwsArgumentError,
-    );
-    expect(
-      () => ControlPlaneConfig.fromEnvironment(<String, String>{
-        'HYFENS_CLOUD_SIGNUP_ENABLED': 'true',
-        'HYFENS_CLOUD_SIGNUP_VERIFICATION_URL':
-            'https://app.hyfens.com/verify-email',
-        'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_URL':
-            'https://mail.example.test/hyfens',
-        'HYFENS_CLOUD_SIGNUP_EMAIL_WEBHOOK_TOKEN': 'too-short',
-      }),
-      throwsArgumentError,
-    );
-  });
-
   test('database and object configuration are injectable', () {
     final config = ControlPlaneConfig.fromEnvironment(<String, String>{
       'HYFENS_HOST': '0.0.0.0',
@@ -230,61 +259,6 @@ void main() {
       }),
       throwsArgumentError,
     );
-  });
-
-  test('artifact admission configuration is neutral and fail-closed', () {
-    final unconfigured = ControlPlaneConfig.fromEnvironment(<String, String>{});
-    expect(unconfigured.artifactAdmissionRequired, isFalse);
-    expect(unconfigured.artifactAdmissionUrl, isNull);
-    expect(unconfigured.artifactAdmissionServiceToken, isNull);
-
-    final token = List<String>.filled(32, 'a').join();
-    final configured = ControlPlaneConfig.fromEnvironment(<String, String>{
-      'HYFENS_ARTIFACT_ADMISSION_URL':
-          'http://127.0.0.1:18192/internal/runtime/artifact-admission',
-      'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': token,
-      'HYFENS_ARTIFACT_ADMISSION_REQUIRED': 'true',
-    });
-    expect(
-      configured.artifactAdmissionUrl,
-      Uri.parse('http://127.0.0.1:18192/internal/runtime/artifact-admission'),
-    );
-    expect(configured.artifactAdmissionServiceToken, token);
-    expect(configured.artifactAdmissionRequired, isTrue);
-
-    expect(
-      () => ControlPlaneConfig.fromEnvironment(<String, String>{
-        'HYFENS_ARTIFACT_ADMISSION_REQUIRED': 'true',
-      }),
-      throwsArgumentError,
-    );
-    expect(
-      () => ControlPlaneConfig.fromEnvironment(<String, String>{
-        'HYFENS_ARTIFACT_ADMISSION_URL':
-            'http://admission.example/internal/runtime/artifact-admission',
-        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': token,
-      }),
-      throwsArgumentError,
-    );
-    expect(
-      () => ControlPlaneConfig.fromEnvironment(<String, String>{
-        'HYFENS_ARTIFACT_ADMISSION_URL':
-            'https://admission.example/internal/runtime/artifact-admission?x=1',
-        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': token,
-      }),
-      throwsArgumentError,
-    );
-    const invalidToken = 'short-secret';
-    try {
-      ControlPlaneConfig.fromEnvironment(<String, String>{
-        'HYFENS_ARTIFACT_ADMISSION_URL':
-            'https://admission.example/internal/runtime/artifact-admission',
-        'HYFENS_ARTIFACT_ADMISSION_SERVICE_TOKEN': invalidToken,
-      });
-      fail('expected invalid artifact admission token');
-    } on ArgumentError catch (error) {
-      expect(error.toString(), isNot(contains(invalidToken)));
-    }
   });
 
   test('invalid limits and ports fail closed', () {

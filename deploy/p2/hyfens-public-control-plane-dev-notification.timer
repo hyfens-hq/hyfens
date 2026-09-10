@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule bounded Hyfens transactional notification processing
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=hyfens-public-control-plane-dev-notification.service
+
+[Install]
+WantedBy=timers.target

@@ -5,16 +5,20 @@ import 'dart:math';
 import 'package:cryptography/cryptography.dart';
 import 'package:cryptography/dart.dart';
 import 'package:hyfens_patch_format/patch_format.dart';
+import 'package:patch_loading_e1/patch_loading_e1.dart';
 
 import 'aggregation.dart';
-import 'artifact_delivery_admission.dart';
+import 'artifact_retention.dart';
 import 'audit.dart';
 import 'auth.dart';
 import 'billing.dart';
+import 'cloud_plans.dart';
+import 'deletion.dart';
 import 'domain.dart';
 import 'encoding.dart';
 import 'errors.dart';
 import 'human_auth.dart';
+import 'notifications.dart';
 import 'observation.dart';
 import 'p3e_auto_halt.dart';
 import 'p3e_auto_halt_applicability.dart';
@@ -27,8 +31,7 @@ import 'persistence.dart';
 import 'reconciliation.dart';
 import 'release_bundle.dart';
 import 'rollout.dart';
-import 'runtime_receipts.dart';
-import 'support.dart';
+import 'usage_metering.dart';
 
 final class ArtifactPayload {
   const ArtifactPayload({required this.record, required this.bytes});
@@ -57,22 +60,53 @@ final class ControlPlaneService {
     this.observationPolicy = const ObservationPolicy(),
     this.p3eStore,
     this.humanAuth,
+    this.deploymentModel = DeploymentModel.selfHosted,
+    CloudUsageMeteringService? usageMetering,
     BillingService? billingService,
-    OrganizationInvitationDelivery? invitationDelivery,
-    this.artifactDeliveryAdmission,
-    this.artifactDeliveryAdmissionRequired = false,
+    RazorpayBillingConfig? razorpayBilling,
+    this.billingProvider,
+    this.notifications,
+    this.deletionPolicy = const DeletionPolicy(),
   }) : _random = random ?? Random.secure(),
-       _clock = clock ?? (() => DateTime.now().toUtc()),
-       invitationDelivery =
-           invitationDelivery ?? const NoopOrganizationInvitationDelivery() {
+       _clock = clock ?? (() => DateTime.now().toUtc()) {
     observationPolicy.validate();
-    if (artifactDeliveryAdmissionRequired &&
-        artifactDeliveryAdmission == null) {
-      throw ArgumentError(
-        'Artifact delivery admission is required but no provider is configured',
-      );
-    }
-    billing = billingService ?? BillingService(store);
+    this.usageMetering =
+        usageMetering ??
+        billingService?.usageMetering ??
+        CloudUsageMeteringService(
+          store,
+          deploymentModel: deploymentModel,
+          clock: _clock,
+        );
+    billing =
+        billingService ??
+        BillingService(
+          store,
+          deploymentModel: deploymentModel,
+          clock: _clock,
+          usageMetering: this.usageMetering,
+          razorpay: razorpayBilling,
+        );
+    humanAuth?.setMemberAdmissionCheck(
+      deploymentModel == DeploymentModel.cloud
+          ? (organizationId) => billing.enforceCloudLimit(
+              organizationId: organizationId,
+              resource: cloudMembersLimitKey,
+            )
+          : null,
+    );
+    humanAuth?.setNotificationSink(notifications);
+    deletion = humanAuth == null
+        ? null
+        : AccountDeletionService(
+            store: store,
+            humanAuth: humanAuth,
+            billing: billing,
+            deploymentModel: deploymentModel,
+            notifications: notifications,
+            policy: deletionPolicy,
+            clock: _clock,
+          );
   }
 
   final ControlPlaneStore store;
@@ -81,18 +115,38 @@ final class ControlPlaneService {
   final ObservationPolicy observationPolicy;
   final P3ePersistenceStore? p3eStore;
   final HumanAuthService? humanAuth;
+  final DeploymentModel deploymentModel;
+  final BillingProviderBridgeConfig? billingProvider;
+  final NotificationService? notifications;
+  final DeletionPolicy deletionPolicy;
+  final ArtifactRetentionPolicy artifactRetentionPolicy =
+      const ArtifactRetentionPolicy();
   late final BillingService billing;
-  final OrganizationInvitationDelivery invitationDelivery;
-  final ArtifactDeliveryAdmission? artifactDeliveryAdmission;
-  final bool artifactDeliveryAdmissionRequired;
+  late final AccountDeletionService? deletion;
+  late final CloudUsageMeteringService usageMetering;
   Future<void> _writeTail = Future<void>.value();
   final Map<String, List<DateTime>> _observationWindows =
       <String, List<DateTime>>{};
 
   Future<void> initialize() async {
     await store.initialize();
+    await billing.initialize();
     await humanAuth?.initialize();
     await p3eStore?.initialize();
+  }
+
+  /// Returns the lifecycle state used to reject access after a tenant's
+  /// staged organization deletion has completed. Provider webhooks continue
+  /// through the billing service and do not use this customer credential seam.
+  Future<void> ensureOrganizationAccessAllowed(String organizationId) async {
+    final value = await store.readJson('organizations', organizationId);
+    if (value?['deletionState'] == 'deleted') {
+      throw const ControlPlaneException(
+        'ORGANIZATION_DELETED',
+        'This Cloud organization is no longer active',
+        statusCode: 410,
+      );
+    }
   }
 
   /// Authorizes a control-plane read or mutation through the existing
@@ -114,92 +168,23 @@ final class ControlPlaneService {
     environmentId: environmentId,
   );
 
-  /// Authorizes a runtime receipt against the actual customer resource graph.
-  ///
-  /// A delivery credential alone is not sufficient to mint usage: the
-  /// application, environment, promoted release, ready patch, and content
-  /// digest must all agree with the receipt scope. The receipt service calls
-  /// this method before issuing or settling any admission.
-  Future<RuntimeReceiptAuthorization> authorizeRuntimeReceiptScope({
+  /// Authorizes the deployment-owned provider bridge without assigning it a
+  /// customer organization. Provider handlers must still resolve their target
+  /// organization from server-owned checkout/subscription mappings.
+  Future<BillingProviderPrincipal> authorizeBillingProvider({
     required String token,
-    required RuntimeReceiptScope scope,
   }) async {
-    final actor = await _authorize(
-      token,
-      runtimeInstallScope,
-      kind: CredentialKind.delivery,
-      applicationId: scope.applicationId,
-      environmentId: scope.environmentId,
-    );
-    final application = await _application(scope.applicationId);
-    _requireTenant(application.organizationId, actor.organizationId);
-    final environment = await _environment(scope.environmentId);
-    _requireTenant(environment.organizationId, actor.organizationId);
-    if (environment.applicationId != application.id ||
-        application.runtimeApplicationId != scope.runtimeApplicationId) {
+    final config = billingProvider;
+    if (deploymentModel != DeploymentModel.cloud ||
+        config == null ||
+        !config.matches(token)) {
       throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
+        'UNAUTHORIZED',
+        'Billing provider credential is invalid',
+        statusCode: 401,
       );
     }
-
-    ReleaseRecord? release;
-    for (final value in await store.listJson('releases')) {
-      final candidate = ReleaseRecord.fromJson(value);
-      if (candidate.id == environment.promotedReleaseId &&
-          candidate.runtimeReleaseId == scope.releaseId &&
-          candidate.applicationId == application.id &&
-          candidate.runtimeApplicationId == scope.runtimeApplicationId &&
-          (candidate.platformId == scope.platform ||
-              candidate.buildTarget == scope.platform) &&
-          candidate.organizationId == actor.organizationId) {
-        release = candidate;
-        break;
-      }
-    }
-    if (release == null) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-
-    PatchRecord? patch;
-    for (final value in await store.listJson('patches')) {
-      final candidate = PatchRecord.fromJson(value);
-      if (candidate.runtimePatchId == scope.patchId &&
-          candidate.releaseId == release.id &&
-          candidate.organizationId == actor.organizationId &&
-          candidate.state == 'READY') {
-        patch = candidate;
-        break;
-      }
-    }
-    if (patch == null) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    final artifact = await _artifact(patch.artifactId);
-    if (artifact.organizationId != actor.organizationId ||
-        artifact.patchId != patch.id ||
-        artifact.state != 'READY' ||
-        artifact.sha256 != 'sha256:${scope.artifactDigest}') {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    return RuntimeReceiptAuthorization(
-      organizationId: actor.organizationId,
-      applicationId: application.id,
-      environmentId: environment.id,
-    );
+    return config.principal;
   }
 
   /// Appends a billing lifecycle event using the same immutable audit-chain
@@ -210,15 +195,176 @@ final class ControlPlaneService {
     required String requestId,
     required String action,
     required String resourceId,
+    Map<String, Object?> metadata = const <String, Object?>{},
+    String? stableKey,
+  }) {
+    if (stableKey == null) {
+      return _audit(
+        requestId: requestId,
+        actor: actor,
+        action: action,
+        resourceType: 'billing',
+        resourceId: resourceId,
+        metadata: metadata,
+      );
+    }
+    final auditId =
+        'aud_billing_${sha256Hex(utf8.encode('${actor.organizationId}:$action:$resourceId:$stableKey')).substring(0, 32)}';
+    return _appendCustomerOnboardingAudit(
+      id: auditId,
+      requestId: requestId,
+      organizationId: actor.organizationId,
+      actorId: actor.id,
+      action: action,
+      resourceType: 'billing',
+      resourceId: resourceId,
+      metadata: metadata,
+    );
+  }
+
+  /// Records the outcome of a trusted provider callback without giving the
+  /// provider adapter a customer credential or permission to write arbitrary
+  /// audit records. The event ID makes retries audit-idempotent.
+  Future<void> auditBillingProviderEvent({
+    required BillingProviderEventResult result,
+    required String requestId,
+    String? actorId,
+  }) async {
+    if (result.status != 'applied' && result.status != 'duplicate') return;
+    final auditId =
+        'aud_billing_provider_${sha256Hex(utf8.encode('${result.organizationId}:${result.eventId}')).substring(0, 32)}';
+    final subscription = result.subscription;
+    final payment = result.payment;
+    final refund = result.refund;
+    final resourceType = refund != null
+        ? 'billing_refund_request'
+        : payment != null
+        ? 'billing_payment'
+        : 'billing_subscription';
+    final resourceId =
+        refund?['id'] as String? ??
+        payment?['id'] as String? ??
+        subscription?['id'] as String? ??
+        result.eventId;
+    await _appendCustomerOnboardingAudit(
+      id: auditId,
+      requestId: requestId,
+      organizationId: result.organizationId,
+      actorId: actorId ?? 'razorpay:webhook',
+      action: 'billing.provider_event.applied',
+      resourceType: resourceType,
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        'event_id': result.eventId,
+        'status': result.status,
+        'subscription_status': subscription?['status'],
+        'plan_id': subscription?['planId'],
+        'payment_status': payment?['status'],
+        'refund_status': refund?['status'],
+        'provider': 'razorpay',
+        'audience': customerAuthorizationAudience,
+        'actor_type': 'billing_provider_service',
+        'service_scope': billingProviderScope,
+      },
+    );
+    final scheduledPlanChange = result.scheduledPlanChange;
+    final scheduledChangeId = scheduledPlanChange?['id'];
+    if (scheduledPlanChange != null && scheduledChangeId is String) {
+      final status = scheduledPlanChange['status'];
+      final action = status == 'effective'
+          ? 'billing.plan_change.effective'
+          : 'billing.plan_change.scheduled';
+      final changeAuditId =
+          'aud_billing_plan_change_${sha256Hex(utf8.encode('${result.organizationId}:$action:$scheduledChangeId:${result.eventId}')).substring(0, 32)}';
+      await _appendCustomerOnboardingAudit(
+        id: changeAuditId,
+        requestId: requestId,
+        organizationId: result.organizationId,
+        actorId: actorId ?? 'razorpay:webhook',
+        action: action,
+        resourceType: 'billing_plan_change',
+        resourceId: scheduledChangeId,
+        metadata: <String, Object?>{
+          'event_id': result.eventId,
+          'current_plan': scheduledPlanChange['currentPlanKey'],
+          'target_plan': scheduledPlanChange['targetPlanKey'],
+          'status': status,
+          'effective_at': scheduledPlanChange['effectiveAt'],
+          'provider_subscription_id':
+              scheduledPlanChange['providerSubscriptionId'],
+          'provider': 'razorpay',
+          'actor_type': 'billing_provider_service',
+          'service_scope': billingProviderScope,
+        },
+      );
+    }
+  }
+
+  /// Appends a provider-bridge action with a stable service actor. The
+  /// stable key makes retries audit-idempotent without pretending the
+  /// provider callback was a customer action.
+  Future<void> auditBillingProviderOperation({
+    required BillingProviderPrincipal actor,
+    required String organizationId,
+    required String requestId,
+    required String action,
+    required String resourceId,
     required Map<String, Object?> metadata,
-  }) => _audit(
-    requestId: requestId,
-    actor: actor,
-    action: action,
-    resourceType: 'billing',
-    resourceId: resourceId,
-    metadata: metadata,
-  );
+    String? stableKey,
+  }) {
+    final key = stableKey ?? resourceId;
+    final auditId =
+        'aud_billing_provider_${sha256Hex(utf8.encode('$organizationId:$action:$resourceId:$key')).substring(0, 32)}';
+    return _appendCustomerOnboardingAudit(
+      id: auditId,
+      requestId: requestId,
+      organizationId: organizationId,
+      actorId: actor.id,
+      action: action,
+      resourceType: 'billing',
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        ...metadata,
+        'audience': customerAuthorizationAudience,
+        'service_scope': billingProviderScope,
+      },
+    );
+  }
+
+  /// Records an Enterprise quote/contract action for either a customer actor
+  /// or an authorized Platform commercial operator. The actor metadata keeps
+  /// the two authorities distinguishable without exposing credentials or
+  /// making the provider bridge a human session.
+  Future<void> auditEnterpriseCommercialOperation({
+    required String actorId,
+    required String actorType,
+    required String audience,
+    required String organizationId,
+    required String requestId,
+    required String action,
+    required String resourceType,
+    required String resourceId,
+    Map<String, Object?> metadata = const <String, Object?>{},
+    String? stableKey,
+  }) {
+    final key = stableKey ?? resourceId;
+    final auditId =
+        'aud_enterprise_${sha256Hex(utf8.encode('$organizationId:$action:$resourceId:$key')).substring(0, 32)}';
+    return _appendCustomerOnboardingAudit(
+      id: auditId,
+      requestId: requestId,
+      organizationId: organizationId,
+      actorId: actorId,
+      action: action,
+      resourceType: resourceType,
+      resourceId: resourceId,
+      metadata: <String, Object?>{
+        ...metadata,
+        'actor_type': actorType,
+        'audience': audience,
+      },
+    );
+  }
 
   Future<HumanUserRecord> bootstrapOwner({
     required String organizationId,
@@ -272,6 +418,263 @@ final class ControlPlaneService {
       password: password,
       profileName: profileName,
     );
+  }
+
+  Future<HumanRegistrationResult> registerCloudCustomer({
+    required String email,
+    required String password,
+    required String organizationName,
+  }) async {
+    _requireCloudOnboarding();
+    final auth = _requireHumanAuth();
+    await initialize();
+    return auth.registerCustomer(
+      email: email,
+      password: password,
+      organizationName: organizationName,
+    );
+  }
+
+  Future<HumanLoginResult> verifyCloudCustomer({
+    required String token,
+    String? organizationName,
+    String? requestId,
+  }) async {
+    _requireCloudOnboarding();
+    final auth = _requireHumanAuth();
+    await initialize();
+    return _serialized(() async {
+      final verification = await auth.verifyCustomerEmail(token: token);
+      final name = organizationName == null || organizationName.trim().isEmpty
+          ? verification.organizationName
+          : organizationName;
+      await _provisionCustomerOrganization(
+        user: verification.user,
+        organizationName: name,
+        idempotencyKey: 'first-org:${verification.user.id}',
+        requestId: requestId,
+      );
+      final notificationService = notifications;
+      if (notificationService != null) {
+        await notificationService.enqueue(
+          NotificationEvent(
+            key: 'auth.registration.completed',
+            stableKey: 'registration:${verification.user.id}',
+            recipientEmails: <String>[verification.user.email],
+            variables: <String, Object?>{
+              'organization': name,
+              'action_url': notificationService.renderer.dashboardOrigin
+                  .toString(),
+            },
+            occurredAt: _clock(),
+            organizationId: verification.user.memberships.isEmpty
+                ? null
+                : verification.user.memberships.first.organizationId,
+            source: 'human_auth',
+            entityType: 'human_user',
+            entityId: verification.user.id,
+          ),
+        );
+      }
+      return auth.issueSessionForVerifiedUser(userId: verification.user.id);
+    });
+  }
+
+  Future<Map<String, Object?>> createCustomerOrganization({
+    required String token,
+    required String organizationName,
+    required String idempotencyKey,
+    String? requestId,
+  }) async {
+    _requireCloudOnboarding();
+    final auth = _requireHumanAuth();
+    await initialize();
+    return _serialized(() async {
+      final user = await auth.verifiedCustomerForAccessToken(
+        accessToken: token,
+      );
+      return _provisionCustomerOrganization(
+        user: user,
+        organizationName: organizationName,
+        idempotencyKey: idempotencyKey,
+        requestId: requestId,
+      );
+    });
+  }
+
+  HumanAuthService _requireHumanAuth() {
+    final auth = humanAuth;
+    if (auth == null) {
+      throw const ControlPlaneException(
+        'AUTH_UNAVAILABLE',
+        'Human authentication is not configured',
+        statusCode: 503,
+      );
+    }
+    return auth;
+  }
+
+  void _requireCloudOnboarding() {
+    if (deploymentModel != DeploymentModel.cloud) {
+      throw const ControlPlaneException(
+        'CLOUD_ONBOARDING_UNAVAILABLE',
+        'Cloud customer onboarding is not available on a self-hosted deployment',
+        statusCode: 404,
+      );
+    }
+  }
+
+  Future<Map<String, Object?>> _provisionCustomerOrganization({
+    required HumanUserRecord user,
+    required String organizationName,
+    required String idempotencyKey,
+    String? requestId,
+  }) async {
+    final normalizedName = organizationName.trim().isEmpty
+        ? 'My Hyfens workspace'
+        : requireNonEmpty(
+            organizationName.trim(),
+            'organization name',
+            maxLength: 120,
+          );
+    final body = <String, Object?>{
+      'userId': user.id,
+      'organizationName': normalizedName,
+    };
+    const scope = 'cloud_customer_organization';
+    final existing = await _existingIdempotency(scope, idempotencyKey, body);
+    late String organizationId;
+    if (existing != null) {
+      organizationId = existing['organization_id']! as String;
+    } else {
+      organizationId = _id('org');
+      final claim = <String, Object?>{
+        'requestDigest': sha256Digest(utf8.encode(canonicalJson(body))),
+        'result': <String, Object?>{'organization_id': organizationId},
+        'createdAt': _now().toIso8601String(),
+      };
+      try {
+        await store.createIdempotency(scope, idempotencyKey, claim);
+      } on StorageConflict {
+        final concurrent = await _existingIdempotency(
+          scope,
+          idempotencyKey,
+          body,
+        );
+        if (concurrent == null) rethrow;
+        organizationId = concurrent['organization_id']! as String;
+      }
+    }
+    final organization = OrganizationRecord(
+      id: organizationId,
+      name: normalizedName,
+      createdAt: _now(),
+    );
+    try {
+      await store.createJson(
+        'organizations',
+        organization.id,
+        organization.toJson(),
+      );
+    } on StorageConflict {
+      final current = await store.readJson('organizations', organization.id);
+      if (current == null || current['name'] != organization.name) rethrow;
+    }
+    await billing.ensureCloudPlanAssignment(organizationId: organization.id);
+    final member = await _requireHumanAuth().addCustomerOwnerMembership(
+      userId: user.id,
+      organizationId: organization.id,
+    );
+    final stableRequestId = 'cloud-onboarding:${organization.id}';
+    await _appendCustomerOnboardingAudit(
+      id: 'onb_org_${sha256Hex(utf8.encode(organization.id)).substring(0, 32)}',
+      requestId: stableRequestId,
+      organizationId: organization.id,
+      actorId: user.id,
+      action: 'customer.organization.create',
+      resourceType: 'organization',
+      resourceId: organization.id,
+      metadata: <String, Object?>{'source': 'public_cloud_onboarding'},
+    );
+    await _appendCustomerOnboardingAudit(
+      id: 'onb_plan_${sha256Hex(utf8.encode(organization.id)).substring(0, 32)}',
+      requestId: stableRequestId,
+      organizationId: organization.id,
+      actorId: user.id,
+      action: 'customer.free_plan.assign',
+      resourceType: 'billing',
+      resourceId: organization.id,
+      metadata: const <String, Object?>{
+        'plan': cloudPlanFreeKey,
+        'provider': 'internal',
+        'billing_status': 'not_required',
+      },
+    );
+    await _appendCustomerOnboardingAudit(
+      id: 'onb_member_${sha256Hex(utf8.encode(organization.id)).substring(0, 32)}',
+      requestId: stableRequestId,
+      organizationId: organization.id,
+      actorId: user.id,
+      action: 'customer.owner_membership.create',
+      resourceType: 'membership',
+      resourceId: user.id,
+      metadata: const <String, Object?>{
+        'role': 'owner',
+        'audience': customerAuthorizationAudience,
+      },
+    );
+    await _appendCustomerOnboardingAudit(
+      id: 'onb_verify_${sha256Hex(utf8.encode(organization.id)).substring(0, 32)}',
+      requestId: stableRequestId,
+      organizationId: organization.id,
+      actorId: user.id,
+      action: 'customer.email.verify',
+      resourceType: 'identity',
+      resourceId: user.id,
+      metadata: const <String, Object?>{'verified': true},
+    );
+    final entitlements = await billing.resolveEffectiveEntitlements(
+      organizationId: organization.id,
+    );
+    return <String, Object?>{
+      'organization': organization.toJson(),
+      'plan': entitlements.toPlanJson(),
+      'entitlements': entitlements.toEntitlementsJson(),
+      'owner_user_id': member.id,
+      if (requestId != null) 'request_id': requestId,
+    };
+  }
+
+  Future<void> _appendCustomerOnboardingAudit({
+    required String id,
+    required String requestId,
+    required String organizationId,
+    required String actorId,
+    required String action,
+    required String resourceType,
+    required String resourceId,
+    required Map<String, Object?> metadata,
+  }) async {
+    if (await store.readJson('audit', id) != null) return;
+    try {
+      await store.appendAudit(
+        id,
+        AuditRecord(
+          id: id,
+          requestId: requestId,
+          organizationId: organizationId,
+          actorId: actorId,
+          action: action,
+          resourceType: resourceType,
+          resourceId: resourceId,
+          result: 'SUCCESS',
+          metadata: metadata,
+          createdAt: _now(),
+        ).toJson(),
+      );
+    } on StorageConflict {
+      if (await store.readJson('audit', id) == null) rethrow;
+    }
   }
 
   Future<List<ContentRecord>> listContent({
@@ -667,6 +1070,9 @@ final class ControlPlaneService {
       organization.id,
       organization.toJson(),
     );
+    if (deploymentModel == DeploymentModel.cloud) {
+      await billing.ensureCloudPlanAssignment(organizationId: organization.id);
+    }
     await store.createJson(
       'applications',
       application.id,
@@ -767,6 +1173,10 @@ final class ControlPlaneService {
         statusCode: 409,
       );
     }
+    await billing.enforceCloudLimit(
+      organizationId: actor.organizationId,
+      resource: cloudApplicationsLimitKey,
+    );
     final application = ApplicationRecord(
       id: _id('app'),
       organizationId: actor.organizationId,
@@ -827,13 +1237,6 @@ final class ControlPlaneService {
     );
     final application = await _application(applicationId);
     _requireTenant(application.organizationId, actor.organizationId);
-    if (application.status == 'archived') {
-      throw const ControlPlaneException(
-        'RESOURCE_ARCHIVED',
-        'Environments cannot be created under an archived application',
-        statusCode: 409,
-      );
-    }
     final normalizedName = requireNonEmpty(
       name.trim(),
       'environment name',
@@ -875,6 +1278,11 @@ final class ControlPlaneService {
         statusCode: 409,
       );
     }
+    await billing.enforceCloudLimit(
+      organizationId: actor.organizationId,
+      resource: cloudEnvironmentsPerApplicationLimitKey,
+      applicationId: application.id,
+    );
     final environment = EnvironmentRecord(
       id: _id('env'),
       organizationId: actor.organizationId,
@@ -917,148 +1325,6 @@ final class ControlPlaneService {
     return environment;
   });
 
-  /// Updates mutable customer application metadata. Runtime identity and
-  /// platform are intentionally immutable once registered.
-  Future<ApplicationRecord> updateApplication({
-    required String token,
-    required String organizationId,
-    required String applicationId,
-    required String name,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      applicationWriteScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final current = await _application(applicationId);
-    _requireTenant(current.organizationId, actor.organizationId);
-    final updated = current.copyWith(name: name, updatedAt: _now());
-    await store.replaceJson('applications', current.id, updated.toJson());
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'application.update',
-      resourceType: 'application',
-      resourceId: current.id,
-      metadata: <String, Object?>{'name': updated.name},
-    );
-    return updated;
-  });
-
-  /// Archives an application without deleting its release or audit history.
-  Future<ApplicationRecord> archiveApplication({
-    required String token,
-    required String organizationId,
-    required String applicationId,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      applicationWriteScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final current = await _application(applicationId);
-    _requireTenant(current.organizationId, actor.organizationId);
-    if (current.status == 'archived') return current;
-    final updated = current.copyWith(status: 'archived', updatedAt: _now());
-    await store.replaceJson('applications', current.id, updated.toJson());
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'application.archive',
-      resourceType: 'application',
-      resourceId: current.id,
-      metadata: const <String, Object?>{},
-    );
-    return updated;
-  });
-
-  /// Updates mutable customer environment metadata while preserving its
-  /// version and promotion history.
-  Future<EnvironmentRecord> updateEnvironment({
-    required String token,
-    required String organizationId,
-    required String environmentId,
-    required String name,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      environmentWriteScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final current = await _environment(environmentId);
-    _requireTenant(current.organizationId, actor.organizationId);
-    final normalizedName = requireNonEmpty(
-      name.trim(),
-      'environment name',
-      maxLength: 64,
-    );
-    final duplicate = (await store.listJson('environments')).any(
-      (value) =>
-          value['id'] != current.id &&
-          value['organizationId'] == actor.organizationId &&
-          value['applicationId'] == current.applicationId &&
-          value['name'] is String &&
-          (value['name']! as String).trim().toLowerCase() ==
-              normalizedName.toLowerCase(),
-    );
-    if (duplicate) {
-      throw const ControlPlaneException(
-        'ENVIRONMENT_CONFLICT',
-        'An environment with this name already exists for the application',
-        statusCode: 409,
-      );
-    }
-    final updated = current.copyWith(name: normalizedName, updatedAt: _now());
-    await store.replaceJson('environments', current.id, updated.toJson());
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'environment.update',
-      resourceType: 'environment',
-      resourceId: current.id,
-      metadata: <String, Object?>{
-        'applicationId': current.applicationId,
-        'name': updated.name,
-      },
-    );
-    return updated;
-  });
-
-  /// Archives an environment without deleting deployment evidence.
-  Future<EnvironmentRecord> archiveEnvironment({
-    required String token,
-    required String organizationId,
-    required String environmentId,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      environmentWriteScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final current = await _environment(environmentId);
-    _requireTenant(current.organizationId, actor.organizationId);
-    if (current.status == 'archived') return current;
-    final updated = current.copyWith(status: 'archived', updatedAt: _now());
-    await store.replaceJson('environments', current.id, updated.toJson());
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'environment.archive',
-      resourceType: 'environment',
-      resourceId: current.id,
-      metadata: <String, Object?>{'applicationId': current.applicationId},
-    );
-    return updated;
-  });
-
   /// Issues one short-lived or non-expiring credential and returns its secret
   /// exactly once to the caller. The service persists only the token hash.
   /// Customer operators rotate by issuing a replacement and then revoking the
@@ -1072,7 +1338,6 @@ final class ControlPlaneService {
     String? applicationId,
     String? environmentId,
     DateTime? expiresAt,
-    String? idempotencyKey,
     String? requestId,
   }) => _serialized(() async {
     final actor = await _authorize(
@@ -1081,25 +1346,10 @@ final class ControlPlaneService {
       kind: CredentialKind.control,
       organizationId: organizationId,
     );
-    final hasFullControlAuthority = actor.scopes.containsAll(controlScopes);
-    final isAutomationCredential =
-        kind == CredentialKind.scheduler || kind == CredentialKind.autoHalt;
-    if (isAutomationCredential) {
-      // Scheduler and Auto-Halt principals are internal automation authority,
-      // not customer delegation targets. Require a full control issuer so a
-      // delegated admin cannot mint a principal with capabilities it does not
-      // itself hold.
-      if (!hasFullControlAuthority) {
-        throw const ControlPlaneException(
-          'FORBIDDEN',
-          'Only a full-control authority can issue automation credentials',
-          statusCode: 403,
-        );
-      }
-    } else if (!hasFullControlAuthority && !actor.scopes.containsAll(scopes)) {
+    if (scopes.difference(actor.scopes).isNotEmpty) {
       throw const ControlPlaneException(
         'FORBIDDEN',
-        'The caller cannot grant the requested credential scopes',
+        'Credential scopes cannot exceed the issuer scope',
         statusCode: 403,
       );
     }
@@ -1154,31 +1404,6 @@ final class ControlPlaneService {
         );
       }
     }
-    final idempotencyBody = <String, Object?>{
-      'organizationId': actor.organizationId,
-      'name': name,
-      'kind': kind.name,
-      'scopes': scopes.toList()..sort(),
-      'applicationId': applicationId,
-      'environmentId': environmentId,
-      'expiresAt': expiresAt?.toUtc().toIso8601String(),
-    };
-    final idempotencyScope =
-        'credential-issue:${actor.organizationId}:${actor.id}';
-    if (idempotencyKey != null) {
-      final existing = await _existingIdempotency(
-        idempotencyScope,
-        idempotencyKey,
-        idempotencyBody,
-      );
-      if (existing != null) {
-        throw const ControlPlaneException(
-          'ONE_TIME_SECRET_UNAVAILABLE',
-          'This credential was already issued for the idempotency key; its plaintext cannot be replayed',
-          statusCode: 409,
-        );
-      }
-    }
     final issued = CredentialService(random: _random).issue(
       id: _id('cred'),
       organizationId: actor.organizationId,
@@ -1212,14 +1437,6 @@ final class ControlPlaneService {
         'expiresAt': issued.record.expiresAt?.toUtc().toIso8601String(),
       },
     );
-    if (idempotencyKey != null) {
-      await _saveIdempotency(
-        idempotencyScope,
-        idempotencyKey,
-        idempotencyBody,
-        <String, Object?>{'credentialId': issued.record.id},
-      );
-    }
     return issued;
   });
 
@@ -1552,10 +1769,20 @@ final class ControlPlaneService {
         );
       }
       await store.putArtifact(artifact.sha256, bytes);
-      final readyArtifact = artifact.copyWith(state: 'READY');
+      final readyArtifact = artifact.copyWith(
+        state: artifactReadyState,
+        clearPurgeEligibleAt: true,
+        clearPurgedAt: true,
+        clearPurgeReason: true,
+      );
       final readyPatch = patch.copyWith(state: 'READY');
       await store.replaceJson('artifacts', artifact.id, readyArtifact.toJson());
       await store.replaceJson('patches', patch.id, readyPatch.toJson());
+      await _recordArtifactStorageAdded(
+        readyArtifact,
+        sourceId: 'artifact-upload:$idempotencyKey',
+        occurredAt: readyArtifact.createdAt,
+      );
       await _saveIdempotency(
         'artifact',
         idempotencyKey,
@@ -1574,7 +1801,11 @@ final class ControlPlaneService {
         },
       );
       return readyArtifact;
-    } on ControlPlaneException {
+    } on ControlPlaneException catch (error) {
+      if (error.code == 'USAGE_ACCOUNTING_UNAVAILABLE' ||
+          error.code == 'USAGE_EVENT_CONFLICT') {
+        rethrow;
+      }
       await _markQuarantined(artifact);
       rethrow;
     } on Object catch (error) {
@@ -1807,6 +2038,12 @@ final class ControlPlaneService {
       bundleDigest: bundle.bundleDigest,
     );
     final existingImport = await store.readJson('bundle_imports', importId);
+    final existingDestinationArtifact = existingImport == null
+        ? null
+        : await store.readJson('artifacts', destinationArtifactId);
+    final existingPurgeEligibleAt = existingDestinationArtifact == null
+        ? null
+        : ArtifactRecord.fromJson(existingDestinationArtifact).purgeEligibleAt;
     final existingState = existingImport == null
         ? null
         : _validateExistingBundleImport(
@@ -1903,6 +2140,11 @@ final class ControlPlaneService {
       contentType: sourceArtifact.contentType,
       state: destinationState,
       createdAt: sourceArtifact.createdAt,
+      purgeEligibleAt: destinationState == artifactQuarantinedState
+          ? existingImport == null
+                ? _now()
+                : existingPurgeEligibleAt
+          : null,
     );
     await store.putArtifact(destinationArtifact.sha256, payload.artifactBytes);
     await _ensureBundleRecord(
@@ -2129,7 +2371,12 @@ final class ControlPlaneService {
       );
     }
     final admittedPatch = current.patch.copyWith(state: 'READY');
-    final admittedArtifact = current.artifact.copyWith(state: 'READY');
+    final admittedArtifact = current.artifact.copyWith(
+      state: artifactReadyState,
+      clearPurgeEligibleAt: true,
+      clearPurgedAt: true,
+      clearPurgeReason: true,
+    );
     var changed = false;
     // Artifact readiness is established before patch readiness. If a process
     // stops between these writes, the next admission can safely finish the
@@ -2142,6 +2389,11 @@ final class ControlPlaneService {
       );
       changed = true;
     }
+    await _recordArtifactStorageAdded(
+      admittedArtifact,
+      sourceId: 'bundle-admit:$idempotencyKey',
+      occurredAt: admittedArtifact.createdAt,
+    );
     if (!patchReady) {
       await store.replaceJson(
         'patches',
@@ -2193,38 +2445,26 @@ final class ControlPlaneService {
     String? organizationId,
     String? requestId,
   }) => _serialized(() async {
+    final environment = await _environment(environmentId);
     final actor = await _authorize(
       token,
       'release:promote',
       kind: CredentialKind.control,
-      organizationId: organizationId,
+      organizationId: organizationId ?? environment.organizationId,
     );
-    final environment = await _environment(environmentId);
-    _requireTenant(environment.organizationId, actor.organizationId);
     final request = requestId ?? _id('req');
     final body = <String, Object?>{
-      'organizationId': actor.organizationId,
       'environmentId': environmentId,
       'releaseId': releaseId,
       'expectedVersion': expectedVersion,
     };
-    final idempotencyScope = 'promotion:${actor.organizationId}:${actor.id}';
     final existing = await _existingIdempotency(
-      idempotencyScope,
+      'promotion',
       idempotencyKey,
       body,
     );
-    if (existing != null) {
-      final existingEnvironmentId = existing['environmentId'];
-      if (existingEnvironmentId != environment.id) {
-        throw const ControlPlaneException(
-          'STORAGE_CORRUPT',
-          'Promotion idempotency record points to another environment',
-          statusCode: 500,
-        );
-      }
-      return environment;
-    }
+    if (existing != null)
+      return _environment(existing['environmentId']! as String);
     if (environment.version != expectedVersion) {
       throw ControlPlaneException(
         'PRECONDITION_FAILED',
@@ -2240,21 +2480,6 @@ final class ControlPlaneService {
         'NOT_FOUND',
         'Resource was not found',
         statusCode: 404,
-      );
-    }
-    if (environment.status == 'archived') {
-      throw const ControlPlaneException(
-        'RESOURCE_ARCHIVED',
-        'An archived environment cannot receive a deployment',
-        statusCode: 409,
-      );
-    }
-    final application = await _application(environment.applicationId);
-    if (application.status == 'archived') {
-      throw const ControlPlaneException(
-        'RESOURCE_ARCHIVED',
-        'An archived application cannot receive a deployment',
-        statusCode: 409,
       );
     }
     final patches = await store.listJson('patches');
@@ -2324,39 +2549,27 @@ final class ControlPlaneService {
       version: environment.version + 1,
       promotedReleaseId: release.id,
       createdAt: environment.createdAt,
-      status: environment.status,
-      updatedAt: _now(),
     );
-    if (store is ConditionalJsonStore) {
-      final conditional = store as ConditionalJsonStore;
-      final applied = await conditional.replaceJsonIfCurrent(
-        collection: 'environments',
+    await store.replaceJson('environments', environment.id, promoted.toJson());
+    final priorRuntimeState = await _environmentRuntimeState(environment.id);
+    await _saveEnvironmentRuntimeState(
+      EnvironmentRuntimeStateRecord(
         id: environment.id,
-        expected: environment.toJson(),
-        replacement: promoted.toJson(),
-      );
-      if (!applied) {
-        final current = await _environment(environment.id);
-        throw ControlPlaneException(
-          'PRECONDITION_FAILED',
-          'Environment changed while the promotion was being applied',
-          statusCode: 412,
-          details: <String, Object?>{'currentVersion': current.version},
-        );
-      }
-    } else {
-      await store.replaceJson(
-        'environments',
-        environment.id,
-        promoted.toJson(),
-      );
-    }
-    await _saveIdempotency(
-      idempotencyScope,
-      idempotencyKey,
-      body,
-      <String, Object?>{'environmentId': environment.id},
+        organizationId: actor.organizationId,
+        applicationId: environment.applicationId,
+        environmentId: environment.id,
+        desiredState: RuntimeDesiredState.patch,
+        releaseId: release.id,
+        runtimeReleaseId: release.runtimeReleaseId,
+        environmentVersion: promoted.version,
+        revision: (priorRuntimeState?.revision ?? 0) + 1,
+        actorId: actor.id,
+        updatedAt: _now(),
+      ),
     );
+    await _saveIdempotency('promotion', idempotencyKey, body, <String, Object?>{
+      'environmentId': environment.id,
+    });
     await _audit(
       requestId: request,
       actor: actor,
@@ -2369,6 +2582,153 @@ final class ControlPlaneService {
       },
     );
     return promoted;
+  });
+
+  /// Requests a signed base rollback for one customer-owned environment.
+  ///
+  /// The signed command is persisted as the environment's desired runtime
+  /// state. The promoted release and immutable deployment/audit history are
+  /// deliberately left intact. A connected runtime receives the command from
+  /// [updateCheck] and performs the trusted local transition.
+  Future<CloudRollbackResult> requestRollback({
+    required String token,
+    required String organizationId,
+    required String applicationId,
+    required String environmentId,
+    required String rollbackControl,
+    required String idempotencyKey,
+    String? requestId,
+  }) => _serialized(() async {
+    final actor = await _authorize(
+      token,
+      environmentRollbackScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    final application = await _application(applicationId);
+    _requireTenant(application.organizationId, actor.organizationId);
+    final environment = await _environment(environmentId);
+    _requireTenant(environment.organizationId, actor.organizationId);
+    if (environment.applicationId != application.id) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final body = <String, Object?>{
+      'organizationId': actor.organizationId,
+      'applicationId': application.id,
+      'environmentId': environment.id,
+      'rollbackControl': rollbackControl,
+    };
+    final existing = await _existingIdempotency(
+      'environment-rollback',
+      idempotencyKey,
+      body,
+    );
+    if (existing != null) return CloudRollbackResult.fromJson(existing);
+
+    final releaseId = environment.promotedReleaseId;
+    if (releaseId == null) {
+      throw const ControlPlaneException(
+        'NO_ACTIVE_RELEASE',
+        'The environment has no promoted release to roll back',
+        statusCode: 409,
+      );
+    }
+    final release = await _release(releaseId);
+    _requireTenant(release.organizationId, actor.organizationId);
+    if (release.applicationId != application.id) {
+      throw const ControlPlaneException(
+        'NOT_FOUND',
+        'Resource was not found',
+        statusCode: 404,
+      );
+    }
+    final command = _decodeRollbackControl(rollbackControl);
+    await _validateRollbackControl(
+      command: command,
+      release: release,
+      organizationId: actor.organizationId,
+      requireActivePatch: true,
+    );
+
+    final previous = await _environmentRuntimeState(environment.id);
+    if (previous != null &&
+        previous.environmentVersion == environment.version &&
+        previous.releaseId == release.id &&
+        previous.desiredState == RuntimeDesiredState.base) {
+      final already = CloudRollbackResult(
+        status: 'ALREADY_BASE',
+        desiredState: RuntimeDesiredState.base,
+        organizationId: actor.organizationId,
+        applicationId: application.id,
+        environmentId: environment.id,
+        runtimeReleaseId: release.runtimeReleaseId,
+        revision: previous.revision,
+        changed: false,
+      );
+      await _saveIdempotency(
+        'environment-rollback',
+        idempotencyKey,
+        body,
+        already.toJson(),
+      );
+      return already;
+    }
+
+    final next = EnvironmentRuntimeStateRecord(
+      id: environment.id,
+      organizationId: actor.organizationId,
+      applicationId: application.id,
+      environmentId: environment.id,
+      desiredState: RuntimeDesiredState.base,
+      releaseId: release.id,
+      runtimeReleaseId: release.runtimeReleaseId,
+      environmentVersion: environment.version,
+      revision: (previous?.revision ?? 0) + 1,
+      actorId: actor.id,
+      updatedAt: _now(),
+      rollbackControl: rollbackControl,
+    );
+    await _saveEnvironmentRuntimeState(next);
+    final result = CloudRollbackResult(
+      status: 'ROLLBACK_REQUESTED',
+      desiredState: RuntimeDesiredState.base,
+      organizationId: actor.organizationId,
+      applicationId: application.id,
+      environmentId: environment.id,
+      runtimeReleaseId: release.runtimeReleaseId,
+      revision: next.revision,
+      changed: true,
+    );
+    await _saveIdempotency(
+      'environment-rollback',
+      idempotencyKey,
+      body,
+      result.toJson(),
+    );
+    await _audit(
+      requestId: requestId ?? _id('req'),
+      actor: actor,
+      action: 'environment.rollback.request',
+      resourceType: 'environment',
+      resourceId: environment.id,
+      metadata: <String, Object?>{
+        'applicationId': application.id,
+        'releaseId': release.id,
+        'runtimeReleaseId': release.runtimeReleaseId,
+        'previousDesiredState': previous?.desiredState.wireValue ?? 'patch',
+        'previousRevision': previous?.revision,
+        'desiredState': RuntimeDesiredState.base.wireValue,
+        'revision': next.revision,
+        'highWaterSequence': command.highWaterSequence,
+        'highWaterDigest': command.highWaterDigest,
+        'keyId': command.keyId,
+      },
+    );
+    return result;
   });
 
   /// Creates a DRAFT rollout and its immutable revision. The target is
@@ -3727,10 +4087,59 @@ final class ControlPlaneService {
     if (release.runtimeApplicationId != request.runtimeApplicationId ||
         release.runtimeReleaseId != request.runtimeReleaseId ||
         release.runtimeCompatibilityVersion !=
-            request.runtimeCompatibilityVersion) {
+            request.runtimeCompatibilityVersion ||
+        request.platformId != null &&
+            request.platformId != release.platformId) {
       return UpdateCheckResult(
         decision: 'STORE_RELEASE_REQUIRED',
         runtimeReleaseId: request.runtimeReleaseId,
+      );
+    }
+    final runtimeState = await _environmentRuntimeState(environment.id);
+    if (runtimeState != null &&
+        (runtimeState.organizationId != actor.organizationId ||
+            runtimeState.applicationId != application.id ||
+            runtimeState.environmentId != environment.id)) {
+      throw const ControlPlaneException(
+        'RUNTIME_STATE_CORRUPT',
+        'Environment runtime state is bound to another tenant resource',
+        statusCode: 500,
+      );
+    }
+    if (runtimeState?.desiredState == RuntimeDesiredState.base &&
+        runtimeState?.environmentVersion == environment.version &&
+        runtimeState?.releaseId == release.id &&
+        runtimeState?.runtimeReleaseId == release.runtimeReleaseId) {
+      final state = runtimeState!;
+      final encodedControl = state.rollbackControl;
+      if (encodedControl == null) {
+        throw const ControlPlaneException(
+          'RUNTIME_STATE_CORRUPT',
+          'Base runtime state is missing its signed rollback control',
+          statusCode: 500,
+        );
+      }
+      final command = _decodeRollbackControl(encodedControl, stored: true);
+      await _validateRollbackControl(
+        command: command,
+        release: release,
+        organizationId: actor.organizationId,
+        requireActivePatch: false,
+      );
+      if (request.highWaterDigest != command.highWaterDigest ||
+          request.highWaterSequence != command.highWaterSequence) {
+        return UpdateCheckResult(
+          decision: 'STORE_RELEASE_REQUIRED',
+          runtimeReleaseId: request.runtimeReleaseId,
+        );
+      }
+      return UpdateCheckResult(
+        decision: 'ROLLBACK_TO_BASE',
+        runtimeReleaseId: release.runtimeReleaseId,
+        rollbackControl: encodedControl,
+        applicationId: application.id,
+        environmentId: environment.id,
+        platformId: release.platformId,
       );
     }
     final rollout = await _rolloutForUpdate(
@@ -3785,8 +4194,6 @@ final class ControlPlaneService {
     required String artifactId,
     required String applicationId,
     required String environmentId,
-    String? admissionId,
-    String? downloadProof,
   }) async {
     final artifact = await _artifact(artifactId);
     final patch = await _patch(artifact.patchId);
@@ -3800,40 +4207,28 @@ final class ControlPlaneService {
     _requireTenant(artifact.organizationId, actor.organizationId);
     final environment = await _environment(environmentId);
     final release = await _release(patch.releaseId);
+    if (artifact.state == artifactPurgedState) {
+      throw const ControlPlaneException(
+        'ARTIFACT_PURGED',
+        'The artifact bytes have been purged while its release evidence remains',
+        statusCode: 410,
+      );
+    }
+    if (artifact.state != artifactReadyState) {
+      throw const ControlPlaneException(
+        'ARTIFACT_UNAVAILABLE',
+        'The artifact is not available for delivery',
+        statusCode: 410,
+      );
+    }
     if (environment.promotedReleaseId != release.id ||
         environment.applicationId != applicationId ||
         release.applicationId != applicationId ||
-        artifact.state != 'READY') {
+        artifact.state != artifactReadyState) {
       throw const ControlPlaneException(
         'NOT_FOUND',
         'Resource was not found',
         statusCode: 404,
-      );
-    }
-    final admission = artifactDeliveryAdmission;
-    if (admission == null) {
-      if (artifactDeliveryAdmissionRequired) {
-        throw const ControlPlaneException(
-          'ARTIFACT_ADMISSION_UNAVAILABLE',
-          'Artifact delivery admission is unavailable',
-          statusCode: 503,
-        );
-      }
-    } else {
-      await admission.authorize(
-        ArtifactDeliveryAdmissionContext(
-          organizationId: artifact.organizationId,
-          applicationId: environment.applicationId,
-          environmentId: environment.id,
-          runtimeApplicationId: release.runtimeApplicationId,
-          platform: release.platformId,
-          runtimeReleaseId: release.runtimeReleaseId,
-          runtimePatchId: patch.runtimePatchId,
-          artifactDigest: artifact.sha256,
-          artifactId: artifact.id,
-        ),
-        admissionId: admissionId,
-        downloadProof: downloadProof,
       );
     }
     final bytes = await store.readArtifact(artifact.sha256);
@@ -3845,6 +4240,58 @@ final class ControlPlaneService {
       );
     }
     return ArtifactPayload(record: artifact, bytes: List.unmodifiable(bytes));
+  }
+
+  /// Records bytes accepted by the current control-plane origin response.
+  ///
+  /// The HTTP adapter calls this after artifact authorization and digest
+  /// verification, but before writing the response body. A durable accounting
+  /// failure prevents the response from being acknowledged so usage evidence
+  /// cannot be silently lost. Direct CDN/object-store egress is outside this
+  /// seam and is not represented by this meter.
+  Future<void> recordArtifactDelivery({
+    required ArtifactPayload payload,
+    int? bytes,
+    String? sourceId,
+  }) async {
+    final deliveredBytes = bytes ?? payload.bytes.length;
+    if (deliveredBytes < 0 || deliveredBytes > payload.bytes.length) {
+      throw const ControlPlaneException(
+        'INVALID_DELIVERY_BYTES',
+        'Delivered bytes must be within the response payload length',
+        statusCode: 500,
+      );
+    }
+    try {
+      await usageMetering.recordArtifactDelivery(
+        artifact: payload.record,
+        bytes: deliveredBytes,
+        sourceId: sourceId ?? _id('delivery'),
+        occurredAt: _now(),
+      );
+    } on StorageUnavailable catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact delivery accounting is temporarily unavailable: ${error.message}',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactDeliveryMeter,
+          'source': artifactDeliveryOriginSource,
+        },
+      );
+    } on ControlPlaneException {
+      rethrow;
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact delivery accounting failed: $error',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactDeliveryMeter,
+          'source': artifactDeliveryOriginSource,
+        },
+      );
+    }
   }
 
   /// Validates and durably records one bounded client observation. This path
@@ -4276,6 +4723,159 @@ final class ControlPlaneService {
     return patch;
   }
 
+  Future<EnvironmentRuntimeStateRecord?> _environmentRuntimeState(
+    String environmentId,
+  ) async {
+    final value = await store.readJson(
+      'environment_runtime_states',
+      environmentId,
+    );
+    if (value == null) return null;
+    try {
+      return EnvironmentRuntimeStateRecord.fromJson(value);
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        'RUNTIME_STATE_CORRUPT',
+        'Environment runtime state is malformed: $error',
+        statusCode: 500,
+      );
+    }
+  }
+
+  Future<void> _saveEnvironmentRuntimeState(
+    EnvironmentRuntimeStateRecord state,
+  ) async {
+    final current = await store.readJson(
+      'environment_runtime_states',
+      state.environmentId,
+    );
+    if (current == null) {
+      try {
+        await store.createJson(
+          'environment_runtime_states',
+          state.environmentId,
+          state.toJson(),
+        );
+        return;
+      } on StorageConflict {
+        // A concurrent writer may have created the same environment state.
+        // The surrounding service write queue will resolve the latest desired
+        // state below without creating a second record.
+      }
+    }
+    await store.replaceJson(
+      'environment_runtime_states',
+      state.environmentId,
+      state.toJson(),
+    );
+  }
+
+  RollbackControlCommand _decodeRollbackControl(
+    String encoded, {
+    bool stored = false,
+  }) {
+    try {
+      if (encoded.isEmpty ||
+          encoded.length > 32768 ||
+          encoded.contains(RegExp(r'[\r\n\s]'))) {
+        throw const FormatException('Invalid rollback control encoding');
+      }
+      final bytes = base64.decode(encoded);
+      if (base64.encode(bytes) != encoded ||
+          bytes.length > RollbackControlCommand.maxBytes) {
+        throw const FormatException('Invalid rollback control encoding');
+      }
+      return RollbackControlCommand.decode(bytes);
+    } on ControlPlaneException {
+      rethrow;
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        stored ? 'RUNTIME_STATE_CORRUPT' : 'INVALID_ROLLBACK_CONTROL',
+        stored
+            ? 'Stored rollback control is invalid: $error'
+            : 'Rollback control is invalid',
+        statusCode: stored ? 500 : 400,
+      );
+    }
+  }
+
+  Future<void> _validateRollbackControl({
+    required RollbackControlCommand command,
+    required ReleaseRecord release,
+    required String organizationId,
+    required bool requireActivePatch,
+  }) async {
+    if (command.applicationId != release.runtimeApplicationId ||
+        command.releaseId != release.runtimeReleaseId) {
+      throw const ControlPlaneException(
+        'ROLLBACK_TARGET_MISMATCH',
+        'Rollback control is bound to another application or release',
+        statusCode: 409,
+      );
+    }
+    final encodedPublicKey = release.signingPublicKeys[command.keyId];
+    if (encodedPublicKey == null) {
+      throw const ControlPlaneException(
+        'INVALID_ROLLBACK_CONTROL',
+        'Rollback control key is not registered on the release',
+        statusCode: 409,
+      );
+    }
+    late final List<int> publicKey;
+    try {
+      publicKey = base64.decode(encodedPublicKey);
+    } on FormatException {
+      throw const ControlPlaneException(
+        'RUNTIME_STATE_CORRUPT',
+        'Release rollback trust key is malformed',
+        statusCode: 500,
+      );
+    }
+    if (base64.encode(publicKey) != encodedPublicKey ||
+        publicKey.length != 32 ||
+        !await command.verify(publicKey)) {
+      throw const ControlPlaneException(
+        'INVALID_ROLLBACK_CONTROL',
+        'Rollback control signature verification failed',
+        statusCode: 409,
+      );
+    }
+    if (!requireActivePatch) return;
+    if (command.highWaterSequence <= 0 || command.highWaterDigest == null) {
+      throw const ControlPlaneException(
+        'NO_ACTIVE_PATCH',
+        'The runtime has no active patch high-water to roll back',
+        statusCode: 409,
+      );
+    }
+    final expectedDigest = 'sha256:${command.highWaterDigest}';
+    var found = false;
+    for (final value in await store.listJson('patches')) {
+      if (value['organizationId'] != organizationId ||
+          value['releaseId'] != release.id) {
+        continue;
+      }
+      try {
+        final patch = PatchRecord.fromJson(value);
+        if (patch.state == 'READY' &&
+            patch.sequence == command.highWaterSequence &&
+            patch.sha256 == expectedDigest) {
+          found = true;
+          break;
+        }
+      } on Object {
+        // Malformed unrelated tenant data cannot authorize a rollback.
+      }
+    }
+    if (!found) {
+      throw const ControlPlaneException(
+        'ROLLBACK_HIGH_WATER_INVALID',
+        'Rollback high-water is not a ready patch for the promoted release',
+        statusCode: 409,
+      );
+    }
+  }
+
   Future<RolloutRecord> _rollout(String rolloutId) async {
     final value = await store.readJson('rollouts', rolloutId);
     if (value == null) {
@@ -4634,1499 +5234,6 @@ final class ControlPlaneService {
     );
   }
 
-  Future<List<Map<String, Object?>>> listOrganizationInvitations({
-    required String token,
-    required String organizationId,
-  }) async {
-    await _authorize(
-      token,
-      organizationMembersReadScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final now = _now();
-    final invitations = <Map<String, Object?>>[];
-    for (final value in await store.listJson('organization_invitations')) {
-      final invitation = OrganizationInvitationRecord.fromJson(value);
-      if (invitation.organizationId != organizationId) continue;
-      final metadata = invitation.toMetadataJson(now: now);
-      invitations.add(metadata);
-    }
-    invitations.sort(
-      (left, right) =>
-          '${right['createdAt']}'.compareTo('${left['createdAt']}'),
-    );
-    return List.unmodifiable(invitations);
-  }
-
-  Future<IssuedOrganizationInvitation> inviteOrganizationMember({
-    required String token,
-    required String organizationId,
-    required String email,
-    required String role,
-    DateTime? expiresAt,
-    String? idempotencyKey,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      organizationMembersWriteScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    if (humanAuth == null) {
-      throw const ControlPlaneException(
-        'AUTH_UNAVAILABLE',
-        'Human authentication is not configured',
-        statusCode: 503,
-      );
-    }
-    final normalizedEmail = HumanAuthService.normalizeHumanEmail(email);
-    if (role == 'owner') {
-      throw const ControlPlaneException(
-        'OWNER_ROLE_PROTECTED',
-        'Ownership must be transferred explicitly after a member joins',
-        statusCode: 409,
-      );
-    }
-    final capabilities = customerCapabilitiesForRole(role);
-    if (!actor.scopes.containsAll(capabilities)) {
-      throw const ControlPlaneException(
-        'FORBIDDEN',
-        'The caller cannot grant the requested member capabilities',
-        statusCode: 403,
-      );
-    }
-    final now = _now();
-    final invitationExpiry = (expiresAt ?? now.add(const Duration(days: 7)))
-        .toUtc();
-    if (!invitationExpiry.isAfter(now) ||
-        invitationExpiry.isAfter(now.add(const Duration(days: 30)))) {
-      throw const ControlPlaneException(
-        'INVALID_INVITATION_EXPIRY',
-        'Invitation expiry must be within 30 days',
-        statusCode: 422,
-      );
-    }
-    final idempotencyBody = <String, Object?>{
-      'organizationId': actor.organizationId,
-      'email': normalizedEmail,
-      'role': role,
-      'expiresAt': expiresAt?.toUtc().toIso8601String(),
-    };
-    final idempotencyScope =
-        'organization-invitation:${actor.organizationId}:${actor.id}';
-    if (idempotencyKey != null) {
-      final existing = await _existingIdempotency(
-        idempotencyScope,
-        idempotencyKey,
-        idempotencyBody,
-      );
-      if (existing != null) {
-        throw const ControlPlaneException(
-          'ONE_TIME_SECRET_UNAVAILABLE',
-          'This invitation was already issued for the idempotency key; its bearer link cannot be replayed',
-          statusCode: 409,
-        );
-      }
-    }
-    final existingUser = await humanAuth!.userByEmail(normalizedEmail);
-    if (existingUser != null &&
-        existingUser.memberships.any(
-          (membership) =>
-              membership.organizationId == actor.organizationId &&
-              membership.audience == customerAuthorizationAudience &&
-              membership.active,
-        )) {
-      throw const ControlPlaneException(
-        'MEMBER_ALREADY_EXISTS',
-        'This email is already an active organization member',
-        statusCode: 409,
-      );
-    }
-    final duplicate = (await store.listJson('organization_invitations')).any(
-      (value) =>
-          value['organizationId'] == actor.organizationId &&
-          value['email'] == normalizedEmail &&
-          OrganizationInvitationRecord.fromJson(value).activeAt(now),
-    );
-    if (duplicate) {
-      throw const ControlPlaneException(
-        'INVITATION_CONFLICT',
-        'An active invitation already exists for this email',
-        statusCode: 409,
-      );
-    }
-    final invitationToken = _secretToken('hvi');
-    final invitation = OrganizationInvitationRecord(
-      id: _id('inv'),
-      organizationId: actor.organizationId,
-      email: normalizedEmail,
-      role: role,
-      capabilities: capabilities,
-      tokenHash: CredentialService.tokenHash(invitationToken),
-      createdBy: actor.id,
-      createdAt: now,
-      expiresAt: invitationExpiry,
-    );
-    await store.createJson(
-      'organization_invitations',
-      invitation.id,
-      invitation.toJson(),
-    );
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'organization.member_invitation.create',
-      resourceType: 'organization_invitation',
-      resourceId: invitation.id,
-      metadata: <String, Object?>{
-        'role': invitation.role,
-        'expiresAt': invitation.expiresAt.toIso8601String(),
-      },
-    );
-    try {
-      await invitationDelivery.deliver(
-        InvitationDeliveryRequest(
-          kind: 'customer_organization',
-          invitationId: invitation.id,
-          email: invitation.email,
-          token: invitationToken,
-          expiresAt: invitation.expiresAt,
-          role: invitation.role,
-          capabilities: invitation.capabilities,
-        ),
-      );
-    } on Object {
-      final failedAt = _now();
-      final failed = invitation.copyWith(
-        status: 'REVOKED',
-        revokedAt: failedAt,
-        deliveryStatus: 'FAILED',
-        deliveryFailedAt: failedAt,
-      );
-      await store.replaceJson(
-        'organization_invitations',
-        invitation.id,
-        failed.toJson(),
-      );
-      await _audit(
-        requestId: requestId ?? _id('req'),
-        actor: actor,
-        action: 'organization.member_invitation.delivery_failed',
-        resourceType: 'organization_invitation',
-        resourceId: invitation.id,
-        metadata: const <String, Object?>{'deliveryStatus': 'FAILED'},
-      );
-      throw const ControlPlaneException(
-        'INVITATION_DELIVERY_FAILED',
-        'The invitation was not delivered and has been revoked; issue a new invitation',
-        statusCode: 503,
-      );
-    }
-    final delivered = invitation.copyWith(deliveryStatus: 'DELIVERED');
-    await store.replaceJson(
-      'organization_invitations',
-      invitation.id,
-      delivered.toJson(),
-    );
-    if (idempotencyKey != null) {
-      await _saveIdempotency(
-        idempotencyScope,
-        idempotencyKey,
-        idempotencyBody,
-        <String, Object?>{'invitationId': invitation.id},
-      );
-    }
-    return IssuedOrganizationInvitation(
-      record: delivered,
-      token: invitationToken,
-    );
-  });
-
-  Future<OrganizationInvitationRecord> revokeOrganizationInvitation({
-    required String token,
-    required String organizationId,
-    required String invitationId,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      organizationMembersWriteScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final value = await store.readJson(
-      'organization_invitations',
-      invitationId,
-    );
-    if (value == null) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    final invitation = OrganizationInvitationRecord.fromJson(value);
-    _requireTenant(invitation.organizationId, actor.organizationId);
-    if (invitation.statusAt(_now()) != 'PENDING') return invitation;
-    final revoked = invitation.copyWith(status: 'REVOKED', revokedAt: _now());
-    await store.replaceJson(
-      'organization_invitations',
-      invitation.id,
-      revoked.toJson(),
-    );
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'organization.member_invitation.revoke',
-      resourceType: 'organization_invitation',
-      resourceId: invitation.id,
-      metadata: const <String, Object?>{},
-    );
-    return revoked;
-  });
-
-  /// Returns invitation metadata without revealing whether an arbitrary
-  /// bearer value exists. The raw token is never stored or written to logs.
-  Future<Map<String, Object?>> previewOrganizationInvitation({
-    required String token,
-  }) async {
-    final invitation = await _organizationInvitationForToken(token);
-    return <String, Object?>{
-      ...invitation.toPublicMetadataJson(now: _now()),
-      'organization': (await store.readJson(
-        'organizations',
-        invitation.organizationId,
-      ))?['name'],
-    };
-  }
-
-  /// Redeems a single-use organization invitation. Existing authenticated
-  /// sessions may be supplied by the dashboard; otherwise a new account or a
-  /// password-authenticated existing account is used. Membership creation and
-  /// invitation consumption are idempotent under the service write lock.
-  Future<Map<String, Object?>> acceptOrganizationInvitation({
-    required String token,
-    String? accessToken,
-    String? email,
-    String? password,
-    String? requestId,
-  }) => _serialized(() async {
-    final auth = humanAuth;
-    if (auth == null) {
-      throw const ControlPlaneException(
-        'AUTH_UNAVAILABLE',
-        'Human authentication is not configured',
-        statusCode: 503,
-      );
-    }
-    final invitation = await _organizationInvitationForToken(token);
-    final now = _now();
-    final status = invitation.statusAt(now);
-    if (status == 'ACCEPTED') {
-      return <String, Object?>{
-        'accepted': true,
-        'idempotent': true,
-        'invitation': invitation.toPublicMetadataJson(now: now),
-      };
-    }
-    if (status == 'REVOKED') {
-      throw const ControlPlaneException(
-        'INVITATION_REVOKED',
-        'This invitation has been revoked',
-        statusCode: 410,
-      );
-    }
-    if (status == 'EXPIRED') {
-      throw const ControlPlaneException(
-        'INVITATION_EXPIRED',
-        'This invitation has expired',
-        statusCode: 410,
-      );
-    }
-
-    HumanUserRecord? user;
-    HumanLoginResult? loginResult;
-    var issuePasswordSessionAfterGrant = false;
-    final authenticatedToken = accessToken?.trim();
-    if (authenticatedToken != null && authenticatedToken.isNotEmpty) {
-      final identity = await auth.me(accessToken: authenticatedToken);
-      user = await auth.userById(identity.user.id);
-      if (user == null || user.email != invitation.email) {
-        throw const ControlPlaneException(
-          'INVITATION_RECIPIENT_MISMATCH',
-          'This invitation was issued to a different account',
-          statusCode: 403,
-        );
-      }
-    } else {
-      final normalizedEmail = HumanAuthService.normalizeHumanEmail(email ?? '');
-      if (normalizedEmail != invitation.email) {
-        throw const ControlPlaneException(
-          'INVITATION_RECIPIENT_MISMATCH',
-          'This invitation was issued to a different email address',
-          statusCode: 403,
-        );
-      }
-      user = await auth.userByEmail(normalizedEmail);
-      if (user == null) {
-        if (password == null) {
-          throw const ControlPlaneException(
-            'PASSWORD_REQUIRED',
-            'A password is required to create the invited account',
-            statusCode: 422,
-          );
-        }
-        loginResult = await auth.registerInvitedCustomer(
-          organizationId: invitation.organizationId,
-          email: normalizedEmail,
-          password: password,
-          role: invitation.role,
-          capabilities: invitation.capabilities,
-        );
-        user = await auth.userByEmail(normalizedEmail);
-      } else {
-        if (password == null) {
-          throw const ControlPlaneException(
-            'PASSWORD_REQUIRED',
-            'Password is required to accept an invitation for an existing account',
-            statusCode: 422,
-          );
-        }
-        await auth.verifyInvitationPassword(
-          email: normalizedEmail,
-          password: password,
-        );
-        issuePasswordSessionAfterGrant = true;
-      }
-    }
-    if (user == null) {
-      throw const ControlPlaneException(
-        'STORAGE_CORRUPT',
-        'Invited account could not be loaded',
-        statusCode: 500,
-      );
-    }
-    user = await auth.grantCustomerMembership(
-      userId: user.id,
-      organizationId: invitation.organizationId,
-      role: invitation.role,
-      capabilities: invitation.capabilities,
-    );
-    if (authenticatedToken != null && authenticatedToken.isNotEmpty) {
-      loginResult = await auth.issueSessionForAuthenticatedUser(
-        accessToken: authenticatedToken,
-        audience: customerAuthorizationAudience,
-      );
-    } else if (issuePasswordSessionAfterGrant) {
-      loginResult = await auth.issueSessionForUserId(
-        userId: user.id,
-        audience: customerAuthorizationAudience,
-      );
-    }
-    final accepted = invitation.copyWith(
-      status: 'ACCEPTED',
-      acceptedBy: user.id,
-      acceptedAt: now,
-    );
-    if (store is ConditionalJsonStore) {
-      final conditional = store as ConditionalJsonStore;
-      final applied = await conditional.replaceJsonIfCurrent(
-        collection: 'organization_invitations',
-        id: invitation.id,
-        expected: invitation.toJson(),
-        replacement: accepted.toJson(),
-      );
-      if (!applied) {
-        final currentValue = await store.readJson(
-          'organization_invitations',
-          invitation.id,
-        );
-        final current = currentValue == null
-            ? null
-            : OrganizationInvitationRecord.fromJson(currentValue);
-        if (current?.statusAt(now) == 'ACCEPTED') {
-          return <String, Object?>{
-            'accepted': true,
-            'idempotent': true,
-            'invitation': current!.toPublicMetadataJson(now: now),
-          };
-        }
-        throw const ControlPlaneException(
-          'INVITATION_CONFLICT',
-          'The invitation changed while it was being accepted',
-          statusCode: 409,
-        );
-      }
-    } else {
-      await store.replaceJson(
-        'organization_invitations',
-        invitation.id,
-        accepted.toJson(),
-      );
-    }
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: _invitationAuditActor(user, invitation.organizationId),
-      action: 'organization.member_invitation.accept',
-      resourceType: 'organization_invitation',
-      resourceId: invitation.id,
-      metadata: <String, Object?>{'acceptedBy': user.id},
-    );
-    return <String, Object?>{
-      'accepted': true,
-      'idempotent': false,
-      'invitation': accepted.toPublicMetadataJson(now: now),
-      'member': _memberMetadata(user, invitation.organizationId),
-      if (loginResult != null) 'login': loginResult.toJson(),
-    };
-  });
-
-  /// Transfers organization ownership as an explicit atomic domain action,
-  /// rather than allowing owner assignment through ordinary role mutation.
-  Future<Map<String, Object?>> transferOrganizationOwnership({
-    required String token,
-    required String organizationId,
-    required String targetUserId,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      organizationMembersWriteScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final actorRecord = await humanAuth?.userById(actor.id);
-    if (actorRecord == null) {
-      throw const ControlPlaneException(
-        'UNAUTHORIZED',
-        'Authentication is invalid',
-        statusCode: 401,
-      );
-    }
-    final ownerIndex = actorRecord.memberships.indexWhere(
-      (membership) =>
-          membership.organizationId == organizationId &&
-          membership.audience == customerAuthorizationAudience &&
-          membership.active &&
-          membership.role == 'owner',
-    );
-    if (ownerIndex < 0) {
-      throw const ControlPlaneException(
-        'FORBIDDEN',
-        'Only the current organization owner can transfer ownership',
-        statusCode: 403,
-      );
-    }
-    final targetValue = await store.readJson('users', targetUserId);
-    if (targetValue == null) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Target organization member was not found',
-        statusCode: 404,
-      );
-    }
-    final target = HumanUserRecord.fromJson(targetValue);
-    final targetIndex = target.memberships.indexWhere(
-      (membership) =>
-          membership.organizationId == organizationId &&
-          membership.audience == customerAuthorizationAudience &&
-          membership.active,
-    );
-    if (targetIndex < 0) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Target organization member was not found',
-        statusCode: 404,
-      );
-    }
-    if (target.id == actor.id) {
-      throw const ControlPlaneException(
-        'INVALID_OWNER_TRANSFER_TARGET',
-        'Ownership can only transfer to another active organization member',
-        statusCode: 422,
-      );
-    }
-    final targetCurrent = target.memberships[targetIndex];
-    final ownerMembership = HumanMembership(
-      organizationId: organizationId,
-      applicationId: targetCurrent.applicationId,
-      environmentId: targetCurrent.environmentId,
-      profileApplicationId: targetCurrent.profileApplicationId,
-      profileEnvironmentId: targetCurrent.profileEnvironmentId,
-      role: 'owner',
-      capabilities: controlScopes,
-      profileName: targetCurrent.profileName,
-      audience: customerAuthorizationAudience,
-    );
-    final previousOwner = actorRecord.memberships[ownerIndex];
-    final previousOwnerMembership = HumanMembership(
-      organizationId: organizationId,
-      applicationId: previousOwner.applicationId,
-      environmentId: previousOwner.environmentId,
-      profileApplicationId: previousOwner.profileApplicationId,
-      profileEnvironmentId: previousOwner.profileEnvironmentId,
-      role: 'admin',
-      capabilities: customerCapabilitiesForRole('admin'),
-      profileName: previousOwner.profileName,
-      audience: customerAuthorizationAudience,
-    );
-    final targetMemberships = target.memberships.toList()
-      ..[targetIndex] = ownerMembership;
-    final ownerMemberships = actorRecord.memberships.toList()
-      ..[ownerIndex] = previousOwnerMembership;
-    final replacementUsers = <String, Map<String, Object?>>{
-      target.id: target
-          .copyWith(memberships: targetMemberships, active: true)
-          .toJson(),
-      actorRecord.id: actorRecord
-          .copyWith(memberships: ownerMemberships, active: true)
-          .toJson(),
-    };
-    if (store is ConditionalJsonStore) {
-      final conditional = store as ConditionalJsonStore;
-      final applied = await conditional.replaceJsonBatchIfCurrent(
-        collection: 'users',
-        expected: <String, Map<String, Object?>>{
-          target.id: target.toJson(),
-          actorRecord.id: actorRecord.toJson(),
-        },
-        replacements: replacementUsers,
-      );
-      if (!applied) {
-        throw const ControlPlaneException(
-          'PRECONDITION_FAILED',
-          'Organization membership changed while ownership was being transferred',
-          statusCode: 409,
-        );
-      }
-    } else {
-      await store.replaceJsonBatch('users', replacementUsers);
-    }
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'organization.owner.transfer',
-      resourceType: 'organization',
-      resourceId: organizationId,
-      metadata: <String, Object?>{
-        'fromUserId': actorRecord.id,
-        'toUserId': target.id,
-      },
-    );
-    return <String, Object?>{
-      'organizationId': organizationId,
-      'previousOwner': _memberMetadata(
-        actorRecord.copyWith(memberships: ownerMemberships),
-        organizationId,
-      ),
-      'owner': _memberMetadata(
-        target.copyWith(memberships: targetMemberships),
-        organizationId,
-      ),
-    };
-  });
-
-  Future<IssuedPlatformStaffInvitation> invitePlatformStaff({
-    required String accessToken,
-    required String role,
-    required String email,
-    String? profileName,
-    DateTime? expiresAt,
-    String? idempotencyKey,
-    String? requestId,
-  }) => _serialized(() async {
-    final staff = await _platformUser(
-      accessToken: accessToken,
-      capability: platformStaffManageCapability,
-      profileName: profileName,
-    );
-    final auth = humanAuth;
-    if (auth == null) {
-      throw const ControlPlaneException(
-        'AUTH_UNAVAILABLE',
-        'Human authentication is not configured',
-        statusCode: 503,
-      );
-    }
-    final normalizedEmail = HumanAuthService.normalizeHumanEmail(email);
-    if (await auth.userByEmail(normalizedEmail) != null) {
-      throw const ControlPlaneException(
-        'STAFF_ACCOUNT_CONFLICT',
-        'A user with this email already exists; staff invitations only create new staff accounts',
-        statusCode: 409,
-      );
-    }
-    final capabilities = platformCapabilitiesForRole(role);
-    final now = _now();
-    final expiry = (expiresAt ?? now.add(const Duration(days: 7))).toUtc();
-    if (!expiry.isAfter(now) ||
-        expiry.isAfter(now.add(const Duration(days: 30)))) {
-      throw const ControlPlaneException(
-        'INVALID_INVITATION_EXPIRY',
-        'Staff invitation expiry must be within 30 days',
-        statusCode: 422,
-      );
-    }
-    final idempotencyBody = <String, Object?>{
-      'organizationId': platformSystemOrganizationId,
-      'email': normalizedEmail,
-      'role': role,
-      'expiresAt': expiresAt?.toUtc().toIso8601String(),
-    };
-    final idempotencyScope = 'platform-staff-invitation:${staff.id}';
-    if (idempotencyKey != null) {
-      final existing = await _existingIdempotency(
-        idempotencyScope,
-        idempotencyKey,
-        idempotencyBody,
-      );
-      if (existing != null) {
-        throw const ControlPlaneException(
-          'ONE_TIME_SECRET_UNAVAILABLE',
-          'This staff invitation was already issued for the idempotency key; its bearer link cannot be replayed',
-          statusCode: 409,
-        );
-      }
-    }
-    final duplicate = (await store.listJson('platform_staff_invitations')).any(
-      (value) =>
-          value['email'] == normalizedEmail &&
-          PlatformStaffInvitationRecord.fromJson(value).activeAt(now),
-    );
-    if (duplicate) {
-      throw const ControlPlaneException(
-        'INVITATION_CONFLICT',
-        'An active staff invitation already exists for this email',
-        statusCode: 409,
-      );
-    }
-    final invitationToken = _secretToken('hsi');
-    final invitation = PlatformStaffInvitationRecord(
-      id: _id('staff_inv'),
-      email: normalizedEmail,
-      role: role,
-      platformCapabilities: capabilities,
-      tokenHash: CredentialService.tokenHash(invitationToken),
-      createdBy: staff.id,
-      createdAt: now,
-      expiresAt: expiry,
-    );
-    await store.createJson(
-      'platform_staff_invitations',
-      invitation.id,
-      invitation.toJson(),
-    );
-    await _platformAudit(
-      staff: staff,
-      organizationId: platformSystemOrganizationId,
-      requestId: requestId ?? _id('req'),
-      action: 'platform.staff_invitation.create',
-      resourceType: 'platform_staff_invitation',
-      resourceId: invitation.id,
-      metadata: <String, Object?>{
-        'role': invitation.role,
-        'expiresAt': invitation.expiresAt.toIso8601String(),
-      },
-    );
-    try {
-      await invitationDelivery.deliver(
-        InvitationDeliveryRequest(
-          kind: 'platform_staff',
-          invitationId: invitation.id,
-          email: invitation.email,
-          token: invitationToken,
-          expiresAt: invitation.expiresAt,
-          role: invitation.role,
-          capabilities: invitation.platformCapabilities,
-        ),
-      );
-    } on Object {
-      final failedAt = _now();
-      final failed = invitation.copyWith(
-        status: 'REVOKED',
-        revokedAt: failedAt,
-        deliveryStatus: 'FAILED',
-        deliveryFailedAt: failedAt,
-      );
-      await store.replaceJson(
-        'platform_staff_invitations',
-        invitation.id,
-        failed.toJson(),
-      );
-      await _platformAudit(
-        staff: staff,
-        organizationId: platformSystemOrganizationId,
-        requestId: requestId ?? _id('req'),
-        action: 'platform.staff_invitation.delivery_failed',
-        resourceType: 'platform_staff_invitation',
-        resourceId: invitation.id,
-        metadata: const <String, Object?>{'deliveryStatus': 'FAILED'},
-      );
-      throw const ControlPlaneException(
-        'INVITATION_DELIVERY_FAILED',
-        'The invitation was not delivered and has been revoked; issue a new invitation',
-        statusCode: 503,
-      );
-    }
-    final delivered = invitation.copyWith(deliveryStatus: 'DELIVERED');
-    await store.replaceJson(
-      'platform_staff_invitations',
-      invitation.id,
-      delivered.toJson(),
-    );
-    if (idempotencyKey != null) {
-      await _saveIdempotency(
-        idempotencyScope,
-        idempotencyKey,
-        idempotencyBody,
-        <String, Object?>{'invitationId': invitation.id},
-      );
-    }
-    return IssuedPlatformStaffInvitation(
-      record: delivered,
-      token: invitationToken,
-    );
-  });
-
-  Future<List<Map<String, Object?>>> listPlatformStaffInvitations({
-    required String accessToken,
-    String? profileName,
-  }) async {
-    await _platformUser(
-      accessToken: accessToken,
-      capability: platformAccountsReadCapability,
-      profileName: profileName,
-    );
-    final now = _now();
-    final values = (await store.listJson('platform_staff_invitations'))
-        .map(
-          (value) =>
-              PlatformStaffInvitationRecord.fromJson(value)
-                  .toMetadataJson(now: now),
-        )
-        .toList();
-    values.sort(
-      (left, right) =>
-          '${right['createdAt']}'.compareTo('${left['createdAt']}'),
-    );
-    return List.unmodifiable(values);
-  }
-
-  Future<Map<String, Object?>> previewPlatformStaffInvitation({
-    required String token,
-  }) async {
-    final invitation = await _platformStaffInvitationForToken(token);
-    return <String, Object?>{
-      ...invitation.toPublicMetadataJson(now: _now()),
-      'audience': platformAuthorizationAudience,
-    };
-  }
-
-  Future<PlatformStaffInvitationRecord> revokePlatformStaffInvitation({
-    required String accessToken,
-    required String invitationId,
-    String? profileName,
-    String? requestId,
-  }) => _serialized(() async {
-    final staff = await _platformUser(
-      accessToken: accessToken,
-      capability: platformStaffManageCapability,
-      profileName: profileName,
-    );
-    final value = await store.readJson(
-      'platform_staff_invitations',
-      invitationId,
-    );
-    if (value == null) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Staff invitation was not found',
-        statusCode: 404,
-      );
-    }
-    final invitation = PlatformStaffInvitationRecord.fromJson(value);
-    if (!invitation.activeAt(_now())) return invitation;
-    final revoked = invitation.copyWith(status: 'REVOKED', revokedAt: _now());
-    await store.replaceJson(
-      'platform_staff_invitations',
-      invitation.id,
-      revoked.toJson(),
-    );
-    await _platformAudit(
-      staff: staff,
-      organizationId: platformSystemOrganizationId,
-      requestId: requestId ?? _id('req'),
-      action: 'platform.staff_invitation.revoke',
-      resourceType: 'platform_staff_invitation',
-      resourceId: invitation.id,
-      metadata: const <String, Object?>{},
-    );
-    return revoked;
-  });
-
-  Future<Map<String, Object?>> acceptPlatformStaffInvitation({
-    required String token,
-    required String email,
-    required String password,
-    String? requestId,
-  }) => _serialized(() async {
-    final auth = humanAuth;
-    if (auth == null) {
-      throw const ControlPlaneException(
-        'AUTH_UNAVAILABLE',
-        'Human authentication is not configured',
-        statusCode: 503,
-      );
-    }
-    final invitation = await _platformStaffInvitationForToken(token);
-    final now = _now();
-    final status = invitation.statusAt(now);
-    if (status == 'ACCEPTED') {
-      return <String, Object?>{
-        'accepted': true,
-        'idempotent': true,
-        'invitation': invitation.toPublicMetadataJson(now: now),
-      };
-    }
-    if (status == 'REVOKED') {
-      throw const ControlPlaneException(
-        'INVITATION_REVOKED',
-        'This staff invitation has been revoked',
-        statusCode: 410,
-      );
-    }
-    if (status == 'EXPIRED') {
-      throw const ControlPlaneException(
-        'INVITATION_EXPIRED',
-        'This staff invitation has expired',
-        statusCode: 410,
-      );
-    }
-    final normalizedEmail = HumanAuthService.normalizeHumanEmail(email);
-    if (normalizedEmail != invitation.email) {
-      throw const ControlPlaneException(
-        'INVITATION_RECIPIENT_MISMATCH',
-        'This invitation was issued to a different email address',
-        statusCode: 403,
-      );
-    }
-    final login = await auth.registerInvitedPlatformStaff(
-      email: normalizedEmail,
-      password: password,
-      role: invitation.role,
-    );
-    final user = await auth.userByEmail(normalizedEmail);
-    if (user == null) {
-      throw const ControlPlaneException(
-        'STORAGE_CORRUPT',
-        'Staff account could not be loaded after registration',
-        statusCode: 500,
-      );
-    }
-    final accepted = invitation.copyWith(
-      status: 'ACCEPTED',
-      acceptedBy: user.id,
-      acceptedAt: now,
-    );
-    await store.replaceJson(
-      'platform_staff_invitations',
-      invitation.id,
-      accepted.toJson(),
-    );
-    await _platformAudit(
-      staff: user,
-      organizationId: platformSystemOrganizationId,
-      requestId: requestId ?? _id('req'),
-      action: 'platform.staff_invitation.accept',
-      resourceType: 'platform_staff_invitation',
-      resourceId: invitation.id,
-      metadata: <String, Object?>{'acceptedBy': user.id},
-    );
-    return <String, Object?>{
-      'accepted': true,
-      'idempotent': false,
-      'invitation': accepted.toPublicMetadataJson(now: now),
-      'login': login.toJson(),
-    };
-  });
-
-  Future<Map<String, Object?>> updatePlatformStaff({
-    required String accessToken,
-    required String userId,
-    String? role,
-    bool? active,
-    String? profileName,
-    String? requestId,
-  }) => _serialized(() async {
-    final staff = await _platformUser(
-      accessToken: accessToken,
-      capability: platformStaffManageCapability,
-      profileName: profileName,
-    );
-    final auth = humanAuth;
-    if (auth == null) {
-      throw const ControlPlaneException(
-        'AUTH_UNAVAILABLE',
-        'Human authentication is not configured',
-        statusCode: 503,
-      );
-    }
-    final current = await auth.userById(userId);
-    if (current == null ||
-        !current.memberships.any(
-          (membership) =>
-              auth.isRecognizedPlatformMembership(current, membership),
-        )) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Platform user was not found',
-        statusCode: 404,
-      );
-    }
-    final currentMembership = current.memberships.firstWhere(
-      (membership) => auth.isRecognizedPlatformMembership(current, membership),
-    );
-    final nextRole = role ?? currentMembership.role;
-    final nextActive = active ?? currentMembership.active;
-    if (staff.id == userId &&
-        (!nextActive || (role != null && nextRole != 'admin'))) {
-      throw const ControlPlaneException(
-        'PLATFORM_ADMIN_LOCKOUT',
-        'A platform administrator cannot deactivate or demote their own account',
-        statusCode: 409,
-      );
-    }
-    if (currentMembership.organizationId == platformSystemOrganizationId) {
-      final currentIsStaffManager =
-          currentMembership.active &&
-          currentMembership.platformCapabilities.contains(
-            platformStaffManageCapability,
-          );
-      final nextCapabilities = platformCapabilitiesForRole(nextRole);
-      final nextIsStaffManager =
-          nextActive &&
-          nextCapabilities.contains(platformStaffManageCapability);
-      if (currentIsStaffManager && !nextIsStaffManager) {
-        final activeStaffManagers = await _activePlatformStaffManagers(auth);
-        if (activeStaffManagers <= 1) {
-          throw const ControlPlaneException(
-            'LAST_PLATFORM_ADMIN',
-            'At least one active platform administrator must remain',
-            statusCode: 409,
-          );
-        }
-      }
-    }
-    final updated = await auth.updatePlatformStaffMembership(
-      userId: userId,
-      role: role,
-      active: active,
-    );
-    if (active == false) {
-      await auth.revokeSessionsForUser(
-        userId: userId,
-        audience: platformAuthorizationAudience,
-      );
-    }
-    await _platformAudit(
-      staff: staff,
-      organizationId: platformSystemOrganizationId,
-      requestId: requestId ?? _id('req'),
-      action: 'platform.staff.update',
-      resourceType: 'platform_staff',
-      resourceId: userId,
-      metadata: <String, Object?>{
-        if (role != null) 'role': role,
-        if (active != null) 'active': active,
-      },
-    );
-    return _platformStaffMetadata(updated);
-  });
-
-  Future<int> revokePlatformStaffSessions({
-    required String accessToken,
-    required String userId,
-    String? profileName,
-    String? requestId,
-  }) async {
-    final staff = await _platformUser(
-      accessToken: accessToken,
-      capability: platformSessionsRevokeCapability,
-      profileName: profileName,
-    );
-    final auth = humanAuth;
-    final target = auth == null ? null : await auth.userById(userId);
-    if (target == null ||
-        !target.memberships.any(
-          (membership) =>
-              auth!.isRecognizedPlatformMembership(target, membership),
-        )) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Platform user was not found',
-        statusCode: 404,
-      );
-    }
-    final count = await auth!.revokeSessionsForUser(
-      userId: userId,
-      audience: platformAuthorizationAudience,
-    );
-    await _platformAudit(
-      staff: staff,
-      organizationId: platformSystemOrganizationId,
-      requestId: requestId ?? _id('req'),
-      action: 'platform.staff.sessions_revoke',
-      resourceType: 'platform_staff',
-      resourceId: userId,
-      metadata: <String, Object?>{'sessionCount': count},
-    );
-    return count;
-  }
-
-  Future<Map<String, Object?>> updateOrganizationMemberRole({
-    required String token,
-    required String organizationId,
-    required String userId,
-    required String role,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      organizationMembersWriteScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final capabilities = customerCapabilitiesForRole(role);
-    if (!actor.scopes.containsAll(capabilities)) {
-      throw const ControlPlaneException(
-        'FORBIDDEN',
-        'The caller cannot grant the requested member capabilities',
-        statusCode: 403,
-      );
-    }
-    final value = await store.readJson('users', userId);
-    if (value == null) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    final user = HumanUserRecord.fromJson(value);
-    final index = user.memberships.indexWhere(
-      (membership) =>
-          membership.organizationId == actor.organizationId &&
-          membership.audience == customerAuthorizationAudience,
-    );
-    if (index < 0) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    final current = user.memberships[index];
-    if (!current.active) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    if (current.role == 'owner' || role == 'owner') {
-      throw const ControlPlaneException(
-        'OWNER_ROLE_PROTECTED',
-        'Owner membership transfer is not available in this workflow',
-        statusCode: 409,
-      );
-    }
-    final updatedMembership = HumanMembership(
-      organizationId: current.organizationId,
-      applicationId: current.applicationId,
-      environmentId: current.environmentId,
-      profileApplicationId: current.profileApplicationId,
-      profileEnvironmentId: current.profileEnvironmentId,
-      role: role,
-      capabilities: capabilities,
-      profileName: current.profileName,
-      audience: customerAuthorizationAudience,
-      active: current.active,
-    );
-    final memberships = user.memberships.toList();
-    memberships[index] = updatedMembership;
-    final updated = user.copyWith(
-      memberships: memberships,
-      active: memberships.any((membership) => membership.active),
-    );
-    await store.replaceJson('users', user.id, updated.toJson());
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'organization.member.role_update',
-      resourceType: 'user_membership',
-      resourceId: user.id,
-      metadata: <String, Object?>{'role': role},
-    );
-    return _memberMetadata(updated, actor.organizationId);
-  });
-
-  Future<void> removeOrganizationMember({
-    required String token,
-    required String organizationId,
-    required String userId,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      organizationMembersWriteScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final value = await store.readJson('users', userId);
-    if (value == null) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    final user = HumanUserRecord.fromJson(value);
-    final index = user.memberships.indexWhere(
-      (membership) =>
-          membership.organizationId == actor.organizationId &&
-          membership.audience == customerAuthorizationAudience,
-    );
-    if (index < 0) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    final current = user.memberships[index];
-    if (!current.active) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    if (current.role == 'owner') {
-      throw const ControlPlaneException(
-        'OWNER_ROLE_PROTECTED',
-        'The organization owner cannot be removed',
-        statusCode: 409,
-      );
-    }
-    final memberships = user.memberships.toList()..removeAt(index);
-    if (memberships.isEmpty) {
-      memberships.add(
-        HumanMembership(
-          organizationId: current.organizationId,
-          applicationId: current.applicationId,
-          environmentId: current.environmentId,
-          profileApplicationId: current.profileApplicationId,
-          profileEnvironmentId: current.profileEnvironmentId,
-          role: current.role,
-          capabilities: current.capabilities,
-          profileName: current.profileName,
-          audience: current.audience,
-          active: false,
-        ),
-      );
-    }
-    final updated = user.copyWith(
-      memberships: memberships,
-      active: memberships.any((membership) => membership.active),
-    );
-    await store.replaceJson('users', user.id, updated.toJson());
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'organization.member.remove',
-      resourceType: 'user_membership',
-      resourceId: user.id,
-      metadata: const <String, Object?>{},
-    );
-  });
-
-  Future<Map<String, Object?>> createSupportCase({
-    required String token,
-    required String organizationId,
-    required String subject,
-    required String description,
-    String category = 'general',
-    String priority = 'NORMAL',
-    String? applicationId,
-    String? environmentId,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      supportCreateScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    await _validateSupportScope(
-      organizationId: actor.organizationId,
-      applicationId: applicationId,
-      environmentId: environmentId,
-    );
-    final now = _now();
-    final record = SupportCaseRecord(
-      id: _id('case'),
-      organizationId: actor.organizationId,
-      applicationId: applicationId,
-      environmentId: environmentId,
-      subject: subject,
-      description: description,
-      category: category,
-      priority: priority,
-      createdBy: actor.id,
-      createdAt: now,
-      updatedAt: now,
-      lastCustomerActivity: now,
-    );
-    await store.createJson('support_cases', record.id, record.toJson());
-    final message = SupportMessageRecord(
-      id: _id('msg'),
-      caseId: record.id,
-      organizationId: record.organizationId,
-      authorId: actor.id,
-      authorAudience: customerAuthorizationAudience,
-      body: description,
-      visibility: customerSupportVisibility,
-      createdAt: now,
-    );
-    await store.createJson('support_messages', message.id, message.toJson());
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'support.case.create',
-      resourceType: 'support_case',
-      resourceId: record.id,
-      metadata: <String, Object?>{
-        'priority': record.priority,
-        'category': record.category,
-      },
-    );
-    return _supportCaseView(record, includeInternal: false);
-  });
-
-  Future<Map<String, Object?>> listSupportCases({
-    required String token,
-    required String organizationId,
-    String? status,
-    String? query,
-    int limit = 50,
-    int offset = 0,
-  }) async {
-    final actor = await _authorize(
-      token,
-      supportReadScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    return _supportCasePage(
-      organizationId: actor.organizationId,
-      status: status,
-      query: query,
-      limit: limit,
-      offset: offset,
-      includeInternal: false,
-    );
-  }
-
-  Future<Map<String, Object?>> readSupportCase({
-    required String token,
-    required String organizationId,
-    required String caseId,
-  }) async {
-    final actor = await _authorize(
-      token,
-      supportReadScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final record = await _supportCase(caseId);
-    _requireTenant(record.organizationId, actor.organizationId);
-    return _supportCaseView(record, includeInternal: false);
-  }
-
-  Future<Map<String, Object?>> replySupportCase({
-    required String token,
-    required String organizationId,
-    required String caseId,
-    required String body,
-    String? requestId,
-  }) => _serialized(() async {
-    final actor = await _authorize(
-      token,
-      supportReplyScope,
-      kind: CredentialKind.control,
-      organizationId: organizationId,
-    );
-    final record = await _supportCase(caseId);
-    _requireTenant(record.organizationId, actor.organizationId);
-    final now = _now();
-    final message = SupportMessageRecord(
-      id: _id('msg'),
-      caseId: record.id,
-      organizationId: record.organizationId,
-      authorId: actor.id,
-      authorAudience: customerAuthorizationAudience,
-      body: body,
-      visibility: customerSupportVisibility,
-      createdAt: now,
-    );
-    await store.createJson('support_messages', message.id, message.toJson());
-    final updated = record.copyWith(updatedAt: now, lastCustomerActivity: now);
-    await store.replaceJson('support_cases', record.id, updated.toJson());
-    await _audit(
-      requestId: requestId ?? _id('req'),
-      actor: actor,
-      action: 'support.case.customer_reply',
-      resourceType: 'support_case',
-      resourceId: record.id,
-      metadata: const <String, Object?>{},
-    );
-    return _supportCaseView(updated, includeInternal: false);
-  });
-
-  Future<Map<String, Object?>> listPlatformSupportCases({
-    required String accessToken,
-    String? profileName,
-    String? status,
-    String? query,
-    String? organizationId,
-    int limit = 50,
-    int offset = 0,
-  }) async {
-    await _platformUser(
-      accessToken: accessToken,
-      capability: platformSupportReadCapability,
-      profileName: profileName,
-    );
-    return _supportCasePage(
-      organizationId: organizationId,
-      status: status,
-      query: query,
-      limit: limit,
-      offset: offset,
-      includeInternal: true,
-    );
-  }
-
-  Future<Map<String, Object?>> readPlatformSupportCase({
-    required String accessToken,
-    String? profileName,
-    required String caseId,
-  }) async {
-    await _platformUser(
-      accessToken: accessToken,
-      capability: platformSupportReadCapability,
-      profileName: profileName,
-    );
-    return _supportCaseView(await _supportCase(caseId), includeInternal: true);
-  }
-
-  Future<Map<String, Object?>> updatePlatformSupportCase({
-    required String accessToken,
-    String? profileName,
-    required String caseId,
-    String? status,
-    String? priority,
-    String? assignedTo,
-    bool clearAssignedTo = false,
-    String? requestId,
-  }) => _serialized(() async {
-    final staff = await _platformUser(
-      accessToken: accessToken,
-      capability: platformSupportWriteCapability,
-      profileName: profileName,
-    );
-    final current = await _supportCase(caseId);
-    await _validatePlatformAssignee(assignedTo);
-    final now = _now();
-    final nextStatus = status ?? current.status;
-    final updated = current.copyWith(
-      status: nextStatus,
-      priority: priority,
-      assignedTo: assignedTo,
-      clearAssignedTo: clearAssignedTo,
-      updatedAt: now,
-      closedAt: nextStatus == 'CLOSED'
-          ? (current.closedAt ?? now)
-          : current.closedAt,
-      lastStaffActivity: now,
-    );
-    await store.replaceJson('support_cases', current.id, updated.toJson());
-    await _platformAudit(
-      staff: staff,
-      organizationId: current.organizationId,
-      requestId: requestId ?? _id('req'),
-      action: 'support.case.update',
-      resourceId: current.id,
-      metadata: <String, Object?>{
-        'status': updated.status,
-        'priority': updated.priority,
-        'assignedTo': updated.assignedTo,
-      },
-    );
-    return _supportCaseView(updated, includeInternal: true);
-  });
-
-  Future<Map<String, Object?>> replyPlatformSupportCase({
-    required String accessToken,
-    String? profileName,
-    required String caseId,
-    required String body,
-    String visibility = customerSupportVisibility,
-    String? requestId,
-  }) => _serialized(() async {
-    final staff = await _platformUser(
-      accessToken: accessToken,
-      capability: platformSupportWriteCapability,
-      profileName: profileName,
-    );
-    if (visibility != customerSupportVisibility &&
-        visibility != platformInternalSupportVisibility) {
-      throw const ControlPlaneException(
-        'INVALID_SUPPORT_VISIBILITY',
-        'Support visibility is not supported',
-        statusCode: 422,
-      );
-    }
-    final current = await _supportCase(caseId);
-    final now = _now();
-    final message = SupportMessageRecord(
-      id: _id('msg'),
-      caseId: current.id,
-      organizationId: current.organizationId,
-      authorId: staff.id,
-      authorAudience: platformAuthorizationAudience,
-      body: body,
-      visibility: visibility,
-      createdAt: now,
-    );
-    await store.createJson('support_messages', message.id, message.toJson());
-    final updated = current.copyWith(updatedAt: now, lastStaffActivity: now);
-    await store.replaceJson('support_cases', current.id, updated.toJson());
-    await _platformAudit(
-      staff: staff,
-      organizationId: current.organizationId,
-      requestId: requestId ?? _id('req'),
-      action: visibility == platformInternalSupportVisibility
-          ? 'support.case.internal_note'
-          : 'support.case.staff_reply',
-      resourceId: current.id,
-      metadata: <String, Object?>{'visibility': visibility},
-    );
-    return _supportCaseView(updated, includeInternal: true);
-  });
-
   Future<AuditExport> exportAudit({
     required String token,
     required String organizationId,
@@ -6153,38 +5260,15 @@ final class ControlPlaneService {
         )
         .toList(growable: false);
     final rawChain = await store.readAuditChain();
-    final scopedEntries =
-        rawChain.where((value) {
+    final verification = verifyAuditChain(rawChain);
+    final chain = rawChain
+        .where((value) {
           final body = value['body'];
           return value['organizationId'] == actor.organizationId &&
               body is Map &&
-              body['organizationId'] == actor.organizationId &&
               _auditWithinRetention(body['createdAt'], cutoff);
-        }).toList()..sort(
-          (left, right) => (left['sequence'] as int? ?? 0).compareTo(
-            right['sequence'] as int? ?? 0,
-          ),
-        );
-    // The durable audit chain is global, but customer exports must not reveal
-    // other tenants' sequence positions or tamper state. Rebase the selected
-    // entries into a tenant-scoped proof chain before returning it. The body
-    // and record digests remain unchanged; only the chain-local sequence and
-    // predecessor link are projected.
-    final chain = <Map<String, Object?>>[];
-    String? previousDigest;
-    for (final value in scopedEntries) {
-      final projected = <String, Object?>{
-        ...value,
-        'sequence': chain.length + 1,
-        'organizationId': actor.organizationId,
-        'previousDigest': previousDigest,
-      };
-      chain.add(projected);
-      previousDigest = value['recordDigest'] is String
-          ? value['recordDigest'] as String
-          : null;
-    }
-    final verification = verifyAuditChain(chain);
+        })
+        .toList(growable: false);
     return AuditExport(
       retentionDays: retentionDays,
       records: List.unmodifiable(records),
@@ -6192,382 +5276,6 @@ final class ControlPlaneService {
       verification: verification,
     );
   }
-
-  Future<SupportCaseRecord> _supportCase(String caseId) async {
-    final value = await store.readJson('support_cases', caseId);
-    if (value == null) {
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Resource was not found',
-        statusCode: 404,
-      );
-    }
-    return SupportCaseRecord.fromJson(value);
-  }
-
-  Future<Map<String, Object?>> _supportCaseView(
-    SupportCaseRecord record, {
-    required bool includeInternal,
-  }) async {
-    final messages =
-        (await store.listJson('support_messages'))
-            .map(SupportMessageRecord.fromJson)
-            .where(
-              (message) =>
-                  message.caseId == record.id &&
-                  (includeInternal ||
-                      message.visibility == customerSupportVisibility),
-            )
-            .toList(growable: false)
-          ..sort((left, right) {
-            final byTime = left.createdAt.compareTo(right.createdAt);
-            return byTime != 0 ? byTime : left.id.compareTo(right.id);
-          });
-    return <String, Object?>{
-      'schemaVersion': 1,
-      'readOnly': false,
-      'scope': includeInternal ? 'platform' : 'customer',
-      'case': record.toJson(),
-      'messages': messages
-          .map(
-            (message) =>
-                message.toPublicJson(includeVisibility: includeInternal),
-          )
-          .toList(growable: false),
-    };
-  }
-
-  Future<Map<String, Object?>> _supportCasePage({
-    String? organizationId,
-    String? status,
-    String? query,
-    required int limit,
-    required int offset,
-    required bool includeInternal,
-  }) async {
-    if (limit <= 0 || limit > 100 || offset < 0 || offset > 100000) {
-      throw const ControlPlaneException(
-        'INVALID_PAGE',
-        'Support case pagination is outside the supported range',
-        statusCode: 422,
-      );
-    }
-    if (status != null && !supportCaseStatuses.contains(status)) {
-      throw const ControlPlaneException(
-        'INVALID_SUPPORT_STATUS',
-        'Support case status is not supported',
-        statusCode: 422,
-      );
-    }
-    final normalizedQuery = query?.trim().toLowerCase() ?? '';
-    if (normalizedQuery.length > 128) {
-      throw const ControlPlaneException(
-        'INVALID_QUERY',
-        'Support case search is too long',
-        statusCode: 422,
-      );
-    }
-    final cases = <SupportCaseRecord>[];
-    for (final value in await store.listJson('support_cases')) {
-      final record = SupportCaseRecord.fromJson(value);
-      if (organizationId != null && record.organizationId != organizationId) {
-        continue;
-      }
-      if (status != null && record.status != status) continue;
-      if (normalizedQuery.isNotEmpty &&
-          !<String>[
-            record.id,
-            record.organizationId,
-            record.applicationId ?? '',
-            record.environmentId ?? '',
-            record.subject,
-            record.category,
-          ].any((value) => value.toLowerCase().contains(normalizedQuery))) {
-        continue;
-      }
-      cases.add(record);
-    }
-    cases.sort((left, right) {
-      final byTime = right.updatedAt.compareTo(left.updatedAt);
-      return byTime != 0 ? byTime : left.id.compareTo(right.id);
-    });
-    final page = cases.skip(offset).take(limit).toList(growable: false);
-    return <String, Object?>{
-      'schemaVersion': 1,
-      'readOnly': false,
-      'scope': includeInternal ? 'platform' : 'customer',
-      'cases': page.map((record) => record.toJson()).toList(growable: false),
-      'counts': <String, Object?>{
-        'matching': cases.length,
-        'returned': page.length,
-        'open': cases
-            .where(
-              (record) =>
-                  record.status != 'CLOSED' && record.status != 'RESOLVED',
-            )
-            .length,
-      },
-      if (offset + page.length < cases.length)
-        'nextOffset': offset + page.length,
-    };
-  }
-
-  Future<void> _validateSupportScope({
-    required String organizationId,
-    String? applicationId,
-    String? environmentId,
-  }) async {
-    if (applicationId == null && environmentId != null) {
-      throw const ControlPlaneException(
-        'INVALID_SCOPE',
-        'An environment requires its application',
-        statusCode: 422,
-      );
-    }
-    if (applicationId != null) {
-      final application = await _application(applicationId);
-      _requireTenant(application.organizationId, organizationId);
-    }
-    if (environmentId != null) {
-      final environment = await _environment(environmentId);
-      _requireTenant(environment.organizationId, organizationId);
-      if (environment.applicationId != applicationId) {
-        throw const ControlPlaneException(
-          'NOT_FOUND',
-          'Resource was not found',
-          statusCode: 404,
-        );
-      }
-    }
-  }
-
-  Future<HumanUserRecord> _platformUser({
-    required String accessToken,
-    required String capability,
-    String? profileName,
-  }) async {
-    final auth = humanAuth;
-    if (auth == null) {
-      throw const ControlPlaneException(
-        'AUTH_UNAVAILABLE',
-        'Human authentication is not configured',
-        statusCode: 503,
-      );
-    }
-    return auth.authorizePlatformCapability(
-      accessToken: accessToken,
-      capability: capability,
-      profileName: profileName,
-    );
-  }
-
-  Future<void> _validatePlatformAssignee(String? userId) async {
-    if (userId == null) return;
-    final value = await store.readJson('users', userId);
-    if (value == null) {
-      throw const ControlPlaneException(
-        'INVALID_SUPPORT_ASSIGNEE',
-        'Support cases can only be assigned to an existing platform user',
-        statusCode: 422,
-      );
-    }
-    final user = HumanUserRecord.fromJson(value);
-    final isPlatformStaff =
-        user.active &&
-        humanAuth != null &&
-        user.memberships.any(
-          (membership) =>
-              membership.active &&
-              humanAuth!.isRecognizedPlatformMembership(user, membership),
-        );
-    if (!isPlatformStaff) {
-      throw const ControlPlaneException(
-        'INVALID_SUPPORT_ASSIGNEE',
-        'Support cases can only be assigned to an active platform user',
-        statusCode: 422,
-      );
-    }
-  }
-
-  Future<int> _activePlatformStaffManagers(HumanAuthService auth) async {
-    var count = 0;
-    for (final value in await store.listJson('users')) {
-      final user = HumanUserRecord.fromJson(value);
-      if (user.active &&
-          user.memberships.any(
-            (membership) =>
-                membership.active &&
-                auth.isRecognizedPlatformMembership(user, membership) &&
-                membership.platformCapabilities.contains(
-                  platformStaffManageCapability,
-                ),
-          )) {
-        count++;
-      }
-    }
-    return count;
-  }
-
-  Future<void> _platformAudit({
-    required HumanUserRecord staff,
-    required String organizationId,
-    required String requestId,
-    required String action,
-    String resourceType = 'support_case',
-    required String resourceId,
-    required Map<String, Object?> metadata,
-  }) {
-    final actor = CredentialRecord(
-      id: staff.id,
-      organizationId: organizationId,
-      name: 'Platform session',
-      kind: CredentialKind.control,
-      tokenHash: 'platform-session',
-      scopes: controlScopes,
-      applicationId: null,
-      environmentId: null,
-      createdAt: staff.createdAt,
-      expiresAt: null,
-      revoked: false,
-    );
-    return _audit(
-      requestId: requestId,
-      actor: actor,
-      action: action,
-      resourceType: resourceType,
-      resourceId: resourceId,
-      metadata: <String, Object?>{
-        ...metadata,
-        'audience': platformAuthorizationAudience,
-      },
-    );
-  }
-
-  Map<String, Object?> _memberMetadata(
-    HumanUserRecord user,
-    String organizationId,
-  ) {
-    final memberships = user.memberships
-        .where(
-          (membership) =>
-              membership.organizationId == organizationId &&
-              membership.audience == customerAuthorizationAudience,
-        )
-        .map(
-          (membership) => <String, Object?>{
-            'role': membership.role,
-            'profileName': membership.profileName,
-            'audience': membership.audience,
-            'applicationId': membership.applicationId,
-            'environmentId': membership.environmentId,
-            'active': membership.active,
-            'capabilities': membership.capabilities.toList()..sort(),
-          },
-        )
-        .toList(growable: false);
-    return <String, Object?>{
-      'id': user.id,
-      'email': user.email,
-      'active': user.active,
-      'createdAt': user.createdAt.toUtc().toIso8601String(),
-      'memberships': memberships,
-    };
-  }
-
-  String _secretToken(String prefix) {
-    final bytes = List<int>.generate(32, (_) => _random.nextInt(256));
-    return '$prefix.${base64Url.encode(bytes).replaceAll('=', '')}';
-  }
-
-  Future<OrganizationInvitationRecord> _organizationInvitationForToken(
-    String token,
-  ) async {
-    final normalized = token.trim();
-    if (normalized.isEmpty || normalized.length > 512) {
-      throw const ControlPlaneException(
-        'INVITATION_NOT_FOUND',
-        'Invitation is invalid or unavailable',
-        statusCode: 404,
-      );
-    }
-    final hash = CredentialService.tokenHash(normalized);
-    for (final value in await store.listJson('organization_invitations')) {
-      final invitation = OrganizationInvitationRecord.fromJson(value);
-      if (invitation.tokenHash == hash) return invitation;
-    }
-    throw const ControlPlaneException(
-      'INVITATION_NOT_FOUND',
-      'Invitation is invalid or unavailable',
-      statusCode: 404,
-    );
-  }
-
-  Future<PlatformStaffInvitationRecord> _platformStaffInvitationForToken(
-    String token,
-  ) async {
-    final normalized = token.trim();
-    if (normalized.isEmpty || normalized.length > 512) {
-      throw const ControlPlaneException(
-        'INVITATION_NOT_FOUND',
-        'Invitation is invalid or unavailable',
-        statusCode: 404,
-      );
-    }
-    final hash = CredentialService.tokenHash(normalized);
-    for (final value in await store.listJson('platform_staff_invitations')) {
-      final invitation = PlatformStaffInvitationRecord.fromJson(value);
-      if (invitation.tokenHash == hash) return invitation;
-    }
-    throw const ControlPlaneException(
-      'INVITATION_NOT_FOUND',
-      'Invitation is invalid or unavailable',
-      statusCode: 404,
-    );
-  }
-
-  Map<String, Object?> _platformStaffMetadata(HumanUserRecord user) {
-    final memberships = user.memberships
-        .where(
-          (membership) =>
-              membership.organizationId == platformSystemOrganizationId &&
-              membership.audience == platformAuthorizationAudience,
-        )
-        .map(
-          (membership) => <String, Object?>{
-            'organizationId': membership.organizationId,
-            'profileName': membership.profileName,
-            'role': membership.role,
-            'active': membership.active,
-            'platformCapabilities': membership.platformCapabilities.toList()
-              ..sort(),
-          },
-        )
-        .toList(growable: false);
-    return <String, Object?>{
-      'id': user.id,
-      'email': user.email,
-      'active': user.active,
-      'createdAt': user.createdAt.toUtc().toIso8601String(),
-      'memberships': memberships,
-    };
-  }
-
-  CredentialRecord _invitationAuditActor(
-    HumanUserRecord user,
-    String organizationId,
-  ) => CredentialRecord(
-    id: user.id,
-    organizationId: organizationId,
-    name: 'Invitation acceptance',
-    kind: CredentialKind.control,
-    tokenHash: 'invitation-session',
-    scopes: controlScopes,
-    applicationId: null,
-    environmentId: null,
-    createdAt: user.createdAt,
-    expiresAt: null,
-    revoked: false,
-  );
 
   Future<ArtifactReconciliationReport> reconcileArtifacts({
     required String token,
@@ -6580,17 +5288,26 @@ final class ControlPlaneService {
       kind: CredentialKind.control,
       organizationId: organizationId,
     );
+    final reconciliationRequestId = requestId ?? _id('req');
     final rawArtifacts = await store.listJson('artifacts');
     final rawPatches = <String, Map<String, Object?>>{
       for (final value in await store.listJson('patches'))
         if (value['id'] is String) value['id']! as String: value,
     };
     final expectedKeys = <String>{};
+    final liveDigestKeys = <String>{};
+    final purgedByDigest = <String, List<ArtifactRecord>>{};
     final items = <ArtifactReconciliationItem>[];
     var quarantined = 0;
     for (final raw in rawArtifacts) {
       final artifact = ArtifactRecord.fromJson(raw);
-      expectedKeys.add(artifact.sha256.substring(7));
+      final digestKey = artifact.sha256.substring(7);
+      if (artifact.state != artifactPurgedState) {
+        expectedKeys.add(digestKey);
+        liveDigestKeys.add(digestKey);
+      } else {
+        purgedByDigest.putIfAbsent(artifact.sha256, () => []).add(artifact);
+      }
       if (artifact.organizationId != actor.organizationId) continue;
       final patch = rawPatches[artifact.patchId];
       if (patch == null) {
@@ -6604,7 +5321,18 @@ final class ControlPlaneService {
         );
         continue;
       }
-      if (artifact.state != 'READY') {
+      if (artifact.state == artifactPurgedState) {
+        items.add(
+          ArtifactReconciliationItem(
+            status: 'purged_metadata',
+            artifactId: artifact.id,
+            digest: artifact.sha256,
+            detail: artifact.purgedAt?.toIso8601String(),
+          ),
+        );
+        continue;
+      }
+      if (artifact.state != artifactReadyState) {
         items.add(
           ArtifactReconciliationItem(
             status: 'non_ready',
@@ -6638,10 +5366,10 @@ final class ControlPlaneService {
           ? 'size_mismatch'
           : 'verified';
       if (status != 'verified') {
-        await store.replaceJson(
-          'artifacts',
-          artifact.id,
-          artifact.copyWith(state: 'QUARANTINED').toJson(),
+        await _markQuarantined(
+          artifact,
+          sourceId:
+              'artifact-reconcile:$reconciliationRequestId:${artifact.id}',
         );
         quarantined++;
       }
@@ -6664,11 +5392,28 @@ final class ControlPlaneService {
         for (final key in inventory) {
           final normalized = key.startsWith('sha256:') ? key.substring(7) : key;
           if (!expectedKeys.contains(normalized)) {
+            final digest = 'sha256:$normalized';
+            final purged = purgedByDigest[digest];
+            if (purged != null && !liveDigestKeys.contains(normalized)) {
+              for (final artifact in purged.where(
+                (value) => value.organizationId == actor.organizationId,
+              )) {
+                items.add(
+                  ArtifactReconciliationItem(
+                    status: 'purged_object',
+                    artifactId: artifact.id,
+                    digest: digest,
+                    detail: 'Purged metadata still has physical object bytes',
+                  ),
+                );
+              }
+              continue;
+            }
             items.add(
               ArtifactReconciliationItem(
                 status: 'orphan_object',
                 artifactId: null,
-                digest: 'sha256:$normalized',
+                digest: digest,
               ),
             );
           }
@@ -6690,7 +5435,7 @@ final class ControlPlaneService {
       quarantinedCount: quarantined,
     );
     await _audit(
-      requestId: requestId ?? _id('req'),
+      requestId: reconciliationRequestId,
       actor: actor,
       action: 'artifact.reconcile',
       resourceType: 'artifact-inventory',
@@ -6702,6 +5447,188 @@ final class ControlPlaneService {
       },
     );
     return report;
+  });
+
+  /// Purges only invalid, quarantined artifact bytes that have reached their
+  /// lifecycle eligibility point. This is an internal operator/scheduler seam;
+  /// it is deliberately not exposed as customer-controlled deletion.
+  ///
+  /// Artifact metadata remains after a successful purge, so release identity,
+  /// digest, signature references, deployment evidence, and audit history stay
+  /// available for investigation and reconciliation. A missing object is an
+  /// idempotent success; a database failure after object deletion is reported
+  /// by the next reconciliation and can be safely retried.
+  Future<ArtifactRetentionCleanupReport> runArtifactRetentionCleanup({
+    String? organizationId,
+    int limit = 100,
+    DateTime? now,
+  }) => _serialized(() async {
+    if (limit < 1 || limit > 1000) {
+      throw ArgumentError.value(limit, 'limit', 'must be between 1 and 1000');
+    }
+    if (deploymentModel != DeploymentModel.cloud) {
+      return const ArtifactRetentionCleanupReport(
+        managed: false,
+        deletionSupported: false,
+        consideredCount: 0,
+        purgedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        items: <ArtifactRetentionCleanupItem>[],
+      );
+    }
+    final normalizedNow = (now ?? _now()).toUtc();
+    final allArtifacts = (await store.listJson('artifacts'))
+        .map(ArtifactRecord.fromJson)
+        .toList(growable: false);
+    final artifacts = allArtifacts
+        .where(
+          (artifact) =>
+              organizationId == null ||
+              artifact.organizationId == organizationId,
+        )
+        .toList(growable: false);
+    final ownersByDigest = <String, List<ArtifactRecord>>{};
+    for (final artifact in allArtifacts) {
+      ownersByDigest.putIfAbsent(artifact.sha256, () => []).add(artifact);
+    }
+    final protectedArtifactIds = (await store.listJson('bundle_imports'))
+        .where((value) => value['state'] != 'ADMITTED')
+        .map((value) => value['artifactId'])
+        .whereType<String>()
+        .toSet();
+    final deletion = store is ArtifactDeletion
+        ? store as ArtifactDeletion
+        : null;
+    final candidates = artifacts
+        .where(
+          (artifact) =>
+              artifact.state == artifactQuarantinedState &&
+              artifact.purgeEligibleAt != null,
+        )
+        .take(limit)
+        .toList(growable: false);
+    final eligibleBatchIds = candidates
+        .where(
+          (artifact) => artifactRetentionPolicy
+              .evaluate(
+                artifact,
+                now: normalizedNow,
+                protectedByPendingBundleImport: protectedArtifactIds.contains(
+                  artifact.id,
+                ),
+              )
+              .purgeEligible,
+        )
+        .map((artifact) => artifact.id)
+        .toSet();
+    final items = <ArtifactRetentionCleanupItem>[];
+    var purgedCount = 0;
+    var skippedCount = 0;
+    var failedCount = 0;
+
+    for (final artifact in candidates) {
+      final decision = artifactRetentionPolicy.evaluate(
+        artifact,
+        now: normalizedNow,
+        protectedByPendingBundleImport: protectedArtifactIds.contains(
+          artifact.id,
+        ),
+      );
+      if (!decision.purgeEligible) {
+        skippedCount++;
+        items.add(
+          ArtifactRetentionCleanupItem(
+            status: 'protected',
+            artifactId: artifact.id,
+            digest: artifact.sha256,
+            detail: decision.reason,
+          ),
+        );
+        continue;
+      }
+
+      final shared =
+          (ownersByDigest[artifact.sha256] ?? const <ArtifactRecord>[]).any((
+            owner,
+          ) {
+            if (owner.id == artifact.id || owner.state == artifactPurgedState) {
+              return false;
+            }
+            return !eligibleBatchIds.contains(owner.id);
+          });
+      var physicalStatus = 'purged';
+      if (!shared) {
+        if (deletion == null) {
+          failedCount++;
+          items.add(
+            ArtifactRetentionCleanupItem(
+              status: 'purge_unavailable',
+              artifactId: artifact.id,
+              digest: artifact.sha256,
+              detail: 'configured artifact store does not support deletion',
+            ),
+          );
+          continue;
+        }
+        try {
+          final deleted = await deletion.deleteArtifact(artifact.sha256);
+          if (!deleted) physicalStatus = 'purged_missing_object';
+        } on Object catch (error) {
+          failedCount++;
+          items.add(
+            ArtifactRetentionCleanupItem(
+              status: 'purge_failed',
+              artifactId: artifact.id,
+              digest: artifact.sha256,
+              detail: '$error',
+            ),
+          );
+          continue;
+        }
+      } else {
+        physicalStatus = 'purged_shared_object';
+      }
+
+      final purged = artifact.copyWith(
+        state: artifactPurgedState,
+        purgedAt: normalizedNow,
+        purgeReason: 'quarantined_artifact_cleanup',
+        clearPurgeEligibleAt: true,
+      );
+      try {
+        await store.replaceJson('artifacts', artifact.id, purged.toJson());
+      } on Object catch (error) {
+        failedCount++;
+        items.add(
+          ArtifactRetentionCleanupItem(
+            status: 'metadata_update_failed',
+            artifactId: artifact.id,
+            digest: artifact.sha256,
+            detail: '$error',
+          ),
+        );
+        continue;
+      }
+      purgedCount++;
+      items.add(
+        ArtifactRetentionCleanupItem(
+          status: physicalStatus,
+          artifactId: artifact.id,
+          digest: artifact.sha256,
+        ),
+      );
+    }
+
+    return ArtifactRetentionCleanupReport(
+      managed: true,
+      deletionSupported: deletion != null,
+      consideredCount: candidates.length,
+      purgedCount: purgedCount,
+      skippedCount: skippedCount,
+      failedCount: failedCount,
+      items: List.unmodifiable(items),
+    );
   });
 
   Future<void> revokeCredential({
@@ -6841,7 +5768,7 @@ final class ControlPlaneService {
           statusCode: 403,
         );
       }
-      return auth.authorizeAccessToken(
+      final actor = await auth.authorizeAccessToken(
         token: token,
         requiredScope: scope,
         kind: kind ?? CredentialKind.control,
@@ -6849,8 +5776,11 @@ final class ControlPlaneService {
         applicationId: applicationId,
         environmentId: environmentId,
       );
+      await ensureOrganizationAccessAllowed(actor.organizationId);
+      await _enforceCloudEntitlement(actor: actor, scope: scope);
+      return actor;
     }
-    return CredentialService.authorize(
+    final actor = await CredentialService.authorize(
       token: token,
       requiredScope: scope,
       read: (hash) async {
@@ -6862,6 +5792,31 @@ final class ControlPlaneService {
       environmentId: environmentId,
       kind: kind,
       now: _now(),
+    );
+    await ensureOrganizationAccessAllowed(actor.organizationId);
+    await _enforceCloudEntitlement(actor: actor, scope: scope);
+    return actor;
+  }
+
+  Future<void> _enforceCloudEntitlement({
+    required CredentialRecord actor,
+    required String scope,
+  }) async {
+    if (deploymentModel != DeploymentModel.cloud) return;
+    final requiredEntitlement = cloudEntitlementForScope(scope);
+    if (requiredEntitlement == null) return;
+    final effective = await billing.resolveEffectiveEntitlements(
+      organizationId: actor.organizationId,
+    );
+    if (effective.capabilities.contains(requiredEntitlement)) return;
+    throw ControlPlaneException(
+      'FORBIDDEN',
+      'The active Cloud plan does not include this capability',
+      statusCode: 403,
+      details: <String, Object?>{
+        'plan': effective.planKey,
+        'entitlement': requiredEntitlement,
+      },
     );
   }
 
@@ -7761,6 +6716,11 @@ final class ControlPlaneService {
     if (!_sameBundleRecordExceptState(
       current.artifact.toJson(),
       expectedArtifact.toJson(),
+      ignoredFields: const <String>{
+        'purgeEligibleAt',
+        'purgedAt',
+        'purgeReason',
+      },
     )) {
       throw const FormatException(
         'Destination artifact metadata does not match the signed source',
@@ -7770,11 +6730,14 @@ final class ControlPlaneService {
 
   bool _sameBundleRecordExceptState(
     Map<String, Object?> actual,
-    Map<String, Object?> expected,
-  ) {
+    Map<String, Object?> expected, {
+    Set<String> ignoredFields = const <String>{},
+  }) {
     final actualMetadata = Map<String, Object?>.from(actual)..remove('state');
     final expectedMetadata = Map<String, Object?>.from(expected)
       ..remove('state');
+    actualMetadata.removeWhere((key, _) => ignoredFields.contains(key));
+    expectedMetadata.removeWhere((key, _) => ignoredFields.contains(key));
     return canonicalJson(actualMetadata) == canonicalJson(expectedMetadata);
   }
 
@@ -7921,13 +6884,113 @@ final class ControlPlaneService {
     );
   }
 
-  Future<void> _markQuarantined(ArtifactRecord artifact) async {
-    if (artifact.state == 'QUARANTINED') return;
-    await store.replaceJson(
-      'artifacts',
-      artifact.id,
-      artifact.copyWith(state: 'QUARANTINED').toJson(),
+  Future<void> _recordArtifactStorageAdded(
+    ArtifactRecord artifact, {
+    required String sourceId,
+    required DateTime occurredAt,
+  }) async {
+    try {
+      await usageMetering.ensureArtifactStorageAdded(
+        artifact: artifact,
+        sourceId: sourceId,
+        occurredAt: occurredAt,
+      );
+    } on StorageUnavailable catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact storage accounting is temporarily unavailable: ${error.message}',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactStorageMeter,
+          'source': artifactStorageSource,
+        },
+      );
+    } on ControlPlaneException {
+      rethrow;
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact storage accounting failed: $error',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactStorageMeter,
+          'source': artifactStorageSource,
+        },
+      );
+    }
+  }
+
+  Future<void> _recordArtifactStorageRemoved(
+    ArtifactRecord artifact, {
+    required String sourceId,
+    required DateTime occurredAt,
+  }) async {
+    try {
+      await usageMetering.ensureArtifactStorageRemoved(
+        artifact: artifact,
+        sourceId: sourceId,
+        occurredAt: occurredAt,
+      );
+    } on StorageUnavailable catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact storage accounting is temporarily unavailable: ${error.message}',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactStorageMeter,
+          'source': artifactStorageSource,
+        },
+      );
+    } on ControlPlaneException {
+      rethrow;
+    } on Object catch (error) {
+      throw ControlPlaneException(
+        'USAGE_ACCOUNTING_UNAVAILABLE',
+        'Artifact storage accounting failed: $error',
+        statusCode: 503,
+        details: const <String, Object?>{
+          'meter': artifactStorageMeter,
+          'source': artifactStorageSource,
+        },
+      );
+    }
+  }
+
+  Future<void> _markQuarantined(
+    ArtifactRecord artifact, {
+    String? sourceId,
+  }) async {
+    if (artifact.state == artifactPurgedState) return;
+    if (artifact.state == artifactQuarantinedState) {
+      if (artifact.purgeEligibleAt == null) {
+        await store.replaceJson(
+          'artifacts',
+          artifact.id,
+          artifact.copyWith(purgeEligibleAt: _now()).toJson(),
+        );
+      }
+      await _recordArtifactStorageRemoved(
+        artifact,
+        sourceId: sourceId ?? 'artifact-quarantine:${artifact.id}',
+        occurredAt: _now(),
+      );
+      return;
+    }
+    final wasReady = artifact.state == artifactReadyState;
+    final quarantined = artifact.copyWith(
+      state: artifactQuarantinedState,
+      purgeEligibleAt: _now(),
+      clearPurgedAt: true,
+      clearPurgeReason: true,
     );
+    await store.replaceJson('artifacts', artifact.id, quarantined.toJson());
+    if (wasReady) {
+      await _recordArtifactStorageRemoved(
+        artifact,
+        sourceId: sourceId ?? 'artifact-quarantine:${artifact.id}',
+        occurredAt: _now(),
+      );
+    }
   }
 
   void _validateReleaseSpec(ReleaseSpec spec) {

@@ -15,8 +15,6 @@ final class PlatformConsoleProjection {
   PlatformConsoleProjection(
     this.store, {
     this.maxOrganizations = defaultPlatformOrganizationLimit,
-    this.platformMfaRequired = false,
-    this.platformMembershipPredicate,
   }) {
     if (maxOrganizations <= 0 ||
         maxOrganizations > defaultPlatformOrganizationLimit) {
@@ -30,45 +28,8 @@ final class PlatformConsoleProjection {
 
   final ControlPlaneStore store;
   final int maxOrganizations;
-  final bool platformMfaRequired;
-  final bool Function(HumanUserRecord user, HumanMembership membership)?
-  platformMembershipPredicate;
 
-  Future<Map<String, Object?>> listOrganizations({
-    String? query,
-    bool includeCommercial = false,
-  }) async {
-    return _listOrganizationsPage(
-      query: query,
-      limit: maxOrganizations,
-      offset: 0,
-      includeCommercial: includeCommercial,
-    );
-  }
-
-  Future<Map<String, Object?>> listOrganizationsPage({
-    String? query,
-    int? limit,
-    int offset = 0,
-    bool includeCommercial = false,
-  }) => _listOrganizationsPage(
-    query: query,
-    limit: limit ?? maxOrganizations,
-    offset: offset,
-    includeCommercial: includeCommercial,
-  );
-
-  Future<Map<String, Object?>> _listOrganizationsPage({
-    required String? query,
-    required int limit,
-    required int offset,
-    required bool includeCommercial,
-  }) async {
-    _validatePagination(
-      limit: limit,
-      offset: offset,
-      collection: 'organizations',
-    );
+  Future<Map<String, Object?>> listOrganizations({String? query}) async {
     final normalizedQuery = query?.trim().toLowerCase() ?? '';
     if (normalizedQuery.length > 128) {
       throw const ControlPlaneException(
@@ -89,13 +50,8 @@ final class PlatformConsoleProjection {
     final sorted = List<OrganizationRecord>.from(organizations)
       ..sort(_compareNewest);
     final items = <Map<String, Object?>>[];
-    for (final organization in sorted.skip(offset).take(limit)) {
-      items.add(
-        await _organizationSummary(
-          organization,
-          includeCommercial: includeCommercial,
-        ),
-      );
+    for (final organization in sorted.take(maxOrganizations)) {
+      items.add(await _organizationSummary(organization));
     }
     return <String, Object?>{
       'schemaVersion': 1,
@@ -106,20 +62,11 @@ final class PlatformConsoleProjection {
         'matchingOrganizations': sorted.length,
         'returnedOrganizations': items.length,
       },
-      'pagination': <String, Object?>{
-        'limit': limit,
-        'offset': offset,
-        'total': sorted.length,
-        'hasMore': offset + items.length < sorted.length,
-      },
       'limits': <String, Object?>{'maxOrganizations': maxOrganizations},
     };
   }
 
-  Future<Map<String, Object?>> readOrganization(
-    String organizationId, {
-    bool includeCommercial = false,
-  }) async {
+  Future<Map<String, Object?>> readOrganization(String organizationId) async {
     final value = await store.readJson('organizations', organizationId);
     if (value == null) {
       throw const ControlPlaneException(
@@ -129,10 +76,7 @@ final class PlatformConsoleProjection {
       );
     }
     final organization = OrganizationRecord.fromJson(value);
-    final summary = await _organizationSummary(
-      organization,
-      includeCommercial: includeCommercial,
-    );
+    final summary = await _organizationSummary(organization);
     final applications = await _tenantRecords(
       'applications',
       organization.id,
@@ -159,9 +103,7 @@ final class PlatformConsoleProjection {
               'name': application.name,
               'platform': application.platform,
               'runtimeApplicationId': application.runtimeApplicationId,
-              'status': application.status,
               'createdAt': application.createdAt.toUtc().toIso8601String(),
-              'updatedAt': application.updatedAt.toUtc().toIso8601String(),
             },
           )
           .toList(growable: false),
@@ -173,9 +115,7 @@ final class PlatformConsoleProjection {
               'name': environment.name,
               'version': environment.version,
               'promotedReleaseId': environment.promotedReleaseId,
-              'status': environment.status,
               'createdAt': environment.createdAt.toUtc().toIso8601String(),
-              'updatedAt': environment.updatedAt.toUtc().toIso8601String(),
             },
           )
           .toList(growable: false),
@@ -192,12 +132,7 @@ final class PlatformConsoleProjection {
 
   /// Returns only audit records explicitly marked as platform-audience
   /// events. Customer audit rows are never re-labelled as platform events.
-  Future<Map<String, Object?>> readAudit({
-    String? organizationId,
-    int limit = defaultPlatformOrganizationLimit,
-    int offset = 0,
-  }) async {
-    _validatePagination(limit: limit, offset: offset, collection: 'audit');
+  Future<Map<String, Object?>> readAudit({String? organizationId}) async {
     final events = <Map<String, Object?>>[];
     for (final value in await store.listJson('audit')) {
       if (organizationId != null && value['organizationId'] != organizationId) {
@@ -223,14 +158,9 @@ final class PlatformConsoleProjection {
       'schemaVersion': 1,
       'readOnly': true,
       'scope': 'platform',
-      'events': List.unmodifiable(events.skip(offset).take(limit)),
-      'pagination': <String, Object?>{
-        'limit': limit,
-        'offset': offset,
-        'total': events.length,
-        'hasMore':
-            offset + events.skip(offset).take(limit).length < events.length,
-      },
+      'events': List.unmodifiable(
+        events.take(defaultPlatformOrganizationLimit),
+      ),
       'available': events.isNotEmpty,
       if (events.isEmpty) 'note': 'No platform-audience audit events are recorded by this control plane.',
     };
@@ -239,63 +169,33 @@ final class PlatformConsoleProjection {
   /// Returns staff metadata for the Platform Console. Customer memberships,
   /// password hashes, sessions, and credential material are intentionally not
   /// part of this projection.
-  Future<Map<String, Object?>> listUsers({
-    String? query,
-    int limit = defaultPlatformOrganizationLimit,
-    int offset = 0,
-  }) async {
-    _validatePagination(limit: limit, offset: offset, collection: 'staff');
-    final normalizedQuery = query?.trim().toLowerCase() ?? '';
-    if (normalizedQuery.length > 128) {
-      throw const ControlPlaneException(
-        'INVALID_REQUEST',
-        'Staff search is too long',
-        statusCode: 422,
-      );
-    }
+  Future<Map<String, Object?>> listUsers() async {
     final users = <Map<String, Object?>>[];
     for (final value in await store.listJson('users')) {
       final user = HumanUserRecord.fromJson(value);
       final memberships = user.memberships
           .where(
             (membership) =>
-                platformMembershipPredicate?.call(user, membership) ??
-                (membership.audience == platformAuthorizationAudience &&
-                    membership.platformCapabilities.isNotEmpty),
+                membership.audience == platformAuthorizationAudience &&
+                membership.platformCapabilities.isNotEmpty,
           )
           .map(
             (membership) => <String, Object?>{
               'organizationId': membership.organizationId,
               'profileName': membership.profileName,
               'role': membership.role,
-              'active': membership.active,
               'platformCapabilities': membership.platformCapabilities.toList()
                 ..sort(),
             },
           )
           .toList(growable: false);
       if (memberships.isEmpty) continue;
-      if (normalizedQuery.isNotEmpty &&
-          !user.email.toLowerCase().contains(normalizedQuery) &&
-          !user.id.toLowerCase().contains(normalizedQuery) &&
-          !memberships.any(
-            (membership) =>
-                '${membership['role']}'.toLowerCase().contains(normalizedQuery),
-          )) {
-        continue;
-      }
       users.add(<String, Object?>{
         'id': user.id,
         'email': user.email,
         'active': user.active,
         'createdAt': user.createdAt.toUtc().toIso8601String(),
         'memberships': memberships,
-        'mfa': <String, Object?>{
-          'required': platformMfaRequired,
-          'status': platformMfaRequired
-              ? 'provider_not_configured'
-              : 'not_required',
-        },
       });
     }
     users.sort((left, right) {
@@ -308,32 +208,8 @@ final class PlatformConsoleProjection {
       'schemaVersion': 1,
       'readOnly': true,
       'scope': 'platform',
-      'users': List.unmodifiable(users.skip(offset).take(limit)),
-      'pagination': <String, Object?>{
-        'limit': limit,
-        'offset': offset,
-        'total': users.length,
-        'hasMore':
-            offset + users.skip(offset).take(limit).length < users.length,
-      },
+      'users': List.unmodifiable(users),
     };
-  }
-
-  void _validatePagination({
-    required int limit,
-    required int offset,
-    required String collection,
-  }) {
-    if (limit <= 0 ||
-        limit > maxOrganizations ||
-        offset < 0 ||
-        offset > 100000) {
-      throw ControlPlaneException(
-        'INVALID_REQUEST',
-        'The $collection pagination is invalid',
-        statusCode: 422,
-      );
-    }
   }
 
   /// Returns a read-only commercial projection without provider identifiers
@@ -392,52 +268,52 @@ final class PlatformConsoleProjection {
     };
   }
 
+  Future<Map<String, Object?>> readEnterpriseInquiries() async {
+    final inquiries = (await store.listJson('enterprise_inquiries'))
+        .map(
+          (value) => <String, Object?>{
+            'id': value['id'],
+            'email': value['email'],
+            'name': value['name'],
+            'organization': value['organization'],
+            'message': value['message'],
+            'source': value['source'],
+            'status': value['status'],
+            'destination': value['destination'],
+            'delivery': value['delivery'],
+            'notificationStatus': value['notificationStatus'],
+            'notificationSentAt': value['notificationSentAt'],
+            'createdAt': value['createdAt'],
+            'updatedAt': value['updatedAt'],
+          },
+        )
+        .toList(growable: false);
+    inquiries.sort((left, right) {
+      final leftAt = DateTime.tryParse('${left['createdAt']}');
+      final rightAt = DateTime.tryParse('${right['createdAt']}');
+      return (rightAt ?? DateTime.fromMillisecondsSinceEpoch(0)).compareTo(
+        leftAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+      );
+    });
+    return <String, Object?>{
+      'schemaVersion': 1,
+      'readOnly': true,
+      'scope': 'platform',
+      'inquiries': List.unmodifiable(
+        inquiries.take(defaultPlatformOrganizationLimit),
+      ),
+    };
+  }
+
   Future<Map<String, Object?>> _organizationSummary(
-    OrganizationRecord organization, {
-    required bool includeCommercial,
-  }) async {
+    OrganizationRecord organization,
+  ) async {
     final applications = await _tenantValues('applications', organization.id);
     final environments = await _tenantValues('environments', organization.id);
     final releases = await _tenantValues('releases', organization.id);
     final patches = await _tenantValues('patches', organization.id);
     final rollouts = await _tenantValues('rollouts', organization.id);
     final audit = await _tenantValues('audit', organization.id);
-    final supportCases = await _tenantValues('support_cases', organization.id);
-    Map<String, Object?>? subscription;
-    if (includeCommercial) {
-      final subscriptions = await _tenantValues(
-        'billing_subscriptions',
-        organization.id,
-      );
-      final plans = <String, Map<String, Object?>>{
-        for (final value in await store.listJson('billing_plans'))
-          if (value['id'] is String) value['id']! as String: value,
-      };
-      final activeSubscriptions = subscriptions
-          .where(
-            (value) =>
-                value['status'] == 'active' ||
-                value['status'] == 'authenticated',
-          )
-          .toList(growable: false);
-      final activeSubscription = activeSubscriptions.isEmpty
-          ? null
-          : activeSubscriptions.first;
-      final activePlan = activeSubscription?['planId'] is String
-          ? plans[activeSubscription!['planId']! as String]
-          : null;
-      if (activeSubscription != null) {
-        subscription = <String, Object?>{
-          'status': activeSubscription['status'],
-          'planId': activeSubscription['planId'],
-          'planName': activePlan?['name'],
-          'currency': activePlan?['currency'],
-          'amountMinor': activePlan?['amountMinor'],
-          'currentEndAt': activeSubscription['currentEndAt'],
-          'cancelAtCycleEnd': activeSubscription['cancelAtCycleEnd'],
-        };
-      }
-    }
     final memberCount = await _memberCount(organization.id);
     final activity = <DateTime>[organization.createdAt];
     for (final values in <List<Map<String, Object?>>>[
@@ -447,7 +323,6 @@ final class PlatformConsoleProjection {
       patches,
       rollouts,
       audit,
-      supportCases,
     ]) {
       for (final value in values) {
         final createdAt = _createdAt(value);
@@ -466,13 +341,6 @@ final class PlatformConsoleProjection {
       'releaseCount': releases.length,
       'patchCount': patches.length,
       'memberCount': memberCount,
-      'openSupportCaseCount': supportCases
-          .where(
-            (value) =>
-                value['status'] != 'CLOSED' && value['status'] != 'RESOLVED',
-          )
-          .length,
-      if (subscription != null) 'subscription': subscription,
     };
   }
 
@@ -504,8 +372,7 @@ final class PlatformConsoleProjection {
       if (user.memberships.any(
         (membership) =>
             membership.organizationId == organizationId &&
-            membership.audience == customerAuthorizationAudience &&
-            membership.active,
+            membership.audience == customerAuthorizationAudience,
       )) {
         count++;
       }

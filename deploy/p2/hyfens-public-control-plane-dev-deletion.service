@@ -1,0 +1,8 @@
+[Unit]
+Description=Process due Hyfens Cloud deletion requests
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hyfens-public-control-plane-dev-deletion-worker

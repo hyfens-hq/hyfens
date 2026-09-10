@@ -1,19 +1,27 @@
 library hyfens_control_plane;
 
 export 'src/aggregation.dart';
-export 'src/artifact_delivery_admission.dart';
+export 'src/artifact_retention.dart';
 export 'src/audit.dart';
 export 'src/audit_export_signing.dart';
-export 'src/auth.dart' show CredentialService;
+export 'src/auth.dart'
+    show
+        BillingProviderBridgeConfig,
+        BillingProviderPrincipal,
+        CredentialService;
 export 'src/billing.dart';
-export 'src/cloud_onboarding.dart';
+export 'src/cloud_plans.dart';
 export 'src/config.dart';
+export 'src/deletion.dart';
 export 'src/demo_seed.dart';
 export 'src/domain.dart';
+export 'src/email_delivery.dart';
 export 'src/encoding.dart' show canonicalJson, sha256Digest;
+export 'src/enterprise_billing.dart';
 export 'src/errors.dart';
 export 'src/http.dart';
 export 'src/human_auth.dart';
+export 'src/notifications.dart';
 export 'src/observation.dart';
 export 'src/operator_overview.dart';
 export 'src/p3e5_integration.dart';
@@ -32,7 +40,6 @@ export 'src/p3e_schedule.dart';
 export 'src/p3e_schedule_persistence.dart';
 export 'src/p3e_schedule_service.dart';
 export 'src/persistence.dart';
-export 'src/platform_commercial.dart';
 export 'src/platform_console.dart';
 export 'src/platform_metrics.dart';
 export 'src/postgres_faults.dart';
@@ -47,7 +54,6 @@ export 'src/reconciliation_periodic.dart';
 export 'src/reconciliation_persistence.dart';
 export 'src/release_bundle.dart';
 export 'src/rollout.dart';
-export 'src/runtime_receipts.dart';
 export 'src/s3_artifact_store.dart';
 export 'src/service.dart';
-export 'src/support.dart';
+export 'src/usage_metering.dart';

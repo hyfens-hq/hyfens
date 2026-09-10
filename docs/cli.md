@@ -8,66 +8,24 @@ bounded patches, verifies them, and deploys them through a selected control
 plane. The runtime remains the final authority for patch bytes, exact release
 binding, capabilities, sequence/high-water, health, rollback, and fallback.
 
-## Install a released CLI
-
-The canonical executable is `hyfens`. The current Hyfens release provides
-native archives for macOS, Linux, and Windows on x64 and arm64. The deprecated
-`tool` shim is included only for compatibility.
-
-On macOS or Linux, install the latest release without Dart or Flutter:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
-```
-
-Pin a published release with:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash -s -- --version v0.1.1
-```
-
-The installer detects the host architecture, downloads only from the fixed
-Hyfens GitHub repository, verifies `SHA256SUMS` before extraction, and prints
-PATH guidance. It does not modify project files or `~/.hyfens`.
-
-The Homebrew tap and Scoop bucket use the same immutable GitHub Release
-archives. Homebrew can add the tap and trust only the requested formula in a
-single command:
-
-```bash
-brew install hyfens-hq/tap/hyfens
-```
-
-If the tap was already added manually, Homebrew may require a one-time,
-formula-scoped trust before the short form works:
-
-```bash
-brew trust --formula hyfens-hq/tap/hyfens
-brew install hyfens
-```
-
-Do not disable tap trust globally.
-
-```powershell
-scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket
-scoop install hyfens
-```
-
-WinGet remains an external Microsoft submission gate for this release. Direct
-Windows archive and PowerShell verification instructions are in
-`docs/cli-distribution.md`.
-
-## Build from a source checkout
+## Source checkout invocation
 
 The package manifest deliberately has `publish_to: none` and uses repository
-path dependencies, so pub.dev is not the distribution channel. Contributors
-can use the source fallback:
+path dependencies, so pub.dev is not the distribution channel. Tagged GitHub
+Releases build native archives for macOS, Linux, and Windows. Use the
+[CLI distribution guide](cli-distribution.md) for normal binary installation;
+use a checkout when contributing or when a native release is unavailable:
 
 ```bash
 export HYFENS_CHECKOUT=/absolute/path/to/hyfens
 cd "$HYFENS_CHECKOUT/cli"
-flutter pub get
+dart pub get
+```
 
+From the Flutter project being operated on, give the source runner its
+canonical shell name:
+
+```bash
 hyfens() {
   dart run "$HYFENS_CHECKOUT/cli/bin/hyfens.dart" "$@"
 }
@@ -76,19 +34,21 @@ hyfens() {
 `cli/bin/hyfens.dart` is the canonical source entry point. `cli/bin/tool.dart`
 is retained only as the deprecated compatibility shim; it is not a second
 public CLI. Release archives include both executables, checksums, and a
-machine-readable inventory.
+machine-readable inventory. Homebrew, Scoop, and WinGet publication is separate
+from the GitHub Release and must point at a real published archive; use each
+package manager's own upgrade command for package-managed installations.
 
 ## Public command surface
 
 ```text
 hyfens --help | -h | help
 hyfens --version | -v | version
+hyfens upgrade [--check] [--version VERSION]
 hyfens login [--host URL] [--profile NAME] [--device]
 hyfens logout
 hyfens status
 hyfens doctor
-hyfens mcp [--profile NAME] [--debug]
-hyfens profile list|show|use|remove|current
+hyfens profile list|show|use|remove|current|bind
 hyfens auth login|status|logout
 hyfens init
 hyfens analyze
@@ -96,6 +56,7 @@ hyfens release android|ios
 hyfens patch android|ios
 hyfens rollback
 hyfens cleanup
+hyfens detach
 hyfens inspect
 hyfens verify <patch-file>
 hyfens keys generate|inspect
@@ -103,6 +64,7 @@ hyfens serve
 hyfens deploy
 hyfens rollout create|inspect|transition
 hyfens bundle export|verify|import|admit
+hyfens mcp [--profile NAME] [--debug]
 ```
 
 `hyfens --help`, `hyfens -h`, and `hyfens help` show the same root usage.
@@ -111,27 +73,12 @@ Every listed command and subcommand accepts `--help`; use
 deprecated `tool` executable delegates to this same help and command surface
 after printing its migration notice.
 
-`hyfens mcp` starts the local stdio MCP server for compatible AI coding agents;
-see [MCP documentation](mcp.md) for profile selection, tool schemas, and
-security boundaries.
-
 ## Endpoint and profile selection
 
-With no host override, the managed profile uses the canonical Cloud API base:
-
-```text
-https://api.hyfens.com/
-```
-
-The older `https://api.hyfens.com/p2/` deployment alias remains accepted for
-existing profiles and compatibility. It is not an API version; the public API
-version is negotiated through discovery (`v1`). The endpoint is not a promise
-of public signup, hosted release downloads, production availability, or a
-service-level guarantee.
-
-New managed Cloud users begin at the Customer Workspace signup page, verify
-their account, and then use the resulting organization/application/environment
-scope with `hyfens login` and `hyfens init`. See [Managed Cloud onboarding](product/cloud-onboarding.md).
+With no host override, `hyfens login` selects the built-in Hyfens Cloud
+profile. Its managed service endpoint is intentionally not shown in public
+CLI help, examples, or profile display output. This keeps an implementation
+route from becoming part of the user-facing configuration contract.
 
 Choose a self-hosted control plane explicitly:
 
@@ -148,14 +95,7 @@ organization/application/environment scope. A conceptual profile contains
 metadata like this:
 
 ```toml
-active_profile = "hyfens-cloud"
-
-[profiles.hyfens-cloud]
-endpoint = "https://api.hyfens.com/"
-managed = true
-organization = "org_..."
-application = "app_..."
-environment = "env_..."
+active_profile = "acme"
 
 [profiles.acme]
 endpoint = "https://hyfens.example.com/"
@@ -171,6 +111,55 @@ signing key, or private key is stored in profile/configuration metadata. A
 credential is keyed to the normalized endpoint origin and API base path, so it
 cannot silently cross hosts.
 
+The managed profile's exact endpoint is stored internally for host-bound
+credential lookup. It is represented as `Hyfens Cloud (managed)` in CLI and
+MCP output. Self-hosted endpoint URLs remain visible so operators can confirm
+which server they selected.
+
+After a verified Cloud account is created, `hyfens login` uses the customer
+audience and stores the organization scope returned by the control plane. Bind
+the first application and environment as they are created:
+
+```bash
+hyfens profile bind \
+  --organization-id org_... \
+  --application-id app_... \
+  --environment-id env_...
+```
+
+The values are identifiers only; bearer tokens and session secrets remain in
+the credential store. Use `hyfens profile current` to inspect the active
+non-secret context, or `hyfens profile use NAME` when working with more than
+one organization or control plane.
+
+## Upgrade an installed CLI
+
+Run the following from a compiled Hyfens release installation:
+
+```bash
+hyfens upgrade
+```
+
+The command resolves the latest stable GitHub Release, verifies its
+`SHA256SUMS` entry, and activates the new binary without changing Hyfens
+profiles, credentials, or project files. Use `hyfens upgrade --check` to check
+without installing, or `hyfens upgrade --version 0.1.1` to request a specific
+release. A source checkout invoked through `dart run` cannot replace the Dart
+process; use the public installer or a release archive instead.
+
+## AI agents / MCP
+
+The installed CLI includes a local stdio MCP server:
+
+```bash
+hyfens mcp
+```
+
+It reuses the active authenticated profile and exposes structured Hyfens
+operations to compatible coding agents. Use `--profile NAME` for a named
+self-hosted profile and `--debug` for diagnostics on stderr. The server's
+stdout is reserved for MCP protocol messages.
+
 Remote credential-bearing requests require HTTPS. HTTP is allowed only for
 explicit loopback development, for example:
 
@@ -182,6 +171,22 @@ Every compatible control plane advertises its versioned, non-secret contract
 at `GET /.well-known/hyfens` relative to its configured API base. The CLI
 rejects an unsupported response with a compatibility diagnostic; compatibility
 is determined by the discovery response, not by the hostname.
+
+## Local Auvana demo
+
+For the repository's local Auvana demo, start the disposable Compose fixture
+and use its protected credential file:
+
+```bash
+sh scripts/local-dashboard.sh demo
+sh scripts/local-dashboard.sh demo-credentials
+hyfens login --host http://127.0.0.1:18082 --profile auvana-demo
+```
+
+The seeded owner can test the normal `doctor`, `init`, `release`, `patch`, and
+`deploy` flow against a real Flutter project. When the configured platform
+profile is selected in the dashboard, its `Platform` page provides read-only
+aggregate metrics rather than cross-tenant records.
 
 ## Authentication and session storage
 
@@ -262,6 +267,47 @@ Creates a target-specific release baseline from the normal Flutter build path.
 Use a normal release build for compatibility evidence; metadata-only shortcuts,
 if exposed by a local version, are test conveniences and not build evidence.
 
+For a flavor-based application, select the native flavor and the Dart file that
+declares that flavor's `main()` function:
+
+```bash
+hyfens release android \
+  --flavor local \
+  --entrypoint lib/src/flavors/local.dart
+```
+
+`--entrypoint` is project-relative and must point to a regular Dart file under
+`lib/`. The CLI never guesses between multiple flavor files. To avoid
+repeating the path, add a target/flavor map to `tool.yaml`:
+
+```yaml
+application_id: com.example.app
+
+# Use these only when native flavors have distinct runtime application IDs.
+application_ids:
+  android:
+    local: com.example.app.local
+    prod: com.example.app
+
+entrypoints:
+  android:
+    local: lib/src/flavors/local.dart
+    staging: lib/src/flavors/staging.dart
+    prod: lib/src/flavors/prod.dart
+  ios:
+    local: lib/src/flavors/local.dart
+    staging: lib/src/flavors/staging.dart
+    prod: lib/src/flavors/prod.dart
+```
+
+The special `default` mapping is used when no `--flavor` is supplied. A
+flavor without a mapping must be paired with `--entrypoint`; this prevents the
+common mistake of instrumenting `lib/main.dart` for the wrong native variant.
+Run `flutter pub get` before `hyfens release` so
+`.dart_tool/package_config.json` describes the current workspace. The selected
+flavor and entrypoint become part of the immutable release identity and are
+reused for later analysis and patch creation.
+
 ### `hyfens patch android|ios`
 
 Analyzes the current source against the exact release, compiles the supported
@@ -288,6 +334,45 @@ is never persisted by project configuration.
 Creates or requests the bounded signed rollback-to-base operation for the
 selected release. Rollback does not make an older patch replayable and does not
 lower the runtime's anti-replay high-water.
+
+With a managed Cloud profile, use `hyfens rollback --cloud` to submit the
+authenticated request for the profile's bound organization, application, and
+environment. The runtime receives the signed control on its next Cloud poll;
+an already-running process may need a relaunch before rendered UI reflects the
+base release. Local and self-hosted profiles retain the existing local control
+path and do not use the Cloud rollback endpoint.
+
+### `hyfens detach`
+
+Detaches the current Flutter checkout from Hyfens; it is intentionally separate
+from runtime `rollback`. Runtime rollback records a signed return to the
+trusted installed base. Detach removes local project integration metadata and
+the Hyfens-owned `.tool` store; it does not change a deployed app, remote
+control-plane records, Flutter source, Android/iOS files, `pubspec.yaml`, or
+the CLI installation.
+
+Preview first, then confirm the exact destructive operation:
+
+```bash
+hyfens detach --dry-run
+hyfens detach --confirm DETACH
+```
+
+By default this removes `tool.yaml`, `hyfens.yaml`, `.tool/` (including local
+release/patch evidence and signing keys), and nothing else. Because
+`tool.yaml` is a generic filename, a lone `tool.yaml` without a Hyfens binding
+or `.tool/` store is retained for manual review. Use `--keep-keys` when the
+local signing key must be retained while releases and
+patch artifacts are removed:
+
+```bash
+hyfens detach --confirm DETACH --keep-keys
+```
+
+Detach refuses to proceed if `.tool` contains unexpected entries, symbolic
+links, special files, or malformed metadata. It makes no changes in that case;
+inspect the store manually before retrying. It also refuses to delete a
+metadata path that cannot be verified as a Hyfens v1 configuration.
 
 ## Self-hosted Docker validation
 
@@ -360,10 +445,12 @@ patches through the tested local/self-hosted path. They do not include:
 - independent customer-application or physical-device acceptance beyond the
   recorded fixtures;
 - a generally deployed browser-PKCE/device-code login;
-- package-manager publication, code signing, or a global installer.
+- WinGet publication, code signing, or a global registry installer. GitHub
+  Release archives, the curl installer, Homebrew, and Scoop are documented in
+  the [CLI distribution guide](cli-distribution.md).
 
-These are explicit external gates or backlog, not implicit guarantees. Direct
-GitHub Release archives are produced by the tagged workflow; package-manager
-publication remains a separate setup step. The
+These are explicit external gates or backlog, not implicit guarantees. The
+public `v0.1.1` release provides direct GitHub archives, curl installation,
+Homebrew, and Scoop; WinGet remains a separate external setup step. The
 [frozen contract](HYFENS_DEVELOPER_PLATFORM_CONTRACT.md) defines the shared
 acceptance boundary.

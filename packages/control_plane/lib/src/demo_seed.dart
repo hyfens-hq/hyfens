@@ -1,3 +1,5 @@
+import 'billing.dart';
+import 'cloud_plans.dart';
 import 'domain.dart';
 import 'errors.dart';
 import 'human_auth.dart';
@@ -35,11 +37,13 @@ final class DemoAccountSeeder {
   DemoAccountSeeder({
     required this.store,
     required this.auth,
+    this.billingService,
     DateTime Function()? clock,
   }) : _clock = clock ?? (() => DateTime.now().toUtc());
 
   final ControlPlaneStore store;
   final HumanAuthService auth;
+  final BillingService? billingService;
   final DateTime Function() _clock;
 
   Future<DemoSeedResult> seed({required String password}) async {
@@ -59,6 +63,11 @@ final class DemoAccountSeeder {
           value['name'] == demoOrganizationName,
       description: 'the expected Auvana organization',
     );
+    if (billingService?.deploymentModel == DeploymentModel.cloud) {
+      await billingService!.ensureCloudPlanAssignment(
+        organizationId: demoOrganizationId,
+      );
+    }
     final applicationValue = await _ensureRecord(
       collection: 'applications',
       id: demoApplicationId,
@@ -192,7 +201,9 @@ final class DemoAccountSeeder {
         customerMembership.length != 1 ||
         platformMembership.length != 1 ||
         customerMembership.single.role != 'owner' ||
-        !customerMembership.single.capabilities.containsAll(controlScopes) ||
+        !customerMembership.single.capabilities.containsAll(
+          customerOwnerScopes,
+        ) ||
         platformMembership.single.role != 'owner' ||
         !platformMembership.single.capabilities.containsAll(controlScopes) ||
         !platformMembership.single.platformCapabilities.containsAll(

@@ -55,7 +55,7 @@ void main() {
     expect(customerMembership.profileEnvironmentId, demoEnvironmentId);
     expect(customerMembership.role, 'owner');
     expect(customerMembership.audience, customerAuthorizationAudience);
-    expect(customerMembership.capabilities, containsAll(controlScopes));
+    expect(customerMembership.capabilities, containsAll(customerOwnerScopes));
 
     final platformMembership = first.owner.memberships.singleWhere(
       (item) => item.profileName == demoOwnerProfileName,

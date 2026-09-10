@@ -1,10 +1,8 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 enum E0ValueKind {
   nullValue('null'),
-  voidValue('void'),
   boolean('bool'),
   integer('int'),
   doubleValue('double'),
@@ -13,7 +11,6 @@ enum E0ValueKind {
   set('Set'),
   map('Map'),
   closure('Closure'),
-  host('host'),
   supportedValue('value');
 
   const E0ValueKind(this.wireName);
@@ -26,40 +23,13 @@ enum E0ValueKind {
   );
 }
 
-/// A callback owned by the host Flutter runtime.
-///
-/// Callback values may be carried through an in-process widget description,
-/// but are deliberately not serializable and can never cross the patch
-/// container boundary as data. The runtime implements this interface for
-/// bounded, zero-argument guest closures.
-abstract interface class E0HostCallbackValue {
-  Object? invoke();
-}
-
-/// A host-owned callback whose bounded guest body is asynchronous.
-///
-/// Async callbacks remain non-serializable. The Flutter host decides when to
-/// invoke them and owns the returned Future; the guest can only use the
-/// async operations admitted by the enclosing patch ABI.
-abstract interface class E0AsyncHostCallbackValue {
-  Future<Object?> invokeAsync();
-}
-
 final class E0ValueSchema {
-  const E0ValueSchema._(
-    this.kind, {
-    this.nullable = false,
-    this.closureIndex,
-    this.hostType,
-  }) : elementSchema = null,
-       mapValueSchema = null;
+  const E0ValueSchema._(this.kind, {this.nullable = false, this.closureIndex})
+    : elementSchema = null,
+      mapValueSchema = null;
 
   static const E0ValueSchema nullValue = E0ValueSchema._(
     E0ValueKind.nullValue,
-    nullable: true,
-  );
-  static const E0ValueSchema voidValue = E0ValueSchema._(
-    E0ValueKind.voidValue,
     nullable: true,
   );
   static const E0ValueSchema boolean = E0ValueSchema._(E0ValueKind.boolean);
@@ -73,17 +43,6 @@ final class E0ValueSchema {
     nullable: true,
   );
 
-  static const E0ValueSchema buildContext = E0ValueSchema._(
-    E0ValueKind.host,
-    hostType: 'BuildContext',
-  );
-
-  static const E0ValueSchema hostCallback = E0ValueSchema._(
-    E0ValueKind.host,
-    nullable: true,
-    hostType: 'VoidCallback',
-  );
-
   const E0ValueSchema.closure(int index)
     : this._(E0ValueKind.closure, closureIndex: index);
 
@@ -92,31 +51,27 @@ final class E0ValueSchema {
     this.nullable = false,
   }) : kind = E0ValueKind.list,
        mapValueSchema = null,
-       closureIndex = null,
-       hostType = null;
+       closureIndex = null;
 
   const E0ValueSchema.set(
     E0ValueSchema this.elementSchema, {
     this.nullable = false,
   }) : kind = E0ValueKind.set,
        mapValueSchema = null,
-       closureIndex = null,
-       hostType = null;
+       closureIndex = null;
 
   const E0ValueSchema.map(
     E0ValueSchema this.mapValueSchema, {
     this.nullable = false,
   }) : kind = E0ValueKind.map,
        elementSchema = null,
-       closureIndex = null,
-       hostType = null;
+       closureIndex = null;
 
   final E0ValueKind kind;
   final bool nullable;
   final E0ValueSchema? elementSchema;
   final E0ValueSchema? mapValueSchema;
   final int? closureIndex;
-  final String? hostType;
 
   E0ValueSchema asNullable() {
     if (nullable) return this;
@@ -129,7 +84,7 @@ final class E0ValueSchema {
         nullable: true,
         closureIndex: closureIndex,
       ),
-      _ => E0ValueSchema._(kind, nullable: true, hostType: hostType),
+      _ => E0ValueSchema._(kind, nullable: true),
     };
   }
 
@@ -140,26 +95,18 @@ final class E0ValueSchema {
     // Accept it statically so empty/heterogeneous collection construction can
     // flow to an explicit return schema; `toHost` validates every node again.
     if (actual.kind == E0ValueKind.supportedValue) return true;
-    if (kind == E0ValueKind.host &&
-        hostType == 'VoidCallback' &&
-        actual.kind == E0ValueKind.closure) {
-      return true;
-    }
     if (kind != actual.kind) return false;
     return switch (kind) {
       E0ValueKind.list ||
       E0ValueKind.set => elementSchema!.accepts(actual.elementSchema!),
       E0ValueKind.map => mapValueSchema!.accepts(actual.mapValueSchema!),
       E0ValueKind.closure => closureIndex == actual.closureIndex,
-      E0ValueKind.host => hostType == actual.hostType,
       _ => true,
     };
   }
 
   bool get isSupportedHostSignature {
-    if (kind == E0ValueKind.supportedValue ||
-        kind == E0ValueKind.nullValue ||
-        kind == E0ValueKind.closure) {
+    if (kind == E0ValueKind.supportedValue || kind == E0ValueKind.nullValue) {
       return false;
     }
     if (kind == E0ValueKind.list || kind == E0ValueKind.set) {
@@ -169,19 +116,8 @@ final class E0ValueSchema {
       return mapValueSchema!.kind == E0ValueKind.supportedValue ||
           _isScalar(mapValueSchema!);
     }
-    if (kind == E0ValueKind.host) {
-      return hostType == 'BuildContext' || hostType == 'VoidCallback';
-    }
     return true;
   }
-
-  /// Whether this schema may be held in an internal local slot.
-  ///
-  /// Closures are intentionally excluded from public function signatures and
-  /// serialized host values, but the bytecode runtime has a bounded closure
-  /// representation for local invocation and collection callbacks.
-  bool get isSupportedLocalSchema =>
-      kind == E0ValueKind.closure || isSupportedHostSignature;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'kind': kind.wireName,
@@ -189,7 +125,6 @@ final class E0ValueSchema {
     if (elementSchema != null) 'element': elementSchema!.toJson(),
     if (mapValueSchema != null) 'value': mapValueSchema!.toJson(),
     if (kind == E0ValueKind.closure) 'closure': closureIndex,
-    if (kind == E0ValueKind.host) 'host': hostType,
   };
 
   static E0ValueSchema fromJson(Map<String, Object?> json) {
@@ -211,7 +146,6 @@ final class E0ValueSchema {
       E0ValueKind.set => const <String>{'kind', 'nullable', 'element'},
       E0ValueKind.map => const <String>{'kind', 'nullable', 'value'},
       E0ValueKind.closure => const <String>{'kind', 'nullable', 'closure'},
-      E0ValueKind.host => const <String>{'kind', 'nullable', 'host'},
       _ => const <String>{'kind', 'nullable'},
     };
     if (!_hasExactKeys(json, expectedKeys)) {
@@ -219,9 +153,6 @@ final class E0ValueSchema {
     }
     if (kind == E0ValueKind.nullValue && !nullableValue) {
       throw const FormatException('Null schema must be nullable');
-    }
-    if (kind == E0ValueKind.voidValue && !nullableValue) {
-      throw const FormatException('Void schema must be nullable');
     }
     if (kind == E0ValueKind.supportedValue && !nullableValue) {
       throw const FormatException('Supported-value schema must include null');
@@ -237,17 +168,6 @@ final class E0ValueSchema {
         E0ValueKind.closure,
         nullable: nullableValue,
         closureIndex: index,
-      );
-    }
-    if (kind == E0ValueKind.host) {
-      final hostType = json['host'];
-      if (hostType != 'BuildContext' && hostType != 'VoidCallback') {
-        throw const FormatException('Unsupported host schema');
-      }
-      return E0ValueSchema._(
-        E0ValueKind.host,
-        nullable: nullableValue,
-        hostType: hostType as String,
       );
     }
     if (kind == E0ValueKind.list) {
@@ -283,7 +203,6 @@ final class E0ValueSchema {
   String toDartSource() {
     final base = switch (kind) {
       E0ValueKind.nullValue => 'Null',
-      E0ValueKind.voidValue => 'void',
       E0ValueKind.boolean => 'bool',
       E0ValueKind.integer => 'int',
       E0ValueKind.doubleValue => 'double',
@@ -292,12 +211,10 @@ final class E0ValueSchema {
       E0ValueKind.set => 'Set<${elementSchema!.toDartSource()}>',
       E0ValueKind.map => 'Map<String, ${mapValueSchema!.toDartSource()}>',
       E0ValueKind.closure => 'Closure',
-      E0ValueKind.host => hostType!,
       E0ValueKind.supportedValue => 'dynamic',
     };
     return nullable &&
             kind != E0ValueKind.nullValue &&
-            kind != E0ValueKind.voidValue &&
             kind != E0ValueKind.supportedValue &&
             kind != E0ValueKind.closure
         ? '$base?'
@@ -311,18 +228,11 @@ final class E0ValueSchema {
       nullable == other.nullable &&
       elementSchema == other.elementSchema &&
       mapValueSchema == other.mapValueSchema &&
-      closureIndex == other.closureIndex &&
-      hostType == other.hostType;
+      closureIndex == other.closureIndex;
 
   @override
-  int get hashCode => Object.hash(
-    kind,
-    nullable,
-    elementSchema,
-    mapValueSchema,
-    closureIndex,
-    hostType,
-  );
+  int get hashCode =>
+      Object.hash(kind, nullable, elementSchema, mapValueSchema, closureIndex);
 
   @override
   String toString() => toDartSource();
@@ -812,13 +722,10 @@ final class _DartTypeParser {
     } else {
       schema = switch (name) {
         'Null' => E0ValueSchema.nullValue,
-        'void' => E0ValueSchema.voidValue,
         'bool' => E0ValueSchema.boolean,
         'int' => E0ValueSchema.integer,
         'double' => E0ValueSchema.doubleValue,
         'String' => E0ValueSchema.string,
-        'BuildContext' => E0ValueSchema.buildContext,
-        'VoidCallback' => E0ValueSchema.hostCallback,
         'dynamic' => E0ValueSchema.supportedValue,
         _ => throw FormatException('Unsupported Dart type $name'),
       };
@@ -879,8 +786,6 @@ Object? _normalize(
   }
   switch (schema.kind) {
     case E0ValueKind.nullValue:
-      throw FormatException('$path must be null');
-    case E0ValueKind.voidValue:
       throw FormatException('$path must be null');
     case E0ValueKind.boolean:
       if (value is! bool) throw FormatException('$path must be bool');
@@ -956,12 +861,6 @@ Object? _normalize(
       return Map<String, Object?>.unmodifiable(result);
     case E0ValueKind.closure:
       throw FormatException('$path contains an internal closure value');
-    case E0ValueKind.host:
-      if (schema.hostType == 'BuildContext') return value;
-      if (schema.hostType == 'VoidCallback' && value is E0HostCallbackValue) {
-        return value;
-      }
-      throw FormatException('$path contains an unsupported host value');
     case E0ValueKind.supportedValue:
       throw StateError('Supported-value normalization was not dispatched');
   }
@@ -1009,7 +908,6 @@ Object _normalizeAny(
       depth,
     ) as Object;
   }
-  if (value is E0HostCallbackValue) return value;
   throw FormatException('$path contains unsupported ${value.runtimeType}');
 }
 
@@ -1069,7 +967,6 @@ E0ValueSchema _inferSchema(
     }
     return const E0ValueSchema.map(E0ValueSchema.supportedValue);
   }
-  if (value is E0HostCallbackValue) return E0ValueSchema.hostCallback;
   throw FormatException('$path contains unsupported ${value.runtimeType}');
 }
 
@@ -1135,9 +1032,6 @@ Map<String, Object?> _encodeValue(
           },
       ],
     };
-  }
-  if (value is E0HostCallbackValue) {
-    throw FormatException('$path contains a non-serializable host callback');
   }
   throw FormatException('$path contains unsupported ${value.runtimeType}');
 }
@@ -1294,9 +1188,6 @@ Object? _typedCopy(Object? value, E0ValueSchema schema) {
       ),
       _ => Map<String, dynamic>.unmodifiable(values),
     };
-  }
-  if (schema.kind == E0ValueKind.host || schema.kind == E0ValueKind.voidValue) {
-    return value;
   }
   return value;
 }

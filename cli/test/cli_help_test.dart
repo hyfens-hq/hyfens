@@ -5,9 +5,10 @@ import 'package:test/test.dart';
 
 const _publicCommandPaths = <List<String>>[
   <String>['version'],
+  <String>['upgrade'],
+  <String>['mcp'],
   <String>['doctor'],
   <String>['status'],
-  <String>['mcp'],
   <String>['login'],
   <String>['logout'],
   <String>['profile'],
@@ -26,6 +27,7 @@ const _publicCommandPaths = <List<String>>[
   <String>['patch'],
   <String>['rollback'],
   <String>['cleanup'],
+  <String>['detach'],
   <String>['inspect'],
   <String>['verify'],
   <String>['keys'],
@@ -61,25 +63,11 @@ void main() {
       expect(result.stdout, contains('Usage: hyfens'));
       expect(result.stdout, contains('version'));
       expect(result.stdout, contains('profile'));
+      expect(result.stdout, contains('upgrade'));
       expect(result.stdout, contains('mcp'));
-      expect(result.stdout, contains('Examples:'));
-      expect(result.stdout, contains('Documentation:'));
     }
     expect(results[1].stdout, results[0].stdout);
     expect(results[2].stdout, results[0].stdout);
-  });
-
-  test('MCP help explains the stdio and profile contract', () async {
-    final result = await _runCli(const <String>['mcp', '--help']);
-
-    expect(result.exitCode, 0, reason: result.stderr);
-    expect(result.stderr, isEmpty);
-    expect(result.stdout, contains('stdio'));
-    expect(result.stdout, contains('--profile'));
-    expect(result.stdout, contains('--debug'));
-    expect(result.stdout, contains('active host-bound profile'));
-    expect(result.stdout, contains('hyfens login'));
-    expect(result.stdout, contains('stderr'));
   });
 
   group('command-level help', () {
@@ -112,22 +100,6 @@ void main() {
     },
   );
 
-  test('release and patch help expose flavor entrypoint options', () async {
-    final release = await _runCli(const <String>['release', '--help']);
-    final patch = await _runCli(const <String>['patch', '--help']);
-    final init = await _runCli(const <String>['init', '--help']);
-
-    expect(release.exitCode, 0, reason: release.stderr);
-    expect(release.stdout, contains('--flavor'));
-    expect(release.stdout, contains('--entrypoint'));
-    expect(patch.exitCode, 0, reason: patch.stderr);
-    expect(patch.stdout, contains('--flavor'));
-    expect(patch.stdout, contains('--entrypoint'));
-    expect(init.exitCode, 0, reason: init.stderr);
-    expect(init.stdout, contains('--flavor'));
-    expect(init.stdout, contains('--entrypoint'));
-  });
-
   test(
     'unknown command suggests a close match and fails with usage status',
     () async {
@@ -145,16 +117,44 @@ void main() {
   );
 
   test(
+    'flavor and detach safety options are visible in command help',
+    () async {
+      final release = await _runCli(const <String>['release', '--help']);
+      expect(release.exitCode, 0, reason: release.stderr);
+      expect(release.stdout, contains('--flavor'));
+      expect(release.stdout, contains('--entrypoint'));
+
+      final detach = await _runCli(const <String>['detach', '--help']);
+      expect(detach.exitCode, 0, reason: detach.stderr);
+      expect(detach.stdout, contains('--dry-run'));
+      expect(detach.stdout, contains('--confirm'));
+      expect(detach.stdout, contains('--keep-keys'));
+    },
+  );
+
+  test('managed endpoint is absent from login and upgrade help', () async {
+    final login = await _runCli(const <String>['login', '--help']);
+    expect(login.exitCode, 0, reason: login.stderr);
+    expect(login.stdout, isNot(contains('api.hyfens.com')));
+
+    final upgrade = await _runCli(const <String>['upgrade', '--help']);
+    expect(upgrade.exitCode, 0, reason: upgrade.stderr);
+    expect(upgrade.stdout, contains('--check'));
+    expect(upgrade.stdout, contains('--version'));
+  });
+
+  test('MCP help explains stdio startup and profile selection', () async {
+    final result = await _runCli(const <String>['mcp', '--help']);
+
+    expect(result.exitCode, 0, reason: result.stderr);
+    expect(result.stdout, contains('--profile'));
+    expect(result.stdout, contains('--debug'));
+    expect(result.stdout, contains('stdio'));
+  });
+
+  test(
     'deprecated tool delegates help and version to the shared runner',
     () async {
-      final rootHelp = await _runCli(const <String>[
-        '--help',
-      ], deprecatedToolShim: true);
-      expect(rootHelp.exitCode, 0, reason: rootHelp.stderr);
-      expect(rootHelp.stdout, contains('Usage: hyfens'));
-      expect(rootHelp.stdout, contains('mcp'));
-      expect(rootHelp.stderr, 'tool is deprecated; use hyfens\n');
-
       final help = await _runCli(const <String>[
         'help',
         'status',

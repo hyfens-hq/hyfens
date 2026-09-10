@@ -47,7 +47,6 @@ final class E0SourceTransformer {
     List<E0WidgetFactoryDescriptor> widgetFactories =
         const <E0WidgetFactoryDescriptor>[],
     Set<String> widgetBuildClasses = const <String>{},
-    bool enableFlutterWidgetAbi = false,
     bool allowSyntheticWidgetTypes = false,
     bool requireMain = true,
     bool installRuntime = true,
@@ -109,8 +108,6 @@ final class E0SourceTransformer {
         'Widget',
         'BuildContext',
         'StatelessWidget',
-        'StatefulWidget',
-        'State',
         ...widgetFactories.map((factory) => factory.sourceName),
       }.contains,
     );
@@ -150,8 +147,7 @@ final class E0SourceTransformer {
         final qualifiedName =
             '${declaration.name.lexeme}.${method.name.lexeme}';
         final requestedWidgetBuild =
-            (enableFlutterWidgetAbi ||
-                widgetBuildClasses.contains(declaration.name.lexeme)) &&
+            widgetBuildClasses.contains(declaration.name.lexeme) &&
             e0IsWidgetBuildMethod(method);
         if (requestedWidgetBuild &&
             (!allowSyntheticWidgetTypes &&
@@ -162,15 +158,10 @@ final class E0SourceTransformer {
           continue;
         }
         final selectedWidgetBuild =
-            requestedWidgetBuild && _extendsFlutterWidget(declaration);
-        final widgetBuildWithContext =
-            selectedWidgetBuild &&
-            enableFlutterWidgetAbi &&
-            !allowSyntheticWidgetTypes;
+            requestedWidgetBuild && _extendsStatelessWidget(declaration);
         final reason = e0UnsupportedMethodReason(
           method,
           allowWidgetBuild: selectedWidgetBuild,
-          widgetBuildWithContext: widgetBuildWithContext,
         );
         if (reason != null) {
           exclusions.add('$qualifiedName: $reason');
@@ -183,7 +174,6 @@ final class E0SourceTransformer {
             owner: declaration,
             classes: classes,
             canonicalLibraryUri: libraryUri,
-            collectImplicitReceiverReads: true,
           );
         } on FormatException catch (error) {
           exclusions.add('$qualifiedName: ${error.message}');
@@ -192,7 +182,6 @@ final class E0SourceTransformer {
         final signature = e0SignatureForMethodDeclaration(
           method,
           allowWidgetBuild: selectedWidgetBuild,
-          widgetBuildWithContext: widgetBuildWithContext,
         );
         final declarationIdentity = identity.declaration(
           canonicalLibraryUri: libraryUri,
@@ -216,19 +205,15 @@ final class E0SourceTransformer {
     }
     if (requireMain &&
         (mainDeclaration == null ||
-            !_isSupportedMainBody(mainDeclaration.functionExpression.body))) {
-      throw const FormatException('E0 requires a supported main function body');
+            mainDeclaration.functionExpression.body is! BlockFunctionBody)) {
+      throw const FormatException('E0 requires a block-bodied main function');
     }
     if (installRuntime && mainDeclaration == null) {
       throw const FormatException(
-        'Runtime installation requires a main function',
+        'Runtime installation requires a block-bodied main function',
       );
     }
-    // Keep the pre-Flutter-ABI slot range stable for ordinary Dart functions.
-    // Widget build entries are an additive ABI surface, so append them after
-    // the existing function range instead of shifting every old slot when a
-    // Flutter library is enabled for widget patching.
-    candidates.sort(_compareCandidates);
+    candidates.sort((left, right) => left.id.compareTo(right.id));
     if (assignedSlots != null) {
       final candidateIds = candidates.map((candidate) => candidate.id).toSet();
       if (assignedSlots.keys.toSet().difference(candidateIds).isNotEmpty ||
@@ -290,20 +275,13 @@ final class E0SourceTransformer {
       final receiverArgument = candidate.ownerClass == null
           ? ''
           : ', receiver: ${adapterNames[slot]}(this)';
-      final isWidgetBuild =
-          candidate.signature == e0WidgetBuildSignature ||
-          candidate.signature == e0FlutterWidgetBuildSignature;
+      final isWidgetBuild = candidate.signature == e0WidgetBuildSignature;
       final invocationArguments = isWidgetBuild
-          ? candidate.signature == e0FlutterWidgetBuildSignature
-                ? '<Object?>[context]'
-                : '<Object?>[]'
+          ? '<Object?>[]'
           : '<Object?>[${_parameterNames(candidate.parameters).join(', ')}]';
       final namedInvocationArguments = isWidgetBuild
           ? ''
           : _namedParameterArguments(candidate.parameters);
-      final successfulReturn = candidate.returnType.toSource() == 'void'
-          ? '\n      return;'
-          : '\n      return $resultLocal.value as ${candidate.returnType.toSource()};';
       final guard = candidate.signature.isAsync
           ? '\n  final $patchLocal = $runtimePrefix.E0PatchRuntime.lookup($slot);'
                 '\n  if ($patchLocal != null) {'
@@ -324,7 +302,10 @@ final class E0SourceTransformer {
                 '$invocationArguments'
                 '$receiverArgument'
                 '$namedInvocationArguments);'
-                '\n    if ($resultLocal.isSuccess) {$successfulReturn\n    }'
+                '\n    if ($resultLocal.isSuccess) {'
+                '\n      return $resultLocal.value as '
+                '${candidate.returnType.toSource()};'
+                '\n    }'
                 '\n    if ($resultLocal.isGuestThrow) {'
                 '\n      $resultLocal.rethrowGuest();'
                 '\n    }'
@@ -332,7 +313,8 @@ final class E0SourceTransformer {
       edits.add(_Edit(body.block.leftBracket.end, 'callee-guard', guard));
     }
     if (installRuntime) {
-      final mainBody = mainDeclaration!.functionExpression.body;
+      final mainBody =
+          mainDeclaration!.functionExpression.body as BlockFunctionBody;
       final runtimeFunctions = releaseFunctions ?? functions;
       final functionMap = <String, int>{
         for (final function in runtimeFunctions) function.id: function.slot,
@@ -370,33 +352,13 @@ final class E0SourceTransformer {
         runtimeInit.write('\n  ');
         runtimeInit.write(bootstrapInvocation);
       }
-      if (mainBody is BlockFunctionBody) {
-        edits.add(
-          _Edit(
-            mainBody.block.leftBracket.end,
-            'runtime-init',
-            runtimeInit.toString(),
-          ),
-        );
-      } else if (mainBody is ExpressionFunctionBody) {
-        final returnsValue = mainDeclaration.returnType?.toSource() != 'void';
-        edits.add(
-          _Edit(
-            mainBody.expression.offset,
-            'runtime-init',
-            '(()${mainBody.keyword == null ? '' : ' async'} {'
-                '${runtimeInit.toString()}\n  '
-                '${returnsValue ? 'return ' : ''}',
-          ),
-        );
-        edits.add(
-          _Edit(mainBody.expression.end, 'runtime-init-tail', '; })()'),
-        );
-      } else {
-        throw const FormatException(
-          'E0 requires a supported main function body',
-        );
-      }
+      edits.add(
+        _Edit(
+          mainBody.block.leftBracket.end,
+          'runtime-init',
+          runtimeInit.toString(),
+        ),
+      );
       if (bootstrapImport != null) {
         edits.add(
           _Edit(
@@ -537,32 +499,17 @@ final class E0SourceTransformer {
     return null;
   }
 
-  static bool _isSupportedMainBody(FunctionBody body) =>
-      body is BlockFunctionBody || body is ExpressionFunctionBody;
-
-  static bool _extendsFlutterWidget(ClassDeclaration declaration) {
-    final superclass = declaration.extendsClause?.superclass.toSource();
-    if (superclass == 'StatelessWidget') return true;
-    final base = superclass?.split('<').first.trim();
-    // Framework state wrappers such as Riverpod's ConsumerState<T> retain
-    // the ordinary Flutter State<T> widget ABI. Keep this structural and
-    // framework-agnostic; the canonical Flutter import check remains the
-    // boundary against shadowed or synthetic widget types.
-    return base != null && base.endsWith('State');
-  }
+  static bool _extendsStatelessWidget(ClassDeclaration declaration) =>
+      declaration.extendsClause?.superclass.toSource() == 'StatelessWidget';
 
   static bool _hasCanonicalFlutterWidgetImport(CompilationUnit unit) {
     final imports = unit.directives.whereType<ImportDirective>().where(
       (directive) =>
           directive.uri.stringValue?.startsWith('package:flutter/') ?? false,
     );
-    return imports.any(
-      (directive) =>
-          directive.prefix == null &&
-          directive.combinators.isEmpty &&
-          (directive.uri.stringValue == 'package:flutter/material.dart' ||
-              directive.uri.stringValue == 'package:flutter/widgets.dart'),
-    );
+    return imports.length == 1 &&
+        imports.single.prefix == null &&
+        imports.single.combinators.isEmpty;
   }
 
   E0ReceiverDescriptor _receiverDescriptor({
@@ -570,25 +517,12 @@ final class E0SourceTransformer {
     required ClassDeclaration owner,
     required Map<String, ClassDeclaration> classes,
     required String canonicalLibraryUri,
-    bool collectImplicitReceiverReads = false,
   }) {
     if (owner.typeParameters != null) {
       throw const FormatException('generic owner class');
     }
     final referencedNames = <String>{};
-    final receiverPropertyNames = collectImplicitReceiverReads
-        ? _supportedReceiverPropertyNames(owner: owner, classes: classes)
-        : const <String>{};
-    method.body.accept(
-      _ThisPropertyReadVisitor(
-        referencedNames,
-        receiverPropertyNames: receiverPropertyNames,
-        shadowedNames: {
-          for (final parameter in method.parameters!.parameters)
-            if (parameter.name != null) parameter.name!.lexeme,
-        },
-      ),
-    );
+    method.body.accept(_ThisPropertyReadVisitor(referencedNames));
     final unresolved = <String>[];
     final resolved = <({String id, String name, E0ValueSchema schema})>[];
     for (final name in referencedNames) {
@@ -645,61 +579,6 @@ final class E0SourceTransformer {
       ownerClass: owner.name.lexeme,
       members: List.unmodifiable(members),
     );
-  }
-
-  static Set<String> _receiverPropertyNames({
-    required ClassDeclaration owner,
-    required Map<String, ClassDeclaration> classes,
-    Set<String>? seen,
-  }) {
-    final visited = seen ?? <String>{};
-    if (!visited.add(owner.name.lexeme)) return <String>{};
-    final names = <String>{};
-    for (final member in owner.members) {
-      if (member is FieldDeclaration && !member.isStatic) {
-        names.addAll(
-          member.fields.variables.map((variable) => variable.name.lexeme),
-        );
-      }
-      if (member is MethodDeclaration && member.isGetter && !member.isStatic) {
-        names.add(member.name.lexeme);
-      }
-    }
-    final parentName = owner.extendsClause?.superclass.name.lexeme;
-    final parent = parentName == null ? null : classes[parentName];
-    if (parent != null) {
-      names.addAll(
-        _receiverPropertyNames(owner: parent, classes: classes, seen: visited),
-      );
-    }
-    return names;
-  }
-
-  static Set<String> _supportedReceiverPropertyNames({
-    required ClassDeclaration owner,
-    required Map<String, ClassDeclaration> classes,
-  }) {
-    final supported = <String>{};
-    for (final name in _receiverPropertyNames(owner: owner, classes: classes)) {
-      final property = _resolveProperty(
-        owner: owner,
-        name: name,
-        classes: classes,
-      );
-      if (property == null) continue;
-      try {
-        e0HostSchemaForType(
-          property.type.toSource(),
-          'receiver property ${property.declaringClass}.$name',
-        );
-        supported.add(name);
-      } on FormatException {
-        // Unsupported framework/native receiver values remain outside the
-        // implicit-read set. An explicit `this.value` still fails closed
-        // below, while a patch that does not use the value can be selected.
-      }
-    }
-    return supported;
   }
 
   static ({String declaringClass, TypeAnnotation type})? _resolveProperty({
@@ -832,7 +711,6 @@ final class E0OverlayBuilder {
     List<E0WidgetFactoryDescriptor> widgetFactories =
         const <E0WidgetFactoryDescriptor>[],
     Set<String> widgetBuildClasses = const <String>{},
-    bool enableFlutterWidgetAbi = false,
     bool allowSyntheticWidgetTypes = false,
   }) {
     final before = input.readAsBytesSync();
@@ -866,7 +744,6 @@ final class E0OverlayBuilder {
       capabilities: capabilities,
       widgetFactories: widgetFactories,
       widgetBuildClasses: widgetBuildClasses,
-      enableFlutterWidgetAbi: enableFlutterWidgetAbi,
       allowSyntheticWidgetTypes: allowSyntheticWidgetTypes,
     );
     outputDirectory.createSync(recursive: true);
@@ -1232,7 +1109,7 @@ final class E0PackageOverlayBuilder {
     final discoveredFunctions = discovered.values
         .expand((result) => result.manifest.functions)
         .toList();
-    discoveredFunctions.sort(_compareFunctionManifests);
+    discoveredFunctions.sort((left, right) => left.id.compareTo(right.id));
     final identityMaterial = <String, String>{};
     for (final function in discoveredFunctions) {
       final prior = identityMaterial[function.id];
@@ -1493,38 +1370,6 @@ final class _ResolvedPackageUnit {
   final bool isEntrypoint;
 }
 
-bool _isWidgetBuildSignature(E0FunctionSignature signature) =>
-    signature == e0WidgetBuildSignature ||
-    signature == e0FlutterWidgetBuildSignature;
-
-bool _usesAdditiveAbi(E0FunctionSignature signature) =>
-    _isWidgetBuildSignature(signature) ||
-    signature.returnSchema.kind == E0ValueKind.voidValue ||
-    signature.parameters.any((schema) => schema.kind == E0ValueKind.host);
-
-int _compareCandidates(_Candidate left, _Candidate right) {
-  final leftIsAdditive = _usesAdditiveAbi(left.signature);
-  final rightIsAdditive = _usesAdditiveAbi(right.signature);
-  if (leftIsAdditive != rightIsAdditive) return leftIsAdditive ? 1 : -1;
-  final leftIsWidget = _isWidgetBuildSignature(left.signature);
-  final rightIsWidget = _isWidgetBuildSignature(right.signature);
-  if (leftIsWidget != rightIsWidget) return leftIsWidget ? 1 : -1;
-  return left.id.compareTo(right.id);
-}
-
-int _compareFunctionManifests(
-  E0FunctionManifest left,
-  E0FunctionManifest right,
-) {
-  final leftIsAdditive = _usesAdditiveAbi(left.signature);
-  final rightIsAdditive = _usesAdditiveAbi(right.signature);
-  if (leftIsAdditive != rightIsAdditive) return leftIsAdditive ? 1 : -1;
-  final leftIsWidget = _isWidgetBuildSignature(left.signature);
-  final rightIsWidget = _isWidgetBuildSignature(right.signature);
-  if (leftIsWidget != rightIsWidget) return leftIsWidget ? 1 : -1;
-  return left.id.compareTo(right.id);
-}
-
 final class _Candidate {
   const _Candidate({
     required this.name,
@@ -1550,55 +1395,14 @@ final class _Candidate {
 }
 
 final class _ThisPropertyReadVisitor extends RecursiveAstVisitor<void> {
-  _ThisPropertyReadVisitor(
-    this.names, {
-    this.receiverPropertyNames = const <String>{},
-    Set<String> shadowedNames = const <String>{},
-  }) : _shadowedNames = {...shadowedNames};
+  _ThisPropertyReadVisitor(this.names);
 
   final Set<String> names;
-  final Set<String> receiverPropertyNames;
-  final Set<String> _shadowedNames;
 
   @override
   void visitPropertyAccess(PropertyAccess node) {
     if (node.target is ThisExpression) names.add(node.propertyName.name);
     super.visitPropertyAccess(node);
-  }
-
-  @override
-  void visitSimpleIdentifier(SimpleIdentifier node) {
-    final parent = node.parent;
-    final isMemberName =
-        (parent is PropertyAccess && identical(parent.propertyName, node)) ||
-        (parent is PrefixedIdentifier && identical(parent.identifier, node)) ||
-        (parent is MethodInvocation && identical(parent.methodName, node)) ||
-        (parent is NamedExpression && identical(parent.name, node));
-    if (!isMemberName &&
-        receiverPropertyNames.contains(node.name) &&
-        !_shadowedNames.contains(node.name)) {
-      names.add(node.name);
-    }
-    super.visitSimpleIdentifier(node);
-  }
-
-  @override
-  void visitVariableDeclaration(VariableDeclaration node) {
-    _shadowedNames.add(node.name.lexeme);
-    super.visitVariableDeclaration(node);
-  }
-
-  @override
-  void visitDeclaredIdentifier(DeclaredIdentifier node) {
-    _shadowedNames.add(node.name.lexeme);
-    super.visitDeclaredIdentifier(node);
-  }
-
-  @override
-  void visitSimpleFormalParameter(SimpleFormalParameter node) {
-    final name = node.name;
-    if (name != null) _shadowedNames.add(name.lexeme);
-    super.visitSimpleFormalParameter(node);
   }
 }
 

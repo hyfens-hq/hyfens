@@ -385,11 +385,9 @@ would:
   an explicit managed-signing decision; or
 - turn incomplete observations into claims of runtime health or activation.
 
-## 13. Hosted-like control-plane foundation (implemented, not production)
+## 13. P2 hosted-like foundation (implemented, not production)
 
-The historical internal “P2” label referred to this hosted-like foundation; it
-is not the public API version or URL path. The bounded hosted-like adapter
-keeps the same authority split while replacing only
+The bounded P2 adapter keeps the same authority split while replacing only
 the persistence and artifact adapters:
 
 ```text

@@ -38,12 +38,14 @@ const String platformAuditReadCapability = 'platform:audit:read';
 const String platformOperationsReadCapability = 'platform:operations:read';
 const String platformAccountsReadCapability = 'platform:accounts:read';
 const String platformEntitlementsReadCapability = 'platform:entitlements:read';
-const String platformCommercialReadCapability = 'platform:commercial:read';
-const String platformSupportReadCapability = 'platform:support:read';
-const String platformSupportWriteCapability = 'platform:support:write';
-const String platformStaffManageCapability = 'platform:staff:manage';
-const String platformSessionsRevokeCapability = 'platform:sessions:revoke';
-const String platformSystemOrganizationId = 'platform_system';
+const String platformEnterpriseQuotesReadCapability =
+    'platform:enterprise_quotes:read';
+const String platformEnterpriseQuotesManageCapability =
+    'platform:enterprise_quotes:manage';
+const String platformBillingRefundsReadCapability =
+    'platform:billing_refunds:read';
+const String platformBillingRefundsManageCapability =
+    'platform:billing_refunds:manage';
 
 const Set<String> platformCapabilities = <String>{
   platformOverviewCapability,
@@ -53,144 +55,13 @@ const Set<String> platformCapabilities = <String>{
   platformOperationsReadCapability,
   platformAccountsReadCapability,
   platformEntitlementsReadCapability,
-  platformCommercialReadCapability,
-  platformSupportReadCapability,
-  platformSupportWriteCapability,
-  platformStaffManageCapability,
-  platformSessionsRevokeCapability,
+  platformEnterpriseQuotesReadCapability,
+  platformEnterpriseQuotesManageCapability,
+  platformBillingRefundsReadCapability,
+  platformBillingRefundsManageCapability,
 };
 
 const Set<String> supportedPlatformCapabilities = platformCapabilities;
-
-/// Small, explicit platform staff bundles. Frontends consume the resulting
-/// capability set; role names are only an administration convenience.
-const Map<String, Set<String>> platformRoleCapabilities = <String, Set<String>>{
-  'admin': platformCapabilities,
-  'support': <String>{
-    platformOverviewCapability,
-    platformOrganizationsReadCapability,
-    platformOrganizationsInspectCapability,
-    platformAccountsReadCapability,
-    platformAuditReadCapability,
-    platformSupportReadCapability,
-    platformSupportWriteCapability,
-  },
-  'operations': <String>{
-    platformOverviewCapability,
-    platformOrganizationsReadCapability,
-    platformOrganizationsInspectCapability,
-    platformOperationsReadCapability,
-    platformAuditReadCapability,
-  },
-  'commercial': <String>{
-    platformOverviewCapability,
-    platformOrganizationsReadCapability,
-    platformOrganizationsInspectCapability,
-    platformEntitlementsReadCapability,
-    platformCommercialReadCapability,
-  },
-  'security': <String>{
-    platformOverviewCapability,
-    platformOrganizationsInspectCapability,
-    platformAccountsReadCapability,
-    platformAuditReadCapability,
-    platformOperationsReadCapability,
-    platformSessionsRevokeCapability,
-  },
-};
-
-Set<String> platformCapabilitiesForRole(String role) {
-  final capabilities = platformRoleCapabilities[role];
-  if (capabilities == null) {
-    throw const ControlPlaneException(
-      'INVALID_PLATFORM_ROLE',
-      'The requested platform staff role is not supported',
-      statusCode: 422,
-    );
-  }
-  return Set.unmodifiable(capabilities);
-}
-
-/// Small, capability-based customer role bundles used by invitations and
-/// member administration. Frontends should consume the resulting capability
-/// set instead of branching on these names.
-const Map<String, Set<String>> customerRoleCapabilities = <String, Set<String>>{
-  'owner': controlScopes,
-  'admin': <String>{
-    'application:read',
-    applicationWriteScope,
-    'release:read',
-    'release:write',
-    'patch:read',
-    'patch:write',
-    'artifact:read',
-    'artifact:write',
-    environmentWriteScope,
-    'release:promote',
-    'bundle:read',
-    'bundle:write',
-    'audit:read',
-    organizationMembersReadScope,
-    organizationMembersWriteScope,
-    credentialReadScope,
-    'credential:issue',
-    'credential:revoke',
-    billingReadScope,
-    supportReadScope,
-    supportCreateScope,
-    supportReplyScope,
-  },
-  'developer': <String>{
-    'application:read',
-    'release:read',
-    'release:write',
-    'patch:read',
-    'patch:write',
-    'artifact:read',
-    'artifact:write',
-    'rollout:read',
-    'audit:read',
-    supportReadScope,
-    supportCreateScope,
-    supportReplyScope,
-  },
-  'release-manager': <String>{
-    'application:read',
-    'release:read',
-    'release:write',
-    'patch:read',
-    'patch:write',
-    'artifact:read',
-    'artifact:write',
-    'release:promote',
-    'rollout:read',
-    'audit:read',
-    supportReadScope,
-    supportCreateScope,
-    supportReplyScope,
-  },
-  'auditor': <String>{
-    'application:read',
-    'release:read',
-    'patch:read',
-    'artifact:read',
-    'rollout:read',
-    'audit:read',
-    supportReadScope,
-  },
-};
-
-Set<String> customerCapabilitiesForRole(String role) {
-  final capabilities = customerRoleCapabilities[role];
-  if (capabilities == null) {
-    throw const ControlPlaneException(
-      'INVALID_MEMBER_ROLE',
-      'The requested customer member role is not supported',
-      statusCode: 422,
-    );
-  }
-  return Set.unmodifiable(capabilities);
-}
 
 bool _isSupportedAuthorizationAudience(String value) =>
     value == customerAuthorizationAudience ||
@@ -221,10 +92,11 @@ final class HumanAuthConfig {
     this.devicePollInterval = const Duration(seconds: 5),
     this.deviceMaxAttempts = 30,
     this.deviceAttemptsPerMinute = 10,
+    this.verificationTtl = const Duration(minutes: 30),
+    this.recoveryTtl = const Duration(minutes: 30),
     Iterable<String> allowedAuthorizationRedirectUris = const <String>[],
     String deviceVerificationUri = '/auth/device/verify',
     Iterable<String> platformAdminEmails = const <String>[],
-    this.platformMfaRequired = false,
   }) : issuer = _boundedText(issuer, 'issuer', 256),
        audience = _boundedText(audience, 'audience', 256),
        signingKeySeed = _fixedBytes(signingKeySeed, 32, 'signing key seed'),
@@ -280,6 +152,16 @@ final class HumanAuthConfig {
         'must be between 1 and 1000',
       );
     }
+    _positiveBoundedDuration(
+      verificationTtl,
+      'verificationTtl',
+      const Duration(days: 7),
+    );
+    _positiveBoundedDuration(
+      recoveryTtl,
+      'recoveryTtl',
+      const Duration(days: 7),
+    );
   }
 
   final String issuer;
@@ -294,10 +176,11 @@ final class HumanAuthConfig {
   final Duration devicePollInterval;
   final int deviceMaxAttempts;
   final int deviceAttemptsPerMinute;
+  final Duration verificationTtl;
+  final Duration recoveryTtl;
   final Set<String> allowedAuthorizationRedirectUris;
   final String deviceVerificationUri;
   final Set<String> platformAdminEmails;
-  final bool platformMfaRequired;
 
   /// Reads the auth configuration without inventing a signing secret.
   ///
@@ -318,10 +201,11 @@ final class HumanAuthConfig {
       'HYFENS_AUTH_DEVICE_POLL_INTERVAL',
       'HYFENS_AUTH_DEVICE_MAX_ATTEMPTS',
       'HYFENS_AUTH_DEVICE_ATTEMPTS_PER_MINUTE',
+      'HYFENS_AUTH_VERIFICATION_TTL',
+      'HYFENS_AUTH_RECOVERY_TTL',
       'HYFENS_AUTH_ALLOWED_REDIRECT_URIS',
       'HYFENS_AUTH_DEVICE_VERIFICATION_URI',
       'HYFENS_PLATFORM_ADMIN_EMAILS',
-      'HYFENS_PLATFORM_MFA_REQUIRED',
     };
     final configured = names.any((name) => _isMeaningfulSetting(values[name]));
     final encodedSeed = values['HYFENS_AUTH_SIGNING_KEY'];
@@ -382,6 +266,14 @@ final class HumanAuthConfig {
         'HYFENS_AUTH_DEVICE_ATTEMPTS_PER_MINUTE',
         maximum: 1000,
       ),
+      verificationTtl: _duration(
+        _valueOrDefault(values['HYFENS_AUTH_VERIFICATION_TTL'], '30m'),
+        'HYFENS_AUTH_VERIFICATION_TTL',
+      ),
+      recoveryTtl: _duration(
+        _valueOrDefault(values['HYFENS_AUTH_RECOVERY_TTL'], '30m'),
+        'HYFENS_AUTH_RECOVERY_TTL',
+      ),
       allowedAuthorizationRedirectUris: _parseRedirectUris(
         values['HYFENS_AUTH_ALLOWED_REDIRECT_URIS'],
       ),
@@ -391,10 +283,6 @@ final class HumanAuthConfig {
       ),
       platformAdminEmails: _parsePlatformAdminEmails(
         values['HYFENS_PLATFORM_ADMIN_EMAILS'],
-      ),
-      platformMfaRequired: _parseBoolean(
-        values['HYFENS_PLATFORM_MFA_REQUIRED'],
-        'HYFENS_PLATFORM_MFA_REQUIRED',
       ),
     );
   }
@@ -497,13 +385,6 @@ final class HumanAuthConfig {
   static List<String> _parsePlatformAdminEmails(String? value) {
     if (value == null || value.isEmpty) return const <String>[];
     return value.split(',');
-  }
-
-  static bool _parseBoolean(String? value, String field) {
-    if (value == null || value.isEmpty) return false;
-    if (value == 'true') return true;
-    if (value == 'false') return false;
-    throw ArgumentError('$field must be true or false');
   }
 
   static String _verificationUri(String value) {
@@ -672,7 +553,6 @@ final class HumanMembership {
     String? environmentId,
     String? profileApplicationId,
     String? profileEnvironmentId,
-    this.active = true,
   }) : organizationId = requireOpaqueId(
          organizationId,
          'membership organization ID',
@@ -708,7 +588,10 @@ final class HumanMembership {
       throw const FormatException('Invalid membership role');
     }
     if (this.capabilities.isEmpty ||
-        this.capabilities.difference(controlScopes).isNotEmpty) {
+        this.capabilities.difference(<String>{
+          ...controlScopes,
+          billingManageScope,
+        }).isNotEmpty) {
       throw const FormatException(
         'Membership contains an unsupported capability',
       );
@@ -736,7 +619,6 @@ final class HumanMembership {
   final String profileName;
   final String audience;
   final Set<String> platformCapabilities;
-  final bool active;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'organizationId': organizationId,
@@ -749,7 +631,6 @@ final class HumanMembership {
     'profileName': profileName,
     'audience': audience,
     'platformCapabilities': platformCapabilities.toList()..sort(),
-    'active': active,
   };
 
   static HumanMembership fromJson(Map<String, Object?> value) {
@@ -778,7 +659,6 @@ final class HumanMembership {
       profileName: value['profileName']! as String,
       audience: value['audience'] as String? ?? customerAuthorizationAudience,
       platformCapabilities: parsedPlatformCapabilities,
-      active: value['active'] as bool? ?? true,
     );
   }
 }
@@ -791,14 +671,14 @@ final class HumanUserRecord {
     required this.active,
     required Iterable<HumanMembership> memberships,
     required this.createdAt,
+    this.emailVerified = true,
+    this.emailVerifiedAt,
+    this.deletedAt,
   }) : id = requireOpaqueId(id, 'human user ID'),
        email = HumanAuthService.normalizeHumanEmail(email),
        memberships = List.unmodifiable(memberships) {
     if (passwordHash.isEmpty || passwordHash.length > 1024) {
       throw const FormatException('Invalid password hash');
-    }
-    if (this.memberships.isEmpty) {
-      throw const FormatException('Human user must have a membership');
     }
   }
 
@@ -808,17 +688,25 @@ final class HumanUserRecord {
   final bool active;
   final List<HumanMembership> memberships;
   final DateTime createdAt;
+  final bool emailVerified;
+  final DateTime? emailVerifiedAt;
+  final DateTime? deletedAt;
 
   HumanUserRecord copyWith({
     Iterable<HumanMembership>? memberships,
-    bool? active,
+    bool? emailVerified,
+    DateTime? emailVerifiedAt,
+    DateTime? deletedAt,
   }) => HumanUserRecord(
     id: id,
     email: email,
     passwordHash: passwordHash,
-    active: active ?? this.active,
+    active: active,
     memberships: memberships ?? this.memberships,
     createdAt: createdAt,
+    emailVerified: emailVerified ?? this.emailVerified,
+    emailVerifiedAt: emailVerifiedAt ?? this.emailVerifiedAt,
+    deletedAt: deletedAt ?? this.deletedAt,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -828,6 +716,9 @@ final class HumanUserRecord {
     'active': active,
     'memberships': memberships.map((item) => item.toJson()).toList(),
     'createdAt': createdAt.toUtc().toIso8601String(),
+    'emailVerified': emailVerified,
+    'emailVerifiedAt': emailVerifiedAt?.toUtc().toIso8601String(),
+    'deletedAt': deletedAt?.toUtc().toIso8601String(),
   };
 
   static HumanUserRecord fromJson(Map<String, Object?> value) {
@@ -836,6 +727,11 @@ final class HumanUserRecord {
         rawMemberships.any((item) => item is! Map)) {
       throw const FormatException('Invalid human user memberships');
     }
+    final createdAt = DateTime.parse(value['createdAt']! as String);
+    final emailVerified = value['emailVerified'] as bool? ?? true;
+    final emailVerifiedAt = value['emailVerifiedAt'] is String
+        ? DateTime.parse(value['emailVerifiedAt']! as String)
+        : (emailVerified ? createdAt : null);
     return HumanUserRecord(
       id: value['id']! as String,
       email: value['email']! as String,
@@ -847,7 +743,12 @@ final class HumanUserRecord {
             '${entry.key}': entry.value,
         }),
       ),
-      createdAt: DateTime.parse(value['createdAt']! as String),
+      createdAt: createdAt,
+      emailVerified: emailVerified,
+      emailVerifiedAt: emailVerifiedAt,
+      deletedAt: value['deletedAt'] is String
+          ? DateTime.parse(value['deletedAt']! as String)
+          : null,
     );
   }
 }
@@ -862,7 +763,6 @@ final class HumanSessionRecord {
     required this.lastUsedAt,
     required this.revokedAt,
     this.audience = customerAuthorizationAudience,
-    this.mfaVerified = false,
   }) : id = requireOpaqueId(id, 'human session ID'),
        userId = requireOpaqueId(userId, 'human session user ID'),
        secretHash = requireNonEmpty(secretHash, 'human session secret hash') {
@@ -879,23 +779,18 @@ final class HumanSessionRecord {
   final DateTime lastUsedAt;
   final DateTime? revokedAt;
   final String audience;
-  final bool mfaVerified;
 
-  HumanSessionRecord copyWith({
-    DateTime? lastUsedAt,
-    DateTime? revokedAt,
-    bool? mfaVerified,
-  }) => HumanSessionRecord(
-    id: id,
-    userId: userId,
-    secretHash: secretHash,
-    createdAt: createdAt,
-    expiresAt: expiresAt,
-    lastUsedAt: lastUsedAt ?? this.lastUsedAt,
-    revokedAt: revokedAt ?? this.revokedAt,
-    audience: audience,
-    mfaVerified: mfaVerified ?? this.mfaVerified,
-  );
+  HumanSessionRecord copyWith({DateTime? lastUsedAt, DateTime? revokedAt}) =>
+      HumanSessionRecord(
+        id: id,
+        userId: userId,
+        secretHash: secretHash,
+        createdAt: createdAt,
+        expiresAt: expiresAt,
+        lastUsedAt: lastUsedAt ?? this.lastUsedAt,
+        revokedAt: revokedAt ?? this.revokedAt,
+        audience: audience,
+      );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
@@ -906,7 +801,6 @@ final class HumanSessionRecord {
     'lastUsedAt': lastUsedAt.toUtc().toIso8601String(),
     'revokedAt': revokedAt?.toUtc().toIso8601String(),
     'audience': audience,
-    'mfaVerified': mfaVerified,
   };
 
   static HumanSessionRecord fromJson(Map<String, Object?> value) =>
@@ -921,7 +815,6 @@ final class HumanSessionRecord {
             ? null
             : DateTime.parse(value['revokedAt']! as String),
         audience: value['audience'] as String? ?? customerAuthorizationAudience,
-        mfaVerified: value['mfaVerified'] as bool? ?? false,
       );
 }
 
@@ -961,15 +854,90 @@ final class HumanAuthProfile {
   };
 }
 
+/// Durable-auth message delivery is deliberately an injected seam. The
+/// control plane owns token generation and persistence, while the deployment
+/// supplies the provider that delivers a verification or recovery message.
+/// Implementations must never log the raw token.
+abstract interface class HumanAuthMessageDelivery {
+  Future<void> sendVerificationEmail({
+    required String email,
+    required String token,
+    required DateTime expiresAt,
+  });
+
+  Future<void> sendRecoveryEmail({
+    required String email,
+    required String token,
+    required DateTime expiresAt,
+  });
+}
+
+/// Separate delivery seam for privacy deletion messages. Keeping this out of
+/// [HumanAuthMessageDelivery] preserves compatibility with existing
+/// verification/recovery providers while making deletion links purpose-bound.
+abstract interface class HumanDeletionMessageDelivery {
+  Future<void> sendDeletionEmail({
+    required String email,
+    required String token,
+    required DateTime expiresAt,
+  });
+}
+
+/// Provider-neutral hook for security notifications emitted by the auth
+/// domain. The auth service remains the authority for password changes; a
+/// notification sink only records the consequence for later delivery.
+abstract interface class HumanAuthNotificationSink {
+  Future<void> sendPasswordChanged({
+    required HumanUserRecord user,
+    required DateTime occurredAt,
+  });
+}
+
+final class HumanRegistrationResult {
+  const HumanRegistrationResult({required this.expiresAt});
+
+  final DateTime expiresAt;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'status': 'verification_required',
+    'expires_at': expiresAt.toUtc().toIso8601String(),
+  };
+}
+
+final class HumanEmailVerificationResult {
+  const HumanEmailVerificationResult({
+    required this.user,
+    required this.organizationName,
+  });
+
+  final HumanUserRecord user;
+  final String organizationName;
+}
+
+final class HumanRecoveryRequestResult {
+  const HumanRecoveryRequestResult();
+
+  Map<String, Object?> toJson() => const <String, Object?>{
+    'status': 'accepted',
+  };
+}
+
 final class HumanIdentity {
-  const HumanIdentity({required this.user, required this.profiles});
+  const HumanIdentity({
+    required this.user,
+    required this.profiles,
+    required this.authorizationAudience,
+  });
 
   final HumanUserRecord user;
   final List<HumanAuthProfile> profiles;
+  final String authorizationAudience;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'user_id': user.id,
     'email': user.email,
+    'email_verified': user.emailVerified,
+    'authorization_audience': authorizationAudience,
     'profiles': profiles.map((item) => item.toJson()).toList(),
   };
 }
@@ -1152,6 +1120,9 @@ final class HumanAuthService {
   HumanAuthService({
     required this.store,
     required this.config,
+    this.messageDelivery,
+    this.deletionMessageDelivery,
+    this.notificationSink,
     Random? random,
     DateTime Function()? clock,
   }) : _random = random ?? Random.secure(),
@@ -1183,6 +1154,9 @@ final class HumanAuthService {
 
   final ControlPlaneStore store;
   final HumanAuthConfig config;
+  final HumanAuthMessageDelivery? messageDelivery;
+  final HumanDeletionMessageDelivery? deletionMessageDelivery;
+  HumanAuthNotificationSink? notificationSink;
   final Random _random;
   final DateTime Function() _clock;
   final Ed25519 _ed25519 = DartEd25519();
@@ -1194,7 +1168,23 @@ final class HumanAuthService {
   );
   final Map<String, List<int>> _verificationKeys = <String, List<int>>{};
   Future<void> _writeTail = Future<void>.value();
+  Future<void> Function(String organizationId)? _memberAdmissionCheck;
   bool _initialized = false;
+
+  /// Installs the Cloud plan admission seam without making human-auth depend
+  /// on the billing implementation. Self-hosted services clear this hook so
+  /// Cloud quotas cannot leak into the open-source deployment model.
+  void setMemberAdmissionCheck(
+    Future<void> Function(String organizationId)? check,
+  ) {
+    _memberAdmissionCheck = check;
+  }
+
+  /// Installs the notification consequence sink without making authentication
+  /// depend on a concrete mail provider or queue implementation.
+  void setNotificationSink(HumanAuthNotificationSink? sink) {
+    notificationSink = sink;
+  }
 
   Future<void> initialize() async {
     if (_initialized) return;
@@ -1246,7 +1236,9 @@ final class HumanAuthService {
       profileApplicationId: applicationId,
       profileEnvironmentId: environmentId,
       role: 'owner',
-      capabilities: controlScopes,
+      capabilities: profileName == 'super-admin'
+          ? controlScopes
+          : customerOwnerScopes,
       profileName: profileName,
       audience: profileName == 'super-admin'
           ? platformAuthorizationAudience
@@ -1255,6 +1247,19 @@ final class HumanAuthService {
           ? platformCapabilities
           : const <String>{},
     );
+    final users = await _users();
+    final existing = users.where((item) => item.email == normalizedEmail);
+    if (ownerMembership.audience == customerAuthorizationAudience) {
+      final existingUser = existing.isEmpty ? null : existing.first;
+      final alreadyCustomerMember = existingUser?.memberships.any(
+        (membership) =>
+            membership.organizationId == organizationId &&
+            membership.audience == customerAuthorizationAudience,
+      );
+      if (existingUser == null || alreadyCustomerMember != true) {
+        await _memberAdmissionCheck?.call(organizationId);
+      }
+    }
     final bootstrapId = '$organizationId:$applicationId:$environmentId';
     final plannedUserId =
         'usr_${sha256Hex(utf8.encode(normalizedEmail)).substring(0, 32)}';
@@ -1289,8 +1294,6 @@ final class HumanAuthService {
         );
       }
     }
-    final users = await _users();
-    final existing = users.where((item) => item.email == normalizedEmail);
     if (existing.isNotEmpty) {
       final user = existing.first;
       final sameScope = user.memberships.indexWhere(
@@ -1391,6 +1394,17 @@ final class HumanAuthService {
       profileName: profileName,
       audience: customerAuthorizationAudience,
     );
+    final users = await _users();
+    final existing = users.where((item) => item.email == normalizedEmail);
+    final existingUser = existing.isEmpty ? null : existing.first;
+    final alreadyCustomerMember = existingUser?.memberships.any(
+      (membership) =>
+          membership.organizationId == organizationId &&
+          membership.audience == customerAuthorizationAudience,
+    );
+    if (alreadyCustomerMember != true) {
+      await _memberAdmissionCheck?.call(organizationId);
+    }
     final bootstrapId = 'admin:$organizationId:$applicationId:$environmentId';
     final plannedUserId =
         'usr_${sha256Hex(utf8.encode(normalizedEmail)).substring(0, 32)}';
@@ -1431,8 +1445,6 @@ final class HumanAuthService {
         );
       }
     }
-    final users = await _users();
-    final existing = users.where((item) => item.email == normalizedEmail);
     if (existing.isNotEmpty) {
       final user = existing.first;
       final sameScope = user.memberships.indexWhere(
@@ -1512,6 +1524,7 @@ final class HumanAuthService {
     if (users.any((user) => user.email == normalizedEmail)) {
       _emailAlreadyRegistered();
     }
+    await _memberAdmissionCheck?.call(organizationId);
     final membership = HumanMembership(
       organizationId: organizationId,
       role: 'client',
@@ -1542,224 +1555,491 @@ final class HumanAuthService {
     return _issueSessionForUser(user);
   });
 
-  /// Hashes a password for a verified managed-Cloud registration. The caller
-  /// receives only the Argon2id record and cannot choose the salt or hashing
-  /// parameters. This remains an internal service seam; HTTP callers never
-  /// receive a password hash.
-  Future<String> hashPasswordForRegistration(String password) =>
-      _serialized(() async {
-        await _ensureInitialized();
-        _validatePassword(password);
-        return _hashPassword(password);
-      });
-
-  /// Returns an account record for trusted service-layer invitation flows.
-  /// Callers receive the password hash only inside the control-plane process;
-  /// HTTP projections never expose this method or the record directly.
-  Future<HumanUserRecord?> userByEmail(String email) async {
-    final normalizedEmail = normalizeHumanEmail(email);
-    for (final user in await _users()) {
-      if (user.email == normalizedEmail) return user;
-    }
-    return null;
-  }
-
-  Future<HumanUserRecord?> userById(String userId) async {
-    final value = await store.readJson('users', userId);
-    return value == null ? null : HumanUserRecord.fromJson(value);
-  }
-
-  /// Creates the account portion of a customer invitation acceptance. The
-  /// invitation service owns token validation and membership idempotency.
-  Future<HumanLoginResult> registerInvitedCustomer({
-    required String organizationId,
+  /// Starts customer-owned Cloud onboarding. The identity is intentionally
+  /// persisted without a membership until the email verification token is
+  /// consumed; no customer session or workspace is issued before then.
+  Future<HumanRegistrationResult> registerCustomer({
     required String email,
     required String password,
-    required String role,
-    required Set<String> capabilities,
+    required String organizationName,
   }) => _serialized(() async {
     await _ensureInitialized();
-    _validatePassword(password);
-    final normalizedEmail = normalizeHumanEmail(email);
-    final existing = await userByEmail(normalizedEmail);
-    if (existing != null) _emailAlreadyRegistered();
-    final membership = HumanMembership(
-      organizationId: organizationId,
-      role: role,
-      capabilities: capabilities,
-      profileName: 'default',
-      audience: customerAuthorizationAudience,
-    );
+    if (messageDelivery == null) {
+      throw const ControlPlaneException(
+        'AUTH_DELIVERY_UNAVAILABLE',
+        'Account verification delivery is not configured',
+        statusCode: 503,
+      );
+    }
+    late final String normalizedEmail;
+    late final String normalizedOrganizationName;
+    try {
+      _validatePassword(password);
+      normalizedEmail = normalizeHumanEmail(email);
+      normalizedOrganizationName = _organizationName(organizationName);
+    } on ControlPlaneException {
+      throw const ControlPlaneException(
+        'INVALID_REGISTRATION',
+        'Email, password, or organization name does not meet the registration policy',
+        statusCode: 422,
+      );
+    } on FormatException {
+      throw const ControlPlaneException(
+        'INVALID_REGISTRATION',
+        'Email, password, or organization name does not meet the registration policy',
+        statusCode: 422,
+      );
+    }
+    final users = await _users();
+    if (users.any((user) => user.email == normalizedEmail)) {
+      _emailAlreadyRegistered();
+    }
+    final now = _now();
     final user = HumanUserRecord(
       id: 'usr_${sha256Hex(utf8.encode(normalizedEmail)).substring(0, 32)}',
       email: normalizedEmail,
       passwordHash: await _hashPassword(password),
       active: true,
-      memberships: <HumanMembership>[membership],
-      createdAt: _now(),
+      memberships: const <HumanMembership>[],
+      createdAt: now,
+      emailVerified: false,
     );
     await store.createJson('users', user.id, user.toJson());
+    final issued = await _issueOneTimeToken(
+      collection: 'auth_verification_tokens',
+      purpose: 'email_verification',
+      userId: user.id,
+      organizationName: normalizedOrganizationName,
+      ttl: config.verificationTtl,
+    );
+    try {
+      await messageDelivery!.sendVerificationEmail(
+        email: normalizedEmail,
+        token: issued['token']! as String,
+        expiresAt: issued['expiresAt']! as DateTime,
+      );
+    } on Object {
+      throw const ControlPlaneException(
+        'AUTH_DELIVERY_UNAVAILABLE',
+        'Account verification delivery is temporarily unavailable',
+        statusCode: 503,
+      );
+    }
+    return HumanRegistrationResult(expiresAt: issued['expiresAt']! as DateTime);
+  });
+
+  /// Resends a verification message without revealing whether an email is
+  /// registered. A pending identity can safely be retried after delivery
+  /// failure because token records are one-time and hashed at rest.
+  Future<HumanRecoveryRequestResult> resendCustomerVerification({
+    required String email,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    final normalizedEmail = normalizeHumanEmail(email);
+    final matchingUsers = (await _users())
+        .where((item) => item.email == normalizedEmail)
+        .toList(growable: false);
+    final user = matchingUsers.isEmpty ? null : matchingUsers.first;
+    if (user == null || user.emailVerified) {
+      return const HumanRecoveryRequestResult();
+    }
+    final delivery = messageDelivery;
+    if (delivery == null) {
+      throw const ControlPlaneException(
+        'AUTH_DELIVERY_UNAVAILABLE',
+        'Account verification delivery is temporarily unavailable',
+        statusCode: 503,
+      );
+    }
+    final issued = await _issueOneTimeToken(
+      collection: 'auth_verification_tokens',
+      purpose: 'email_verification',
+      userId: user.id,
+      organizationName: 'My Hyfens workspace',
+      ttl: config.verificationTtl,
+    );
+    try {
+      await delivery.sendVerificationEmail(
+        email: normalizedEmail,
+        token: issued['token']! as String,
+        expiresAt: issued['expiresAt']! as DateTime,
+      );
+    } on Object {
+      throw const ControlPlaneException(
+        'AUTH_DELIVERY_UNAVAILABLE',
+        'Account verification delivery is temporarily unavailable',
+        statusCode: 503,
+      );
+    }
+    return const HumanRecoveryRequestResult();
+  });
+
+  /// Consumes one verification token. Organization provisioning is performed
+  /// by [ControlPlaneService] after this method returns so the account and
+  /// tenant ownership boundary remains explicit.
+  Future<HumanEmailVerificationResult> verifyCustomerEmail({
+    required String token,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    final record = await _readOneTimeToken(
+      collection: 'auth_verification_tokens',
+      token: token,
+      purpose: 'email_verification',
+    );
+    final userValue = await store.readJson(
+      'users',
+      record['userId']! as String,
+    );
+    if (userValue == null) _invalidEmailVerification();
+    final user = HumanUserRecord.fromJson(userValue);
+    if (!user.active) _invalidEmailVerification();
+    final now = _now();
+    final verified = user.emailVerified
+        ? user
+        : HumanUserRecord(
+            id: user.id,
+            email: user.email,
+            passwordHash: user.passwordHash,
+            active: user.active,
+            memberships: user.memberships,
+            createdAt: user.createdAt,
+            emailVerified: true,
+            emailVerifiedAt: now,
+          );
+    if (!user.emailVerified) {
+      await store.replaceJson('users', user.id, verified.toJson());
+    }
+    await _consumeOneTimeToken(
+      collection: 'auth_verification_tokens',
+      record: record,
+      consumedAt: now,
+    );
+    return HumanEmailVerificationResult(
+      user: verified,
+      organizationName: _recordString(record, 'organizationName'),
+    );
+  });
+
+  Future<HumanRecoveryRequestResult> requestPasswordRecovery({
+    required String email,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    final normalizedEmail = normalizeHumanEmail(email);
+    final matchingUsers = (await _users())
+        .where((item) => item.email == normalizedEmail)
+        .toList(growable: false);
+    final user = matchingUsers.isEmpty ? null : matchingUsers.first;
+    if (user == null || !user.active) {
+      return const HumanRecoveryRequestResult();
+    }
+    final delivery = messageDelivery;
+    if (delivery == null) {
+      throw const ControlPlaneException(
+        'AUTH_DELIVERY_UNAVAILABLE',
+        'Account recovery delivery is temporarily unavailable',
+        statusCode: 503,
+      );
+    }
+    final issued = await _issueOneTimeToken(
+      collection: 'auth_recovery_tokens',
+      purpose: 'password_recovery',
+      userId: user.id,
+      ttl: config.recoveryTtl,
+    );
+    try {
+      await delivery.sendRecoveryEmail(
+        email: normalizedEmail,
+        token: issued['token']! as String,
+        expiresAt: issued['expiresAt']! as DateTime,
+      );
+    } on Object {
+      throw const ControlPlaneException(
+        'AUTH_DELIVERY_UNAVAILABLE',
+        'Account recovery delivery is temporarily unavailable',
+        statusCode: 503,
+      );
+    }
+    return const HumanRecoveryRequestResult();
+  });
+
+  /// Starts the privacy deletion request without revealing whether the
+  /// address belongs to an account. The raw token is delivered only through
+  /// the dedicated deletion channel and is never persisted.
+  Future<HumanRecoveryRequestResult> requestAccountDeletion({
+    required String email,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    final normalizedEmail = normalizeHumanEmail(email);
+    final matchingUsers = (await _users())
+        .where((item) => item.email == normalizedEmail && item.active)
+        .toList(growable: false);
+    final user = matchingUsers.isEmpty ? null : matchingUsers.first;
+    final delivery = deletionMessageDelivery;
+    if (user == null || delivery == null) {
+      // Keep the public response neutral even when this deployment has not
+      // configured production deletion-mail delivery. A distinct error for a
+      // known account would turn this endpoint into an account-enumeration
+      // oracle; the deployment health surface carries the configuration
+      // failure instead.
+      return const HumanRecoveryRequestResult();
+    }
+    final issued = await _issueOneTimeToken(
+      collection: 'auth_deletion_tokens',
+      purpose: 'account_deletion',
+      userId: user.id,
+      ttl: config.recoveryTtl,
+      tokenPrefix: 'hfd',
+    );
+    try {
+      await delivery.sendDeletionEmail(
+        email: normalizedEmail,
+        token: issued['token']! as String,
+        expiresAt: issued['expiresAt']! as DateTime,
+      );
+    } on Object {
+      throw const ControlPlaneException(
+        'AUTH_DELIVERY_UNAVAILABLE',
+        'Deletion verification delivery is temporarily unavailable',
+        statusCode: 503,
+      );
+    }
+    return const HumanRecoveryRequestResult();
+  });
+
+  /// Verifies and consumes a deletion-purpose token. It returns only the
+  /// account identity; deletion remains a separate, ownership-aware step.
+  Future<String> consumeAccountDeletionToken({required String token}) =>
+      _serialized(() async {
+        await _ensureInitialized();
+        final record = await _readOneTimeToken(
+          collection: 'auth_deletion_tokens',
+          token: token,
+          purpose: 'account_deletion',
+        );
+        final userId = record['userId'];
+        if (userId is! String) _invalidDeletionToken();
+        final userValue = await store.readJson('users', userId);
+        if (userValue == null) _invalidDeletionToken();
+        final user = HumanUserRecord.fromJson(userValue);
+        if (!user.active || !user.emailVerified) _invalidDeletionToken();
+        await _consumeOneTimeToken(
+          collection: 'auth_deletion_tokens',
+          record: record,
+          consumedAt: _now(),
+        );
+        return user.id;
+      });
+
+  /// Confirms a recent customer password without issuing a new capability.
+  /// HTTP callers must additionally provide the exact destructive-action
+  /// confirmation phrase.
+  Future<HumanUserRecord> confirmCustomerPassword({
+    required String accessToken,
+    required String password,
+  }) async {
+    final context = await _authenticateAccessToken(accessToken);
+    if (context.audience != customerAuthorizationAudience ||
+        !context.user.emailVerified) {
+      throw const ControlPlaneException(
+        'FORBIDDEN',
+        'A verified customer session is required',
+        statusCode: 403,
+      );
+    }
+    try {
+      final verified = await _hashPassword(
+        password,
+        encoded: context.user.passwordHash,
+      );
+      if (verified != context.user.passwordHash) _invalidCredentials();
+    } on FormatException {
+      _invalidCredentials();
+    }
+    return context.user;
+  }
+
+  /// Deactivates a human identity after ownership and deletion processing
+  /// have completed. Existing access tokens fail because authorization
+  /// re-reads the inactive user; all persisted sessions are revoked too.
+  Future<void> deactivateUser({required String userId}) =>
+      _serialized(() async {
+        await _ensureInitialized();
+        final value = await store.readJson('users', userId);
+        if (value == null) return;
+        final user = HumanUserRecord.fromJson(value);
+        final now = _now();
+        if (user.active) {
+          final deleted = HumanUserRecord(
+            id: user.id,
+            email: 'deleted+${user.id}@invalid.hyfens',
+            passwordHash: 'deleted',
+            active: false,
+            memberships: const <HumanMembership>[],
+            createdAt: user.createdAt,
+            emailVerified: false,
+            deletedAt: now,
+          );
+          await store.replaceJson('users', user.id, deleted.toJson());
+        }
+        final sessionDeletion = store is JsonRecordDeletion
+            ? store as JsonRecordDeletion
+            : null;
+        for (final sessionValue in await store.listJson('sessions')) {
+          if (sessionValue['userId'] != user.id ||
+              sessionValue['id'] is! String) {
+            continue;
+          }
+          final sessionId = sessionValue['id']! as String;
+          if (sessionDeletion != null) {
+            await sessionDeletion.deleteJson('sessions', sessionId);
+            continue;
+          }
+          if (sessionValue['revokedAt'] == null) {
+            final session = HumanSessionRecord.fromJson(sessionValue);
+            await store.revokeSessionIfActive(
+              id: session.id,
+              expectedSecretHash: session.secretHash,
+              revokedAt: now,
+            );
+          }
+        }
+      });
+
+  Future<void> resetPassword({
+    required String token,
+    required String password,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    try {
+      _validatePassword(password);
+    } on ControlPlaneException {
+      throw const ControlPlaneException(
+        'INVALID_PASSWORD',
+        'Password does not meet the recovery policy',
+        statusCode: 422,
+      );
+    }
+    final record = await _readOneTimeToken(
+      collection: 'auth_recovery_tokens',
+      token: token,
+      purpose: 'password_recovery',
+    );
+    final userValue = await store.readJson(
+      'users',
+      record['userId']! as String,
+    );
+    if (userValue == null) _invalidRecoveryToken();
+    final user = HumanUserRecord.fromJson(userValue);
+    if (!user.active) _invalidRecoveryToken();
+    final updated = HumanUserRecord(
+      id: user.id,
+      email: user.email,
+      passwordHash: await _hashPassword(password),
+      active: user.active,
+      memberships: user.memberships,
+      createdAt: user.createdAt,
+      emailVerified: user.emailVerified,
+      emailVerifiedAt: user.emailVerifiedAt,
+    );
+    await store.replaceJson('users', user.id, updated.toJson());
+    final now = _now();
+    await _consumeOneTimeToken(
+      collection: 'auth_recovery_tokens',
+      record: record,
+      consumedAt: now,
+    );
+    for (final value in await store.listJson('sessions')) {
+      if (value['userId'] != user.id || value['revokedAt'] != null) continue;
+      final session = HumanSessionRecord.fromJson(value);
+      await store.revokeSessionIfActive(
+        id: session.id,
+        expectedSecretHash: session.secretHash,
+        revokedAt: now,
+      );
+    }
+    try {
+      await notificationSink?.sendPasswordChanged(
+        user: updated,
+        occurredAt: now,
+      );
+    } on Object {
+      // The password mutation and session revocation are authoritative. A
+      // provider/queue outage must not make a completed password change look
+      // unsuccessful; the notification worker can reconcile the failure.
+    }
+  });
+
+  Future<HumanUserRecord> verifiedCustomerForAccessToken({
+    required String accessToken,
+  }) async {
+    final context = await _authenticateAccessToken(accessToken);
+    if (context.audience != customerAuthorizationAudience ||
+        !context.user.emailVerified) {
+      throw const ControlPlaneException(
+        'FORBIDDEN',
+        'A verified customer session is required',
+        statusCode: 403,
+      );
+    }
+    return context.user;
+  }
+
+  Future<HumanLoginResult> issueSessionForVerifiedUser({
+    required String userId,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    final user = await _activeUser(userId);
+    if (!user.emailVerified) {
+      throw const ControlPlaneException(
+        'EMAIL_VERIFICATION_REQUIRED',
+        'Verify the account email before signing in',
+        statusCode: 403,
+      );
+    }
     return _issueSessionForUser(user);
   });
 
-  /// Adds or reactivates a customer membership without changing the user's
-  /// password or any other organization membership.
-  Future<HumanUserRecord> grantCustomerMembership({
+  Future<HumanUserRecord> addCustomerOwnerMembership({
     required String userId,
     required String organizationId,
-    required String role,
-    required Set<String> capabilities,
   }) => _serialized(() async {
     await _ensureInitialized();
-    final user = await userById(userId);
-    if (user == null)
+    final user = await _activeUser(userId);
+    if (!user.emailVerified) {
       throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Human user was not found',
-        statusCode: 404,
+        'EMAIL_VERIFICATION_REQUIRED',
+        'Verify the account email before creating a workspace',
+        statusCode: 403,
       );
-    final memberships = user.memberships.toList();
-    final index = memberships.indexWhere(
+    }
+    final existing = user.memberships.where(
       (membership) =>
           membership.organizationId == organizationId &&
           membership.audience == customerAuthorizationAudience,
     );
-    final next = HumanMembership(
-      organizationId: organizationId,
-      role: role,
-      capabilities: capabilities,
-      profileName: index < 0 ? 'default' : memberships[index].profileName,
-      audience: customerAuthorizationAudience,
-      active: true,
-    );
-    if (index < 0) {
-      memberships.add(next);
-    } else {
-      memberships[index] = next;
+    if (existing.isNotEmpty) {
+      if (existing.any((membership) => membership.role != 'owner')) {
+        throw const ControlPlaneException(
+          'ORGANIZATION_MEMBERSHIP_CONFLICT',
+          'The account already has a non-owner membership in this organization',
+          statusCode: 409,
+        );
+      }
+      return user;
     }
-    final updated = user.copyWith(memberships: memberships, active: true);
-    await store.replaceJson('users', user.id, updated.toJson());
-    return updated;
-  });
-
-  /// Issues a customer-audience session for a user who has already
-  /// authenticated through another Hyfens audience. Invitation acceptance is
-  /// email-bound before this method is called; no password or raw credential
-  /// is accepted here.
-  Future<HumanLoginResult> issueSessionForAuthenticatedUser({
-    required String accessToken,
-    required String audience,
-  }) => _serialized(() async {
-    final context = await _authenticateAccessToken(accessToken);
-    return _issueSessionForUser(context.user, audience: audience);
-  });
-
-  /// Registers an explicit platform-system staff membership. Platform staff
-  /// are not made members of a customer organization.
-  Future<HumanLoginResult> registerInvitedPlatformStaff({
-    required String email,
-    required String password,
-    required String role,
-  }) => _serialized(() async {
-    await _ensureInitialized();
-    _validatePassword(password);
-    final normalizedEmail = normalizeHumanEmail(email);
-    if (await userByEmail(normalizedEmail) != null) _emailAlreadyRegistered();
+    await _memberAdmissionCheck?.call(organizationId);
     final membership = HumanMembership(
-      organizationId: platformSystemOrganizationId,
-      role: role,
-      capabilities: controlScopes,
-      profileName: 'platform-$role',
-      audience: platformAuthorizationAudience,
-      platformCapabilities: platformCapabilitiesForRole(role),
-    );
-    final user = HumanUserRecord(
-      id: 'usr_${sha256Hex(utf8.encode(normalizedEmail)).substring(0, 32)}',
-      email: normalizedEmail,
-      passwordHash: await _hashPassword(password),
-      active: true,
-      memberships: <HumanMembership>[membership],
-      createdAt: _now(),
-    );
-    await store.createJson('users', user.id, user.toJson());
-    return _issueSessionForUser(
-      user,
-      audience: platformAuthorizationAudience,
-      profileName: membership.profileName,
-    );
-  });
-
-  /// Updates an explicit platform-system staff membership. Legacy configured
-  /// super-admin memberships are intentionally not mutated by this method.
-  Future<HumanUserRecord> updatePlatformStaffMembership({
-    required String userId,
-    String? role,
-    bool? active,
-  }) => _serialized(() async {
-    await _ensureInitialized();
-    final value = await store.readJson('users', userId);
-    if (value == null)
-      throw const ControlPlaneException(
-        'NOT_FOUND',
-        'Platform user was not found',
-        statusCode: 404,
-      );
-    final user = HumanUserRecord.fromJson(value);
-    final index = user.memberships.indexWhere(
-      (membership) =>
-          membership.audience == platformAuthorizationAudience &&
-          membership.organizationId == platformSystemOrganizationId,
-    );
-    if (index < 0)
-      throw const ControlPlaneException(
-        'LEGACY_PLATFORM_MEMBERSHIP',
-        'This legacy platform owner is managed by deployment configuration',
-        statusCode: 409,
-      );
-    final current = user.memberships[index];
-    final nextRole = role ?? current.role;
-    final nextCapabilities = platformCapabilitiesForRole(nextRole);
-    final nextMembership = HumanMembership(
-      organizationId: platformSystemOrganizationId,
-      role: nextRole,
-      capabilities: controlScopes,
-      profileName: 'platform-$nextRole',
-      audience: platformAuthorizationAudience,
-      platformCapabilities: nextCapabilities,
-      active: active ?? current.active,
-    );
-    final memberships = user.memberships.toList()..[index] = nextMembership;
-    final hasActiveMembership = memberships.any(
-      (membership) => membership.active,
+      organizationId: organizationId,
+      role: 'owner',
+      capabilities: customerOwnerScopes,
+      profileName: 'owner',
+      audience: customerAuthorizationAudience,
     );
     final updated = user.copyWith(
-      memberships: memberships,
-      active: hasActiveMembership,
+      memberships: <HumanMembership>[...user.memberships, membership],
     );
     await store.replaceJson('users', user.id, updated.toJson());
     return updated;
-  });
-
-  /// Revokes all sessions for one user and audience. The session token and
-  /// access JWT are never returned or persisted by this operation.
-  Future<int> revokeSessionsForUser({
-    required String userId,
-    required String audience,
-  }) => _serialized(() async {
-    await _ensureInitialized();
-    var revoked = 0;
-    for (final value in await store.listJson('sessions')) {
-      if (value['userId'] != userId || value['audience'] != audience) continue;
-      final session = HumanSessionRecord.fromJson(value);
-      if (session.revokedAt != null) continue;
-      final result = await store.revokeSessionIfActive(
-        id: session.id,
-        expectedSecretHash: session.secretHash,
-        revokedAt: _now(),
-      );
-      if (result) revoked++;
-    }
-    return revoked;
   });
 
   Future<HumanLoginResult> login({
@@ -1797,52 +2077,6 @@ final class HumanAuthService {
     if (user == null || !user.active || passwordHash != user.passwordHash) {
       _invalidCredentials();
     }
-    return _issueSessionForUser(
-      user,
-      audience: audience,
-      profileName: profileName,
-    );
-  });
-
-  /// Verifies an invitation recipient's password without requiring the
-  /// account to have an active membership yet. This is intentionally limited
-  /// to the invitation service; ordinary login continues to reject inactive
-  /// accounts and accounts without an active audience membership.
-  Future<HumanUserRecord> verifyInvitationPassword({
-    required String email,
-    required String password,
-  }) => _serialized(() async {
-    await _ensureInitialized();
-    _validatePassword(password);
-    final normalizedEmail = normalizeHumanEmail(email);
-    final user = await userByEmail(normalizedEmail);
-    late final String passwordHash;
-    try {
-      passwordHash = user == null
-          ? await _hashPassword(password, salt: _dummySalt)
-          : await _hashPassword(password, encoded: user.passwordHash);
-    } on FormatException {
-      _invalidCredentials();
-    } on TypeError {
-      _invalidCredentials();
-    }
-    if (user == null || passwordHash != user.passwordHash) {
-      _invalidCredentials();
-    }
-    return user;
-  });
-
-  /// Issues a fresh session after a trusted invitation flow has verified the
-  /// account and granted its audience membership. No password or bearer
-  /// secret is accepted by this internal service seam.
-  Future<HumanLoginResult> issueSessionForUserId({
-    required String userId,
-    required String audience,
-    String? profileName,
-  }) => _serialized(() async {
-    await _ensureInitialized();
-    final user = await userById(userId);
-    if (user == null || !user.active) _unauthorized();
     return _issueSessionForUser(
       user,
       audience: audience,
@@ -2157,6 +2391,13 @@ final class HumanAuthService {
     String audience = customerAuthorizationAudience,
     String? profileName,
   }) async {
+    if (!user.emailVerified) {
+      throw const ControlPlaneException(
+        'EMAIL_VERIFICATION_REQUIRED',
+        'Verify the account email before signing in',
+        statusCode: 403,
+      );
+    }
     if (!_isSupportedAuthorizationAudience(audience)) {
       throw const ControlPlaneException(
         'INVALID_REQUEST',
@@ -2174,7 +2415,6 @@ final class HumanAuthService {
     }
     final hasMatchingMembership = user.memberships.any((membership) {
       if (membership.audience != audience) return false;
-      if (!membership.active) return false;
       if (requestedProfile != null &&
           membership.profileName != requestedProfile) {
         return false;
@@ -2182,7 +2422,11 @@ final class HumanAuthService {
       return audience != platformAuthorizationAudience ||
           _isPlatformMembership(user, membership);
     });
-    if (!hasMatchingMembership) {
+    final verifiedAccountWithoutOrganization =
+        audience == customerAuthorizationAudience &&
+        user.emailVerified &&
+        user.memberships.isEmpty;
+    if (!hasMatchingMembership && !verifiedAccountWithoutOrganization) {
       throw const ControlPlaneException(
         'FORBIDDEN',
         'Authorization audience is not available to this account',
@@ -2202,7 +2446,6 @@ final class HumanAuthService {
       lastUsedAt: now,
       revokedAt: null,
       audience: audience,
-      mfaVerified: false,
     );
     await store.createJson('sessions', session.id, session.toJson());
     final issued = await _issueAccessToken(user, session);
@@ -2521,7 +2764,7 @@ final class HumanAuthService {
   /// membership, and the requested capability. An ordinary tenant owner
   /// cannot enumerate cross-organization data merely by possessing control
   /// capabilities.
-  Future<HumanUserRecord> authorizePlatformCapability({
+  Future<void> authorizePlatformCapability({
     required String accessToken,
     required String capability,
     String? profileName,
@@ -2549,21 +2792,15 @@ final class HumanAuthService {
         statusCode: 403,
       );
     }
-    if (config.platformMfaRequired && !context.session.mfaVerified) {
-      throw const ControlPlaneException(
-        'PLATFORM_MFA_REQUIRED',
-        'MFA verification is required for Platform Console access',
-        statusCode: 403,
-      );
-    }
-    final permitted = context.user.memberships.any(
-      (membership) =>
-          _isPlatformMembership(context.user, membership) &&
-          membership.active &&
-          membership.platformCapabilities.contains(capability) &&
-          (requestedProfile == null ||
-              membership.profileName == requestedProfile),
-    );
+    final permitted =
+        config.platformAdminEmails.contains(context.user.email) &&
+        context.user.memberships.any(
+          (membership) =>
+              _isPlatformMembership(context.user, membership) &&
+              membership.platformCapabilities.contains(capability) &&
+              (requestedProfile == null ||
+                  membership.profileName == requestedProfile),
+        );
     if (!permitted) {
       throw const ControlPlaneException(
         'FORBIDDEN',
@@ -2571,7 +2808,6 @@ final class HumanAuthService {
         statusCode: 403,
       );
     }
-    return context.user;
   }
 
   /// Authorizes the bounded platform metrics projection through the same
@@ -2621,7 +2857,6 @@ final class HumanAuthService {
                 'audience': membership.audience,
                 'applicationId': membership.applicationId,
                 'environmentId': membership.environmentId,
-                'active': membership.active,
                 'capabilities': membership.capabilities.toList()..sort(),
               },
             )
@@ -2681,7 +2916,12 @@ final class HumanAuthService {
     // control capability from being stranded with a stale serialized scope
     // list, while delegated roles remain explicitly capability-bound.
     final effectiveCapabilities = membership.role == 'owner'
-        ? <String>{...membership.capabilities, ...controlScopes}
+        ? <String>{
+            ...membership.capabilities,
+            ...(requiredAudience == customerAuthorizationAudience
+                ? customerOwnerScopes
+                : controlScopes),
+          }
         : membership.capabilities;
     if (!effectiveCapabilities.contains(requiredScope)) {
       throw const ControlPlaneException(
@@ -2881,6 +3121,98 @@ final class HumanAuthService {
     return session;
   }
 
+  Future<Map<String, Object?>> _issueOneTimeToken({
+    required String collection,
+    required String purpose,
+    required String userId,
+    String? organizationName,
+    required Duration ttl,
+    String? tokenPrefix,
+  }) async {
+    final token =
+        '${tokenPrefix ?? (purpose == 'email_verification' ? 'hfv' : 'hfr')}_${_encodeBytes(_randomBytes(32))}';
+    final tokenHash = sha256Hex(utf8.encode(token));
+    final now = _now();
+    final expiresAt = now.add(ttl);
+    await store.createJson(collection, tokenHash, <String, Object?>{
+      'id': tokenHash,
+      'purpose': purpose,
+      'userId': userId,
+      if (organizationName != null) 'organizationName': organizationName,
+      'tokenHash': tokenHash,
+      'createdAt': now.toIso8601String(),
+      'expiresAt': expiresAt.toIso8601String(),
+      'consumedAt': null,
+    });
+    return <String, Object?>{'token': token, 'expiresAt': expiresAt};
+  }
+
+  Future<Map<String, Object?>> _readOneTimeToken({
+    required String collection,
+    required String token,
+    required String purpose,
+  }) async {
+    if (!_safeTokenPart(token)) {
+      if (purpose == 'email_verification') {
+        _invalidEmailVerification();
+      }
+      if (purpose == 'account_deletion') _invalidDeletionToken();
+      _invalidRecoveryToken();
+    }
+    final tokenHash = sha256Hex(utf8.encode(token));
+    final record = await store.readJson(collection, tokenHash);
+    if (record == null ||
+        record['tokenHash'] != tokenHash ||
+        record['purpose'] != purpose ||
+        record['consumedAt'] != null) {
+      if (purpose == 'email_verification') {
+        _invalidEmailVerification();
+      }
+      if (purpose == 'account_deletion') _invalidDeletionToken();
+      _invalidRecoveryToken();
+    }
+    final expiresAt = DateTime.tryParse(record['expiresAt'] as String? ?? '');
+    if (expiresAt == null || !expiresAt.isAfter(_now())) {
+      if (purpose == 'email_verification') {
+        _invalidEmailVerification();
+      }
+      if (purpose == 'account_deletion') _invalidDeletionToken();
+      _invalidRecoveryToken();
+    }
+    return record;
+  }
+
+  Future<void> _consumeOneTimeToken({
+    required String collection,
+    required Map<String, Object?> record,
+    required DateTime consumedAt,
+  }) async {
+    if (record['consumedAt'] != null) return;
+    final consumption = store;
+    if (consumption case final OneTimeTokenConsumption atomic) {
+      final consumed = await atomic.consumeOneTimeTokenIfUnused(
+        collection: collection,
+        id: record['id']! as String,
+        consumedAt: consumedAt,
+      );
+      if (consumed == null) {
+        if (record['purpose'] == 'account_deletion') {
+          _invalidDeletionToken();
+        }
+        if (record['purpose'] == 'email_verification') {
+          _invalidEmailVerification();
+        }
+        _invalidRecoveryToken();
+      }
+      return;
+    }
+    await store.replaceJson(
+      collection,
+      record['id']! as String,
+      <String, Object?>{...record, 'consumedAt': consumedAt.toIso8601String()},
+    );
+  }
+
   Future<HumanUserRecord> _activeUser(String id) async {
     final value = await store.readJson('users', id);
     if (value == null) _unauthorized();
@@ -2913,7 +3245,6 @@ final class HumanAuthService {
     final matches = user.memberships
         .where((membership) {
           if (membership.audience != requiredAudience) return false;
-          if (!membership.active) return false;
           if (organizationId != null &&
               membership.organizationId != organizationId) {
             return false;
@@ -2951,10 +3282,9 @@ final class HumanAuthService {
     String audience = customerAuthorizationAudience,
   }) => HumanIdentity(
     user: user,
+    authorizationAudience: audience,
     profiles: user.memberships
-        .where(
-          (membership) => membership.audience == audience && membership.active,
-        )
+        .where((membership) => membership.audience == audience)
         .map(
           (membership) => HumanAuthProfile(
             name: membership.profileName,
@@ -2973,44 +3303,15 @@ final class HumanAuthService {
         .toList(growable: false),
   );
 
-  /// Identifies both deployment-configured legacy platform owners and the
-  /// explicit platform-system staff memberships. Inactive memberships are
-  /// recognized for safe staff listing/session revocation, but never for
-  /// authorization.
-  bool isRecognizedPlatformMembership(
-    HumanUserRecord user,
-    HumanMembership membership,
-  ) {
-    if (membership.audience != platformAuthorizationAudience ||
-        membership.platformCapabilities.isEmpty) {
-      return false;
-    }
-    final legacy =
-        config.platformAdminEmails.contains(user.email) &&
-        membership.role == 'owner' &&
-        membership.profileName == 'super-admin';
-    final explicit =
-        membership.organizationId == platformSystemOrganizationId &&
-        platformRoleCapabilities.containsKey(membership.role);
-    return legacy || explicit;
-  }
-
-  bool hasPlatformCapability(
-    HumanUserRecord user,
-    String capability, {
-    String? profileName,
-  }) => user.memberships.any(
-    (membership) =>
-        membership.active &&
-        isRecognizedPlatformMembership(user, membership) &&
-        membership.platformCapabilities.contains(capability) &&
-        (profileName == null || membership.profileName == profileName),
-  );
-
   bool _isPlatformMembership(
     HumanUserRecord user,
     HumanMembership membership,
-  ) => membership.active && isRecognizedPlatformMembership(user, membership);
+  ) =>
+      config.platformAdminEmails.contains(user.email) &&
+      membership.audience == platformAuthorizationAudience &&
+      membership.role == 'owner' &&
+      membership.profileName == 'super-admin' &&
+      membership.platformCapabilities.isNotEmpty;
 
   Future<String> _hashPassword(
     String password, {
@@ -3085,13 +3386,16 @@ final class HumanAuthService {
     return normalized;
   }
 
-  static String userIdForEmail(String email) =>
-      'usr_${sha256Hex(utf8.encode(normalizeHumanEmail(email))).substring(0, 32)}';
-
   static void _validatePassword(String password) {
     if (password.length < 12 || password.length > 1024) {
       _invalidCredentials();
     }
+  }
+
+  static String _organizationName(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return 'My Hyfens workspace';
+    return requireNonEmpty(normalized, 'organization name', maxLength: 120);
   }
 
   static Never _invalidCredentials() => throw const ControlPlaneException(
@@ -3104,6 +3408,24 @@ final class HumanAuthService {
     'EMAIL_ALREADY_REGISTERED',
     'An account with this email already exists',
     statusCode: 409,
+  );
+
+  static Never _invalidEmailVerification() => throw const ControlPlaneException(
+    'EMAIL_VERIFICATION_INVALID',
+    'The verification link is invalid or expired',
+    statusCode: 400,
+  );
+
+  static Never _invalidRecoveryToken() => throw const ControlPlaneException(
+    'RECOVERY_TOKEN_INVALID',
+    'The recovery link is invalid or expired',
+    statusCode: 400,
+  );
+
+  static Never _invalidDeletionToken() => throw const ControlPlaneException(
+    'DELETION_TOKEN_INVALID',
+    'The deletion verification link is invalid or expired',
+    statusCode: 400,
   );
 
   static String _encodeJson(Map<String, Object?> value) =>

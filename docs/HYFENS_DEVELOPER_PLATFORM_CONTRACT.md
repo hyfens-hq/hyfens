@@ -24,27 +24,25 @@ this milestone does not require a remote deployment.
 
 ## Dashboard audience and route contract
 
-The public OSS web product is the Customer/Instance Workspace. It is served
-from a self-hosted instance origin and can be composed into the managed Cloud
-customer surface at `app.hyfens.com`. The private Cloud web product owns the
-global Platform Console at `platform.hyfens.com`.
+The authenticated web product has separate product shells over shared auth,
+API transport, design tokens, and UI primitives:
 
 ```text
-OSS hyfens dashboard
-  Customer/Instance Workspace
+app.hyfens.com or self-hosted instance origin
+  Customer Workspace
 
-hyfens-cloud-web
-  Cloud Customer Workspace composition/extensions
-  Hyfens Cloud Platform Console
+platform.hyfens.com
+  Hyfens Platform Console
 
 api.hyfens.com or self-hosted control-plane origin
-  shared control-plane API and auth contracts
+  shared control-plane API
 ```
 
-Local OSS development serves the Customer/Instance Workspace at `/`. Local
-Cloud development serves the Platform Console from its own `/platform` route
-root. The customer organization selector is membership-scoped; it must never
-be used as a platform-wide organization directory.
+Local development maps the same topology to `/` for the Customer Workspace
+and `/platform` for the Platform Console. A platform host maps `/`,
+`/organizations`, `/audit`, `/operations`, and `/settings` to the Platform
+Console. The customer organization selector is membership-scoped; it must
+never be used as a platform-wide organization directory.
 
 Customer routes remain tenant-scoped under the selected organization:
 
@@ -60,8 +58,7 @@ Customer routes remain tenant-scoped under the selected organization:
 /settings                 Customer/account settings
 ```
 
-The shared API contract also defines the separate platform audience and
-platform projections consumed by the private Cloud Console:
+Platform routes are a separate audience and context:
 
 ```text
 /platform                  Platform overview
@@ -80,9 +77,7 @@ plus explicit capabilities such as `platform:overview`,
 `platform:organizations:read`, `platform:organizations:inspect`, and
 `platform:audit:read`. A platform token is not accepted by customer routes
 merely because the same human account exists, and a customer session cannot
-call `/v1/platform/*`. The public OSS dashboard does not ship the platform
-route/rendering code; retaining the protocol/API contract is not the same as
-shipping the private Platform Console.
+call `/v1/platform/*`.
 
 The current platform projection is intentionally read-only and bounded. It
 returns organization metadata, counts, safe application/environment metadata,
@@ -151,14 +146,7 @@ Profile metadata is stored separately from credentials. The minimum fields
 are:
 
 ```toml
-active_profile = "hyfens-cloud"
-
-[profiles.hyfens-cloud]
-endpoint = "https://api.hyfens.com/"
-managed = true
-organization = "org_..."
-application = "app_..."
-environment = "env_..."
+active_profile = "acme"
 
 [profiles.acme]
 endpoint = "https://hyfens.acme.com/"
@@ -178,10 +166,10 @@ A session obtained from one host must never be sent to another host.
 
 ## Managed and self-hosted endpoints
 
-The managed product host is `api.hyfens.com`. The canonical API base is
-`https://api.hyfens.com/`. The older `/p2/` path remains a deployment alias
-for existing CLI profiles during migration; it does not represent API version
-2. The API version is advertised through discovery and is currently `v1`.
+The managed product host and versioned API route are internal Cloud
+implementation details. The CLI Cloud default selects that managed profile
+without requiring users to copy an endpoint into commands or configuration;
+CLI and MCP display it as `Hyfens Cloud (managed)`.
 
 Self-hosted login accepts an explicit HTTPS API base or host:
 

@@ -9,22 +9,9 @@ import 'package:instrumentation_e0/e0_runtime.dart';
 import 'package:patch_loading_e1/patch_loading_e1.dart';
 
 import 'src/control_plane_delivery.dart';
-import 'src/flutter_frame_waiter_stub.dart'
-    if (dart.library.ui) 'src/flutter_frame_waiter_flutter.dart';
-import 'src/flutter_widget_registry_stub.dart'
-    if (dart.library.ui) 'src/flutter_widget_registry.dart';
-import 'src/install_receipts.dart';
-import 'src/installation_key.dart';
-import 'src/runtime_attestation.dart';
 import 'src/runtime_storage.dart';
 
 export 'src/control_plane_delivery.dart';
-export 'src/install_receipts.dart'
-    show
-        HyfensInstallReceiptException,
-        HyfensInstallReceiptMode,
-        HyfensInstallReceipts;
-export 'src/runtime_attestation.dart';
 
 /// The generated-release lifecycle boundary used by the local Phase 1B
 /// workflow.
@@ -41,10 +28,6 @@ final class HyfensFlutterIntegration {
   static final Set<E1PatchController> _controllers = <E1PatchController>{};
   static final Set<Timer> _pollers = <Timer>{};
   static final Set<E1PatchController> _pollsInFlight = <E1PatchController>{};
-  static final Map<E1PatchController, HyfensInstallReceipts> _receiptClients =
-      {};
-  static const Duration _localControlRequestTimeout = Duration(seconds: 8);
-  static const int _maxRollbackControlBytes = 16 * 1024;
   static String? _activeBootstrapKey;
 
   /// Starts the local development lifecycle without delaying the application's
@@ -93,12 +76,6 @@ final class HyfensFlutterIntegration {
       return;
     }
     _activeBootstrapKey = bootstrapKey;
-    E0PatchRuntime.configureFlutterFrameWaiterIfAbsent(
-      hyfensFlutterFrameWaiter,
-    );
-    final widgetFactories = E0PatchRuntime.configureWidgetFactoriesIfAbsent(
-      standardFlutterWidgetRegistry(),
-    );
     E0PatchRuntime.markGeneratedIntegrationStarted();
     _configureDiagnostics(functionContexts);
     unawaited(
@@ -115,7 +92,6 @@ final class HyfensFlutterIntegration {
         publicKey: publicKey,
         patchUri: patchUri,
         controlPlane: controlPlane,
-        widgetFactories: widgetFactories,
         pollInterval: pollInterval,
       ),
     );
@@ -175,7 +151,6 @@ final class HyfensFlutterIntegration {
     required List<int> publicKey,
     required Uri patchUri,
     HyfensControlPlaneConfiguration? controlPlane,
-    required E0WidgetFactoryRegistry widgetFactories,
     required Duration pollInterval,
   }) async {
     try {
@@ -195,9 +170,6 @@ final class HyfensFlutterIntegration {
         trustedPublicKeys: <String, E1TrustedPublicKey>{
           keyId: E1TrustedPublicKey(keyId: keyId, bytes: publicKey),
         },
-        runtimeConfiguration: E1RuntimeConfiguration(
-          widgetFactories: widgetFactories,
-        ),
       );
       _controllers.add(controller);
       try {
@@ -213,7 +185,6 @@ final class HyfensFlutterIntegration {
         _pollers.add(timer);
       } on Object {
         _controllers.remove(controller);
-        _receiptClients.remove(controller);
         try {
           await controller.close();
         } on Object catch (cleanupError, cleanupStack) {
@@ -271,7 +242,6 @@ final class HyfensFlutterIntegration {
           configuration.platformId,
           '${configuration.runtimeCompatibilityVersion}',
           '${configuration.patchFormatVersion}',
-          configuration.receiptMode.name,
         ].join('\u0001'),
     ].join('\u0000');
   }
@@ -288,29 +258,16 @@ final class HyfensFlutterIntegration {
       if (controller.recoveryNeeded) return;
       try {
         if (controlPlane case final configuration?) {
-          final receipts = _receiptClientFor(controller, configuration);
-          if (receipts != null) await _flushReceipts(receipts, controller);
-          // A pending candidate already owns its durable admission context.
-          // Retry only the existing health transition before asking for any
-          // further delivery; never prepare a second admission here.
-          if (controller.durableState.health == 'pending') {
-            if (!await _confirmHealthy(controller)) return;
-            if (receipts != null) await _flushReceipts(receipts, controller);
-            return;
-          }
-          await HyfensControlPlaneDelivery(
-            configuration,
-            receipts: receipts,
-          ).deliver(controller);
+          final result = await HyfensControlPlaneDelivery(configuration)
+              .deliver(controller);
           _configureDiagnostics(functionContexts);
-          if (controller.durableState.health == 'pending') {
-            if (!await _confirmHealthy(controller)) return;
+          if (result.activated &&
+              result.requiresHealthConfirmation &&
+              !await controller.markHealthy()) {
+            stderr.writeln(
+              'HYFENS_PATCH control-plane health confirmation failed',
+            );
           }
-          if (receipts != null) await _flushReceipts(receipts, controller);
-          return;
-        }
-        if (controller.durableState.health == 'pending') {
-          if (!await _confirmHealthy(controller)) return;
           return;
         }
         final rolledBack = await _pollRollbackControl(controller, baseUri);
@@ -319,11 +276,9 @@ final class HyfensFlutterIntegration {
           return;
         }
         final uri = _withReleaseQuery(baseUri, controller.releaseId);
-        await controller.downloadAndActivate(uri: uri);
+        final activated = await controller.downloadAndActivate(uri: uri);
         _configureDiagnostics(functionContexts);
-        if (controller.durableState.health == 'pending') {
-          await _confirmHealthy(controller);
-        }
+        if (activated) await controller.markHealthy();
       } on Object catch (error) {
         // Local delivery is deliberately best-effort. The controller has
         // already preserved the base or last-known-good state; logging keeps
@@ -333,72 +288,6 @@ final class HyfensFlutterIntegration {
       }
     } finally {
       _pollsInFlight.remove(controller);
-    }
-  }
-
-  static Future<bool> _confirmHealthy(E1PatchController controller) async {
-    final confirmed = await controller.markHealthy();
-    if (!confirmed) {
-      stderr.writeln('HYFENS_PATCH control-plane health confirmation failed');
-    }
-    return confirmed;
-  }
-
-  static HyfensInstallReceipts? _receiptClientFor(
-    E1PatchController controller,
-    HyfensControlPlaneConfiguration configuration,
-  ) {
-    if (configuration.receiptMode == HyfensInstallReceiptMode.disabled) {
-      return null;
-    }
-    final existing = _receiptClients[controller];
-    if (existing != null) return existing;
-
-    final HyfensInstallReceipts? created;
-    if (configuration.receiptMode == HyfensInstallReceiptMode.production) {
-      final producer = configuration.attestationProducer;
-      final gate = configuration.productionGate;
-      if (producer == null || gate == null) return null;
-      try {
-        created = HyfensInstallReceipts.production(
-          baseUrl: configuration.baseUrl,
-          deliveryCredential: configuration.deliveryCredential,
-          applicationId: configuration.applicationId,
-          environmentId: configuration.environmentId,
-          platformId: configuration.platformId,
-          keyStore: HyfensInstallationKeyStore(),
-          attestationProducer: producer,
-          productionGate: gate,
-          requestTimeout: configuration.requestTimeout,
-        );
-      } on HyfensRuntimeAttestationException {
-        return null;
-      }
-    } else {
-      created = HyfensInstallReceipts(
-        baseUrl: configuration.baseUrl,
-        deliveryCredential: configuration.deliveryCredential,
-        applicationId: configuration.applicationId,
-        environmentId: configuration.environmentId,
-        platformId: configuration.platformId,
-        keyStore: HyfensInstallationKeyStore(),
-        requestTimeout: configuration.requestTimeout,
-      );
-    }
-    _receiptClients[controller] = created;
-    return created;
-  }
-
-  static Future<void> _flushReceipts(
-    HyfensInstallReceipts receipts,
-    E1PatchController controller,
-  ) async {
-    try {
-      await receipts.flush(controller);
-    } on Object {
-      // Admission and durable activation are separate from receipt transport.
-      // Keep the outbox intact; do not disturb an already-installed patch.
-      stderr.writeln('HYFENS_PATCH receipt remains queued');
     }
   }
 
@@ -421,15 +310,11 @@ final class HyfensFlutterIntegration {
         'E1 only permits local-development HTTP endpoints',
       );
     }
-    final client = HttpClient()
-      ..connectionTimeout = _localControlRequestTimeout;
+    final client = HttpClient();
     try {
-      final request =
-          await client.getUrl(uri).timeout(_localControlRequestTimeout)
-            ..followRedirects = false;
-      final response = await request.close().timeout(
-        _localControlRequestTimeout,
-      );
+      final request = await client.getUrl(uri)
+        ..followRedirects = false;
+      final response = await request.close();
       if (response.isRedirect) {
         throw const FormatException('rollback control redirects are disabled');
       }
@@ -440,31 +325,17 @@ final class HyfensFlutterIntegration {
       if (response.statusCode != HttpStatus.ok) {
         throw HttpException('HTTP ${response.statusCode}', uri: uri);
       }
-      final bytes = await _readBoundedResponse(
-        response,
-        maxBytes: _maxRollbackControlBytes,
-      ).timeout(_localControlRequestTimeout);
-      return Uint8List.fromList(bytes);
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in response) {
+        builder.add(chunk);
+        if (builder.length > 16 * 1024) {
+          throw const FormatException('rollback control exceeds byte limit');
+        }
+      }
+      return Uint8List.fromList(builder.takeBytes());
     } finally {
       client.close(force: true);
     }
-  }
-
-  static Future<List<int>> _readBoundedResponse(
-    HttpClientResponse response, {
-    required int maxBytes,
-  }) async {
-    if (response.contentLength > maxBytes) {
-      throw const FormatException('response exceeds byte limit');
-    }
-    final builder = BytesBuilder(copy: false);
-    await for (final chunk in response) {
-      if (chunk.length > maxBytes - builder.length) {
-        throw const FormatException('response exceeds byte limit');
-      }
-      builder.add(chunk);
-    }
-    return builder.takeBytes();
   }
 
   static Uri _withReleaseQuery(Uri uri, String releaseId) {

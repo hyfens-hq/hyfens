@@ -5,33 +5,25 @@ import 'observation.dart';
 
 export 'content.dart';
 
-String _lifecycleStatus(String value, String field) {
-  if (value != 'active' && value != 'archived') {
-    throw FormatException('Invalid $field');
-  }
-  return value;
-}
-
-DateTime? _optionalTimestamp(Object? value) {
-  if (value == null) return null;
-  if (value is! String) throw const FormatException('Invalid timestamp');
-  return DateTime.parse(value).toUtc();
-}
-
 enum CredentialKind { control, delivery, observation, scheduler, autoHalt }
 
 const String contentAdminScope = 'content:admin';
 const String billingReadScope = 'billing:read';
+
+/// Customer-owned billing lifecycle actions. This is deliberately separate
+/// from [billingWriteScope], which remains an operator/provider-administration
+/// scope for plan and subscription records.
+const String billingManageScope = 'billing:manage';
 const String billingWriteScope = 'billing:write';
+
+/// Narrow service capability for provider lifecycle processing. This is not
+/// included in customer or operator credential scope sets.
+const String billingProviderScope = 'billing:provider';
 const String organizationMembersReadScope = 'organization:members:read';
-const String organizationMembersWriteScope = 'organization:members:write';
 const String credentialReadScope = 'credential:read';
 const String applicationWriteScope = 'application:write';
 const String environmentWriteScope = 'environment:write';
-const String supportReadScope = 'support:read';
-const String supportCreateScope = 'support:create';
-const String supportReplyScope = 'support:reply';
-const String runtimeInstallScope = 'runtime:install';
+const String environmentRollbackScope = 'environment:rollback';
 
 const Set<String> controlScopes = <String>{
   'application:read',
@@ -43,12 +35,12 @@ const Set<String> controlScopes = <String>{
   'artifact:read',
   'artifact:write',
   environmentWriteScope,
+  environmentRollbackScope,
   'release:promote',
   'bundle:read',
   'bundle:write',
   'audit:read',
   organizationMembersReadScope,
-  organizationMembersWriteScope,
   credentialReadScope,
   'credential:issue',
   'credential:revoke',
@@ -63,17 +55,27 @@ const Set<String> controlScopes = <String>{
   'health:schedule',
   billingReadScope,
   billingWriteScope,
-  supportReadScope,
-  supportCreateScope,
-  supportReplyScope,
   contentAdminScope,
   observationDeleteScope,
 };
 
+/// The full tenant-owner surface without platform/CMS mutation or provider
+/// subscription administration. Public Cloud customer owners use this
+/// profile; operator bootstrap credentials continue to use [controlScopes].
+final Set<String> customerOwnerScopes = Set.unmodifiable(
+  <String>{
+      ...controlScopes,
+      billingManageScope,
+      billingWriteScope,
+      contentAdminScope,
+    }
+    ..remove(billingWriteScope)
+    ..remove(contentAdminScope),
+);
+
 const Set<String> deliveryScopes = <String>{
   'runtime:update:read',
   'runtime:artifact:read',
-  runtimeInstallScope,
 };
 
 const Set<String> observationScopes = <String>{observationWriteScope};
@@ -106,17 +108,38 @@ final class OrganizationRecord {
     required String id,
     required String name,
     required this.createdAt,
+    this.deletionState = 'active',
+    this.deletionRequestedAt,
+    this.deletedAt,
+    this.deletionRequestId,
   }) : id = requireOpaqueId(id, 'organization ID'),
-       name = requireNonEmpty(name, 'organization name');
+       name = requireNonEmpty(name, 'organization name') {
+    if (!const <String>{
+      'active',
+      'deletion_requested',
+      'deleted',
+    }.contains(deletionState)) {
+      throw const FormatException('Invalid organization deletion state');
+    }
+  }
 
   final String id;
   final String name;
   final DateTime createdAt;
+  final String deletionState;
+  final DateTime? deletionRequestedAt;
+  final DateTime? deletedAt;
+  final String? deletionRequestId;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
     'name': name,
     'createdAt': createdAt.toUtc().toIso8601String(),
+    'deletionState': deletionState,
+    if (deletionRequestedAt != null)
+      'deletionRequestedAt': deletionRequestedAt!.toUtc().toIso8601String(),
+    if (deletedAt != null) 'deletedAt': deletedAt!.toUtc().toIso8601String(),
+    if (deletionRequestId != null) 'deletionRequestId': deletionRequestId,
   };
 
   static OrganizationRecord fromJson(Map<String, Object?> value) =>
@@ -124,6 +147,14 @@ final class OrganizationRecord {
         id: value['id']! as String,
         name: value['name']! as String,
         createdAt: DateTime.parse(value['createdAt']! as String),
+        deletionState: value['deletionState'] as String? ?? 'active',
+        deletionRequestedAt: value['deletionRequestedAt'] is String
+            ? DateTime.parse(value['deletionRequestedAt']! as String)
+            : null,
+        deletedAt: value['deletedAt'] is String
+            ? DateTime.parse(value['deletedAt']! as String)
+            : null,
+        deletionRequestId: value['deletionRequestId'] as String?,
       );
 }
 
@@ -135,8 +166,6 @@ final class ApplicationRecord {
     String? name,
     String? platform,
     required this.createdAt,
-    this.status = 'active',
-    DateTime? updatedAt,
   }) : id = requireOpaqueId(id, 'application ID'),
        organizationId = requireOpaqueId(organizationId, 'organization ID'),
        runtimeApplicationId = requireRuntimeIdentity(
@@ -146,10 +175,7 @@ final class ApplicationRecord {
        name = name == null
            ? null
            : requireNonEmpty(name.trim(), 'application name', maxLength: 120),
-       platform = platform == null ? null : _applicationPlatform(platform),
-       updatedAt = (updatedAt ?? createdAt).toUtc() {
-    _lifecycleStatus(status, 'application status');
-  }
+       platform = platform == null ? null : _applicationPlatform(platform);
 
   final String id;
   final String organizationId;
@@ -157,23 +183,6 @@ final class ApplicationRecord {
   final String? name;
   final String? platform;
   final DateTime createdAt;
-  final String status;
-  final DateTime updatedAt;
-
-  ApplicationRecord copyWith({
-    String? name,
-    String? status,
-    DateTime? updatedAt,
-  }) => ApplicationRecord(
-    id: id,
-    organizationId: organizationId,
-    runtimeApplicationId: runtimeApplicationId,
-    name: name ?? this.name,
-    platform: platform,
-    createdAt: createdAt,
-    status: status ?? this.status,
-    updatedAt: updatedAt ?? this.updatedAt,
-  );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
@@ -182,8 +191,6 @@ final class ApplicationRecord {
     'name': name,
     'platform': platform,
     'createdAt': createdAt.toUtc().toIso8601String(),
-    'status': status,
-    'updatedAt': updatedAt.toUtc().toIso8601String(),
   };
 
   static ApplicationRecord fromJson(Map<String, Object?> value) =>
@@ -194,10 +201,6 @@ final class ApplicationRecord {
         name: value['name'] as String?,
         platform: value['platform'] as String?,
         createdAt: DateTime.parse(value['createdAt']! as String),
-        status: value['status'] as String? ?? 'active',
-        updatedAt:
-            _optionalTimestamp(value['updatedAt']) ??
-            DateTime.parse(value['createdAt']! as String),
       );
 
   static String _applicationPlatform(String value) {
@@ -219,18 +222,14 @@ final class EnvironmentRecord {
     required this.version,
     required String? promotedReleaseId,
     required this.createdAt,
-    this.status = 'active',
-    DateTime? updatedAt,
   }) : id = requireOpaqueId(id, 'environment ID'),
        organizationId = requireOpaqueId(organizationId, 'organization ID'),
        applicationId = requireOpaqueId(applicationId, 'application ID'),
        name = requireNonEmpty(name, 'environment name'),
        promotedReleaseId = promotedReleaseId == null
            ? null
-           : requireOpaqueId(promotedReleaseId, 'release ID'),
-       updatedAt = (updatedAt ?? createdAt).toUtc() {
+           : requireOpaqueId(promotedReleaseId, 'release ID') {
     if (version < 0) throw const FormatException('Invalid environment version');
-    _lifecycleStatus(status, 'environment status');
   }
 
   final String id;
@@ -240,26 +239,17 @@ final class EnvironmentRecord {
   final int version;
   final String? promotedReleaseId;
   final DateTime createdAt;
-  final String status;
-  final DateTime updatedAt;
 
-  EnvironmentRecord copyWith({
-    int? version,
-    String? promotedReleaseId,
-    String? name,
-    String? status,
-    DateTime? updatedAt,
-  }) => EnvironmentRecord(
-    id: id,
-    organizationId: organizationId,
-    applicationId: applicationId,
-    name: name ?? this.name,
-    version: version ?? this.version,
-    promotedReleaseId: promotedReleaseId ?? this.promotedReleaseId,
-    createdAt: createdAt,
-    status: status ?? this.status,
-    updatedAt: updatedAt ?? this.updatedAt,
-  );
+  EnvironmentRecord copyWith({int? version, String? promotedReleaseId}) =>
+      EnvironmentRecord(
+        id: id,
+        organizationId: organizationId,
+        applicationId: applicationId,
+        name: name,
+        version: version ?? this.version,
+        promotedReleaseId: promotedReleaseId ?? this.promotedReleaseId,
+        createdAt: createdAt,
+      );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
@@ -269,8 +259,6 @@ final class EnvironmentRecord {
     'version': version,
     'promotedReleaseId': promotedReleaseId,
     'createdAt': createdAt.toUtc().toIso8601String(),
-    'status': status,
-    'updatedAt': updatedAt.toUtc().toIso8601String(),
   };
 
   static EnvironmentRecord fromJson(Map<String, Object?> value) =>
@@ -282,10 +270,117 @@ final class EnvironmentRecord {
         version: value['version']! as int,
         promotedReleaseId: value['promotedReleaseId'] as String?,
         createdAt: DateTime.parse(value['createdAt']! as String),
-        status: value['status'] as String? ?? 'active',
-        updatedAt:
-            _optionalTimestamp(value['updatedAt']) ??
-            DateTime.parse(value['createdAt']! as String),
+      );
+}
+
+enum RuntimeDesiredState { patch, base }
+
+extension RuntimeDesiredStateWire on RuntimeDesiredState {
+  String get wireValue => switch (this) {
+    RuntimeDesiredState.patch => 'patch',
+    RuntimeDesiredState.base => 'base',
+  };
+
+  static RuntimeDesiredState parse(Object? value) => switch (value) {
+    'patch' => RuntimeDesiredState.patch,
+    'base' => RuntimeDesiredState.base,
+    _ => throw const FormatException('Invalid runtime desired state'),
+  };
+}
+
+/// The mutable desired runtime state for one environment.
+///
+/// Deployment history remains in immutable audit records and the environment
+/// release pointer. This record only answers what a connected runtime should
+/// be running now, so a base rollback never rewrites deployment history.
+final class EnvironmentRuntimeStateRecord {
+  EnvironmentRuntimeStateRecord({
+    required String id,
+    required String organizationId,
+    required String applicationId,
+    required String environmentId,
+    required this.desiredState,
+    required String releaseId,
+    required String runtimeReleaseId,
+    required this.environmentVersion,
+    required this.revision,
+    required String actorId,
+    required this.updatedAt,
+    String? rollbackControl,
+  }) : id = requireOpaqueId(id, 'runtime state ID'),
+       organizationId = requireOpaqueId(organizationId, 'organization ID'),
+       applicationId = requireOpaqueId(applicationId, 'application ID'),
+       environmentId = requireOpaqueId(environmentId, 'environment ID'),
+       releaseId = requireOpaqueId(releaseId, 'release ID'),
+       runtimeReleaseId = requireRuntimeIdentity(
+         runtimeReleaseId,
+         'runtime release ID',
+       ),
+       actorId = requireOpaqueId(actorId, 'runtime state actor ID'),
+       rollbackControl = rollbackControl == null
+           ? null
+           : requireNonEmpty(
+               rollbackControl,
+               'rollback control',
+               maxLength: 32768,
+             ) {
+    if (environmentVersion < 0 || revision < 1) {
+      throw const FormatException('Invalid runtime state revision');
+    }
+    if (desiredState == RuntimeDesiredState.base && rollbackControl == null) {
+      throw const FormatException(
+        'Base runtime state requires a rollback control',
+      );
+    }
+    if (desiredState == RuntimeDesiredState.patch && rollbackControl != null) {
+      throw const FormatException(
+        'Patch runtime state cannot carry a rollback control',
+      );
+    }
+  }
+
+  final String id;
+  final String organizationId;
+  final String applicationId;
+  final String environmentId;
+  final RuntimeDesiredState desiredState;
+  final String releaseId;
+  final String runtimeReleaseId;
+  final int environmentVersion;
+  final int revision;
+  final String actorId;
+  final DateTime updatedAt;
+  final String? rollbackControl;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'id': id,
+    'organizationId': organizationId,
+    'applicationId': applicationId,
+    'environmentId': environmentId,
+    'desiredState': desiredState.wireValue,
+    'releaseId': releaseId,
+    'runtimeReleaseId': runtimeReleaseId,
+    'environmentVersion': environmentVersion,
+    'revision': revision,
+    'actorId': actorId,
+    'updatedAt': updatedAt.toUtc().toIso8601String(),
+    'rollbackControl': rollbackControl,
+  };
+
+  static EnvironmentRuntimeStateRecord fromJson(Map<String, Object?> value) =>
+      EnvironmentRuntimeStateRecord(
+        id: value['id']! as String,
+        organizationId: value['organizationId']! as String,
+        applicationId: value['applicationId']! as String,
+        environmentId: value['environmentId']! as String,
+        desiredState: RuntimeDesiredStateWire.parse(value['desiredState']),
+        releaseId: value['releaseId']! as String,
+        runtimeReleaseId: value['runtimeReleaseId']! as String,
+        environmentVersion: value['environmentVersion']! as int,
+        revision: value['revision']! as int,
+        actorId: value['actorId']! as String,
+        updatedAt: DateTime.parse(value['updatedAt']! as String),
+        rollbackControl: value['rollbackControl'] as String?,
       );
 }
 
@@ -476,6 +571,9 @@ final class ArtifactRecord {
     required String contentType,
     required this.state,
     required this.createdAt,
+    DateTime? purgeEligibleAt,
+    DateTime? purgedAt,
+    String? purgeReason,
   }) : id = requireOpaqueId(id, 'artifact ID'),
        organizationId = requireOpaqueId(organizationId, 'organization ID'),
        patchId = requireOpaqueId(patchId, 'patch ID'),
@@ -484,7 +582,16 @@ final class ArtifactRecord {
          contentType,
          'content type',
          maxLength: 128,
-       );
+       ),
+       purgeEligibleAt = purgeEligibleAt?.toUtc(),
+       purgedAt = purgedAt?.toUtc(),
+       purgeReason = purgeReason == null
+           ? null
+           : requireNonEmpty(
+               purgeReason,
+               'artifact purge reason',
+               maxLength: 256,
+             );
 
   final String id;
   final String organizationId;
@@ -494,8 +601,19 @@ final class ArtifactRecord {
   final String contentType;
   final String state;
   final DateTime createdAt;
+  final DateTime? purgeEligibleAt;
+  final DateTime? purgedAt;
+  final String? purgeReason;
 
-  ArtifactRecord copyWith({String? state}) => ArtifactRecord(
+  ArtifactRecord copyWith({
+    String? state,
+    DateTime? purgeEligibleAt,
+    DateTime? purgedAt,
+    String? purgeReason,
+    bool clearPurgeEligibleAt = false,
+    bool clearPurgedAt = false,
+    bool clearPurgeReason = false,
+  }) => ArtifactRecord(
     id: id,
     organizationId: organizationId,
     patchId: patchId,
@@ -504,6 +622,11 @@ final class ArtifactRecord {
     contentType: contentType,
     state: state ?? this.state,
     createdAt: createdAt,
+    purgeEligibleAt: clearPurgeEligibleAt
+        ? null
+        : purgeEligibleAt ?? this.purgeEligibleAt,
+    purgedAt: clearPurgedAt ? null : purgedAt ?? this.purgedAt,
+    purgeReason: clearPurgeReason ? null : purgeReason ?? this.purgeReason,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -515,6 +638,10 @@ final class ArtifactRecord {
     'contentType': contentType,
     'state': state,
     'createdAt': createdAt.toUtc().toIso8601String(),
+    if (purgeEligibleAt != null)
+      'purgeEligibleAt': purgeEligibleAt!.toUtc().toIso8601String(),
+    if (purgedAt != null) 'purgedAt': purgedAt!.toUtc().toIso8601String(),
+    if (purgeReason != null) 'purgeReason': purgeReason,
   };
 
   static ArtifactRecord fromJson(Map<String, Object?> value) => ArtifactRecord(
@@ -526,8 +653,14 @@ final class ArtifactRecord {
     contentType: value['contentType']! as String,
     state: value['state']! as String,
     createdAt: DateTime.parse(value['createdAt']! as String),
+    purgeEligibleAt: _optionalArtifactTime(value['purgeEligibleAt']),
+    purgedAt: _optionalArtifactTime(value['purgedAt']),
+    purgeReason: value['purgeReason'] as String?,
   );
 }
+
+DateTime? _optionalArtifactTime(Object? value) =>
+    value is String ? DateTime.parse(value) : null;
 
 final class CredentialRecord {
   CredentialRecord({
@@ -554,7 +687,7 @@ final class CredentialRecord {
            ? null
            : requireOpaqueId(environmentId, 'credential environment ID') {
     final allowed = switch (kind) {
-      CredentialKind.control => controlScopes,
+      CredentialKind.control => <String>{...controlScopes, billingManageScope},
       CredentialKind.delivery => deliveryScopes,
       CredentialKind.observation => observationScopes,
       CredentialKind.scheduler => schedulerScopes,
@@ -836,6 +969,8 @@ final class UpdateCheckRequest {
     required this.runtimeCompatibilityVersion,
     required this.patchFormatVersion,
     required this.highWaterSequence,
+    this.highWaterDigest,
+    this.platformId,
     this.installationId,
   });
 
@@ -846,6 +981,8 @@ final class UpdateCheckRequest {
   final int runtimeCompatibilityVersion;
   final int patchFormatVersion;
   final int highWaterSequence;
+  final String? highWaterDigest;
+  final String? platformId;
   final String? installationId;
 }
 
@@ -855,16 +992,28 @@ final class UpdateCheckResult {
     required this.runtimeReleaseId,
     this.patch,
     this.artifact,
+    this.rollbackControl,
+    this.applicationId,
+    this.environmentId,
+    this.platformId,
   });
 
   final String decision;
   final String runtimeReleaseId;
   final PatchRecord? patch;
   final ArtifactRecord? artifact;
+  final String? rollbackControl;
+  final String? applicationId;
+  final String? environmentId;
+  final String? platformId;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'decision': decision,
     'runtimeReleaseId': runtimeReleaseId,
+    if (rollbackControl != null) 'rollbackControl': rollbackControl,
+    if (applicationId != null) 'applicationId': applicationId,
+    if (environmentId != null) 'environmentId': environmentId,
+    if (platformId != null) 'platformId': platformId,
     if (patch != null)
       'patch': <String, Object?>{
         'runtimePatchId': patch!.runtimePatchId,
@@ -879,6 +1028,51 @@ final class UpdateCheckResult {
         'sizeBytes': artifact!.sizeBytes,
       },
   };
+}
+
+final class CloudRollbackResult {
+  const CloudRollbackResult({
+    required this.status,
+    required this.desiredState,
+    required this.organizationId,
+    required this.applicationId,
+    required this.environmentId,
+    required this.runtimeReleaseId,
+    required this.revision,
+    required this.changed,
+  });
+
+  final String status;
+  final RuntimeDesiredState desiredState;
+  final String organizationId;
+  final String applicationId;
+  final String environmentId;
+  final String runtimeReleaseId;
+  final int revision;
+  final bool changed;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'status': status,
+    'desired_state': desiredState.wireValue,
+    'organization_id': organizationId,
+    'application_id': applicationId,
+    'environment_id': environmentId,
+    'runtime_release_id': runtimeReleaseId,
+    'revision': revision,
+    'changed': changed,
+  };
+
+  static CloudRollbackResult fromJson(Map<String, Object?> value) =>
+      CloudRollbackResult(
+        status: value['status']! as String,
+        desiredState: RuntimeDesiredStateWire.parse(value['desired_state']),
+        organizationId: value['organization_id']! as String,
+        applicationId: value['application_id']! as String,
+        environmentId: value['environment_id']! as String,
+        runtimeReleaseId: value['runtime_release_id']! as String,
+        revision: value['revision']! as int,
+        changed: value['changed']! as bool,
+      );
 }
 
 String encodeTokenScope(Set<String> scopes) =>

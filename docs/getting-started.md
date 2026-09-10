@@ -1,71 +1,48 @@
 # Getting started
 
 This guide runs the bounded Hyfens developer workflow against either the
-managed default or a self-hosted control plane. The current Hyfens release
-provides native CLI archives through GitHub Releases; the source checkout
-remains the contributor fallback. The CLI uses repository path dependencies
-rather than pub.dev.
+managed default or a self-hosted control plane. The CLI uses repository path
+dependencies rather than pub.dev; the public `v0.1.1` GitHub Release provides
+native archives. The source checkout remains the contributor fallback path.
 
 The tested toolchain family is Flutter `3.47.x` with Dart `3.13.x`.
 
-## 1. Install the CLI
+## 1. Install from a source checkout
 
-On macOS or Linux, install the latest release without Dart or Flutter:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/hyfens-hq/hyfens/main/scripts/install-hyfens.sh | bash
-```
-
-The installer detects x64/arm64, verifies the downloaded archive against
-`SHA256SUMS`, and prints PATH guidance. Pin a published release with
-`--version v0.1.0`. Direct Windows archives and PowerShell verification are
-documented in [CLI distribution](cli-distribution.md).
-
-Package-manager installs are:
-
-```bash
-brew install hyfens-hq/tap/hyfens
-```
-
-```powershell
-scoop bucket add hyfens https://github.com/hyfens-hq/scoop-bucket
-scoop install hyfens
-```
-
-WinGet remains an external Microsoft submission gate. For contributors who
-need a source checkout:
+From an existing Hyfens checkout, resolve the CLI's local path dependencies:
 
 ```bash
 export HYFENS_CHECKOUT=/absolute/path/to/hyfens
 cd "$HYFENS_CHECKOUT/cli"
-flutter pub get
+dart pub get
+```
+
+Define the canonical command name in the shell that owns your Flutter project:
+
+```bash
 hyfens() {
   dart run "$HYFENS_CHECKOUT/cli/bin/hyfens.dart" "$@"
 }
 ```
 
-The `tool.dart` source filename is a compatibility detail. New scripts and
-documentation use `hyfens`; there is no second implementation. Do not copy a
-session file, token, or private signing key into the checkout.
+The `tool.dart` source filename is a compatibility detail of the current
+checkout. New scripts and documentation use `hyfens`; there is no second
+implementation. Do not copy a session file, token, or private signing key into
+the checkout.
 
-## 2. Select an endpoint and authenticate
+## 2. Create a managed Cloud workspace
 
-For a new managed Cloud organization, start at
-[`app.hyfens.com/signup`](https://app.hyfens.com/signup). Verify the account,
-complete the first application/environment setup in the Customer Workspace,
-then return here for the public CLI handoff. Managed Cloud signup is separate
-from the self-hosted client-access registration flow and does not require
-payment details or SSH access.
+For a new Hyfens Cloud account, open the customer workspace and choose
+**Create an account**. Supply an email, password, and workspace name, then
+complete the one-time email verification step. Verification creates the
+customer-owned organization, assigns the internal Free plan, and makes the
+account its owner. No payment provider or card is involved in this step.
 
-The managed default is the canonical Cloud API base:
+The existing fixed-organization public registration route is a separate
+read-only client compatibility surface; it does not create Cloud customer
+workspaces.
 
-```text
-https://api.hyfens.com/
-```
-
-Existing profiles using `https://api.hyfens.com/p2/` continue to work and are
-adopted to the canonical root when the CLI reads their session. `/p2/` is a
-legacy deployment alias, not an API version.
+## 3. Select an endpoint and authenticate
 
 Use the default profile for managed work:
 
@@ -73,6 +50,9 @@ Use the default profile for managed work:
 hyfens login
 hyfens profile current
 ```
+
+The managed profile's service endpoint is an internal implementation detail;
+the CLI intentionally keeps it out of public examples and display output.
 
 For self-hosting, provide the HTTPS API base or host once and name the profile:
 
@@ -118,7 +98,7 @@ the selected deployment advertises their URLs. Use them only when
 `GET /.well-known/hyfens` on the selected API base advertises the method. The
 discovery response is the compatibility check, not the hostname.
 
-## 3. Check and bind the Flutter project
+## 4. Check and bind the Flutter project
 
 Run the read-only checks first:
 
@@ -144,7 +124,7 @@ must contain safe organization/application/environment identifiers only. It
 does not write credentials or signing material and must report an application
 identity mismatch rather than weakening the check.
 
-## 4. Create a release, patch ordinary code, and deploy
+## 5. Create a release, patch ordinary code, and deploy
 
 Create a platform-specific release baseline:
 
@@ -180,7 +160,7 @@ native code, manifests, permissions, entitlements, dependencies, or an
 unsupported Dart/Flutter construct requires a normal store release or separate
 review. This workflow is not arbitrary-Dart OTA patching.
 
-## 5. CI authentication
+## 6. CI authentication
 
 CI must use a scoped, expirable, revocable service/API key supplied through the
 public `HYFENS_TOKEN` environment variable:
@@ -198,7 +178,7 @@ repository, `hyfens.yaml`, profile metadata, logs, or a command argument.
 Human browser/device sessions are not the CI contract. SSH is not a developer
 authentication mechanism.
 
-## 6. Run the self-hosted Docker package
+## 7. Run the self-hosted Docker package
 
 For a single-node installation from versioned release images, follow the
 [self-hosted release guide](../deploy/self-hosted/README.md). It covers
@@ -219,7 +199,7 @@ Use the Compose package's documented `down` command to stop it. Use `down -v`
 only for an intentionally disposable run because it deletes the named
 PostgreSQL and object-store volumes.
 
-## 7. Migration from `tool`
+## 8. Migration from `tool`
 
 `tool` is deprecated compatibility nomenclature. Migrate deliberately:
 
@@ -249,8 +229,9 @@ gates or backlog:
 - independent customer applications and physical-device acceptance beyond the
   recorded fixtures;
 - App Store/Google Play, legal, and compliance review;
-- pub.dev publication, package-manager publication, code signing, or a global
-  installer.
+- pub.dev publication, WinGet publication, code signing, or a global registry
+  installer. GitHub Release, curl, Homebrew, and Scoop distribution are
+  documented separately in the [CLI distribution guide](cli-distribution.md).
 
 See the [CLI reference](cli.md) and the
 [developer platform contract](HYFENS_DEVELOPER_PLATFORM_CONTRACT.md) for the

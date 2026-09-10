@@ -156,9 +156,12 @@ final class PostgresControlPlaneStore
     implements
         ControlPlaneStore,
         ArtifactInventory,
-        ConditionalJsonStore,
-        RuntimeReceiptStore,
-        ManagedCloudOnboardingStore {
+        ArtifactDeletion,
+        JsonRecordDeletion,
+        OneTimeTokenConsumption,
+        BoundedObservationDeletion,
+        BillingRefundTransactionStore,
+        NotificationDeliveryClaimStore {
   PostgresControlPlaneStore(
     String connectionString, {
     ArtifactStore? artifacts,
@@ -325,6 +328,83 @@ final class PostgresControlPlaneStore
   Future<void> close() => _pool.close();
 
   @override
+  Future<T> runBillingRefundTransaction<T>(
+    String lockKey,
+    Future<T> Function(BillingRefundTransaction transaction) action,
+  ) => _pool.runTx((session) async {
+    // Refund approval, balance reservation, and provider-attempt claims
+    // share one short-lived database lock. The operation is intentionally
+    // low volume; serializing this boundary is safer than allowing two
+    // workers to approve more than the captured balance.
+    await session.execute('SELECT pg_advisory_xact_lock(7812452)');
+    return action(_PostgresBillingRefundTransaction(session, this));
+  });
+
+  @override
+  Future<Map<String, Object?>?> claimNotificationDelivery({
+    required String deliveryId,
+    required DateTime now,
+    required DateTime leaseUntil,
+    required String claimId,
+  }) => _pool.runTx((session) async {
+    final result = await session.execute(
+      Sql.named(
+        'SELECT body::text AS body_json FROM control_plane_records '
+        'WHERE collection = \'notification_deliveries\' '
+        'AND record_id = @id:text FOR UPDATE',
+      ),
+      parameters: <String, Object?>{'id': deliveryId},
+    );
+    if (result.isEmpty) return null;
+    final current = _decodeBody(result.first.toColumnMap()['body_json']);
+    if (!_notificationClaimIsEligible(current, now)) return null;
+    final updated = <String, Object?>{
+      ...current,
+      'state': 'processing',
+      'attempts': (current['attempts'] as int? ?? 0) + 1,
+      'claimId': claimId,
+      'processingAt': now.toUtc().toIso8601String(),
+      'processingLeaseUntil': leaseUntil.toUtc().toIso8601String(),
+    };
+    await session.execute(
+      Sql.named(
+        'UPDATE control_plane_records SET organization_id = @organization:text, '
+        'body = @body:jsonb, updated_at = now() '
+        'WHERE collection = \'notification_deliveries\' AND record_id = @id:text',
+      ),
+      parameters: <String, Object?>{
+        'organization': updated['organizationId'],
+        'body': updated,
+        'id': deliveryId,
+      },
+    );
+    return updated;
+  });
+
+  @override
+  Future<bool> updateClaimedNotificationDelivery({
+    required String deliveryId,
+    required String claimId,
+    required Map<String, Object?> value,
+  }) => _pool.runTx((session) async {
+    final result = await session.execute(
+      Sql.named(
+        'UPDATE control_plane_records SET organization_id = @organization:text, '
+        'body = @body:jsonb, updated_at = now() '
+        'WHERE collection = \'notification_deliveries\' '
+        'AND record_id = @id:text AND body->>\'claimId\' = @claim:text',
+      ),
+      parameters: <String, Object?>{
+        'organization': value['organizationId'],
+        'body': value,
+        'id': deliveryId,
+        'claim': claimId,
+      },
+    );
+    return result.affectedRows == 1;
+  });
+
+  @override
   Future<void> checkReadiness() async {
     await _pool.execute('SELECT 1');
     final readiness = _artifacts;
@@ -391,276 +471,6 @@ final class PostgresControlPlaneStore
   }
 
   @override
-  Future<void> createRuntimeAdmission(String id, Map<String, Object?> value) =>
-      _createRuntimeJson('runtime_admissions', id, value);
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeAdmission(String id) =>
-      readJson('runtime_admissions', id);
-
-  @override
-  Future<void> createRuntimeInstallation(
-    String id,
-    Map<String, Object?> value,
-  ) => _createRuntimeJson('runtime_installations', id, value);
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeInstallation(String id) =>
-      readJson('runtime_installations', id);
-
-  @override
-  Future<void> createRuntimeRegistration(
-    String id,
-    Map<String, Object?> value,
-  ) => _createRuntimeJson('runtime_registrations', id, value);
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeRegistration(String id) =>
-      readJson('runtime_registrations', id);
-
-  @override
-  Future<void> createRuntimeRejection(String id, Map<String, Object?> value) =>
-      _createRuntimeJson('runtime_rejections', id, value);
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeReceipt(String id) =>
-      readJson('runtime_receipts', id);
-
-  @override
-  Future<RuntimeReceiptCommitResult> commitRuntimeReceipt({
-    required String receiptId,
-    required Map<String, Object?> receipt,
-    required String usageEventId,
-    required Map<String, Object?> usageEvent,
-  }) => _pool.runTx((session) async {
-    final existingReceipt = await _readRuntimeJson(
-      session,
-      'runtime_receipts',
-      receiptId,
-      forUpdate: true,
-    );
-    if (existingReceipt != null) {
-      if (canonicalJson(existingReceipt) != canonicalJson(receipt)) {
-        throw const StorageConflict('Runtime receipt ID was reused');
-      }
-      final existingUsage = await _readRuntimeJson(
-        session,
-        'runtime_usage_events',
-        usageEventId,
-        forUpdate: true,
-      );
-      if (existingUsage == null) {
-        throw const StorageConflict(
-          'Runtime receipt exists without its usage event',
-        );
-      }
-      return const RuntimeReceiptCommitResult(
-        createdReceipt: false,
-        createdUsage: false,
-      );
-    }
-    final existingUsage = await _readRuntimeJson(
-      session,
-      'runtime_usage_events',
-      usageEventId,
-      forUpdate: true,
-    );
-    if (existingUsage != null) {
-      throw const StorageConflict('Runtime usage key was already settled');
-    }
-    final createdReceipt = await _insertRuntimeJson(
-      session,
-      'runtime_receipts',
-      receiptId,
-      receipt,
-    );
-    if (!createdReceipt) {
-      final persistedReceipt = await _readRuntimeJson(
-        session,
-        'runtime_receipts',
-        receiptId,
-        forUpdate: true,
-      );
-      if (persistedReceipt == null ||
-          canonicalJson(persistedReceipt) != canonicalJson(receipt)) {
-        throw const StorageConflict('Runtime receipt ID was reused');
-      }
-      final persistedUsage = await _readRuntimeJson(
-        session,
-        'runtime_usage_events',
-        usageEventId,
-        forUpdate: true,
-      );
-      if (persistedUsage == null) {
-        throw const StorageConflict(
-          'Runtime receipt exists without its usage event',
-        );
-      }
-      return const RuntimeReceiptCommitResult(
-        createdReceipt: false,
-        createdUsage: false,
-      );
-    }
-    final createdUsage = await _insertRuntimeJson(
-      session,
-      'runtime_usage_events',
-      usageEventId,
-      usageEvent,
-    );
-    if (!createdUsage) {
-      throw const StorageConflict('Runtime usage key was already settled');
-    }
-    return const RuntimeReceiptCommitResult(
-      createdReceipt: true,
-      createdUsage: true,
-    );
-  });
-
-  Future<void> _createRuntimeJson(
-    String collection,
-    String id,
-    Map<String, Object?> value,
-  ) => _pool.runTx((session) async {
-    await _insertRuntimeJson(session, collection, id, value);
-    final existing = await _readRuntimeJson(
-      session,
-      collection,
-      id,
-      forUpdate: true,
-    );
-    if (existing == null || canonicalJson(existing) != canonicalJson(value)) {
-      throw const StorageConflict('Runtime record insert did not persist');
-    }
-  });
-
-  @override
-  Future<ManagedCloudOnboardingCommitResult> commitManagedCloudOnboarding({
-    required String signupId,
-    required Map<String, Object?> expectedSignup,
-    required Map<String, Object?> verifiedSignup,
-    required Map<String, Object?> organization,
-    required Map<String, Object?> user,
-    required Map<String, Object?> onboarding,
-  }) => _pool.runTx((session) async {
-    final current = await _readRuntimeJson(
-      session,
-      'cloud_signups',
-      signupId,
-      forUpdate: true,
-    );
-    if (current == null) {
-      throw const StorageConflict('Cloud signup does not exist');
-    }
-    if (canonicalJson(current) == canonicalJson(verifiedSignup)) {
-      await _verifyManagedCloudRecord(session, 'organizations', organization);
-      await _verifyManagedCloudRecord(session, 'users', user);
-      await _verifyManagedCloudRecord(session, 'cloud_onboarding', onboarding);
-      return const ManagedCloudOnboardingCommitResult(created: false);
-    }
-    if (canonicalJson(current) != canonicalJson(expectedSignup)) {
-      throw const StorageConflict('Cloud signup changed during verification');
-    }
-    await _createManagedCloudRecord(session, 'organizations', organization);
-    await _createManagedCloudRecord(session, 'users', user);
-    await _createManagedCloudRecord(session, 'cloud_onboarding', onboarding);
-    final updated = await session.execute(
-      Sql.named(
-        'UPDATE control_plane_records SET organization_id = @organization:text, '
-        'body = @body:jsonb, updated_at = now() '
-        'WHERE collection = @collection:text AND record_id = @id:text',
-      ),
-      parameters: <String, Object?>{
-        'collection': 'cloud_signups',
-        'id': signupId,
-        'organization': verifiedSignup['organizationId'],
-        'body': verifiedSignup,
-      },
-    );
-    if (updated.affectedRows != 1) {
-      throw const StorageConflict('Cloud signup update did not persist');
-    }
-    return const ManagedCloudOnboardingCommitResult(created: true);
-  });
-
-  Future<void> _createManagedCloudRecord(
-    Session session,
-    String collection,
-    Map<String, Object?> value,
-  ) async {
-    final id = value['id'];
-    if (id is! String ||
-        !(await _insertRuntimeJson(session, collection, id, value))) {
-      if (id is! String) {
-        throw const StorageConflict('Managed Cloud record has no ID');
-      }
-      await _verifyManagedCloudRecord(session, collection, value);
-    }
-  }
-
-  Future<void> _verifyManagedCloudRecord(
-    Session session,
-    String collection,
-    Map<String, Object?> value,
-  ) async {
-    final id = value['id'];
-    if (id is! String) {
-      throw const StorageConflict('Managed Cloud record has no ID');
-    }
-    final current = await _readRuntimeJson(
-      session,
-      collection,
-      id,
-      forUpdate: true,
-    );
-    if (current == null || canonicalJson(current) != canonicalJson(value)) {
-      throw const StorageConflict(
-        'Managed Cloud onboarding record is incomplete',
-      );
-    }
-  }
-
-  Future<bool> _insertRuntimeJson(
-    Session session,
-    String collection,
-    String id,
-    Map<String, Object?> value,
-  ) async {
-    final result = await session.execute(
-      Sql.named(
-        'INSERT INTO control_plane_records '
-        '(collection, record_id, organization_id, body) '
-        'VALUES (@collection:text, @id:text, @organization:text, @body:jsonb) '
-        'ON CONFLICT (collection, record_id) DO NOTHING',
-      ),
-      parameters: <String, Object?>{
-        'collection': collection,
-        'id': id,
-        'organization': value['organizationId'],
-        'body': value,
-      },
-    );
-    return result.affectedRows == 1;
-  }
-
-  Future<Map<String, Object?>?> _readRuntimeJson(
-    Session session,
-    String collection,
-    String id, {
-    required bool forUpdate,
-  }) async {
-    final result = await session.execute(
-      Sql.named(
-        'SELECT body::text AS body_json FROM control_plane_records '
-        'WHERE collection = @collection:text AND record_id = @id:text'
-        '${forUpdate ? ' FOR UPDATE' : ''}',
-      ),
-      parameters: <String, Object?>{'collection': collection, 'id': id},
-    );
-    if (result.isEmpty) return null;
-    return _decodeBody(result.first.toColumnMap()['body_json']);
-  }
-
-  @override
   Future<void> replaceJson(
     String collection,
     String id,
@@ -685,117 +495,41 @@ final class PostgresControlPlaneStore
   }
 
   @override
-  Future<void> replaceJsonBatch(
-    String collection,
-    Map<String, Map<String, Object?>> values,
-  ) async {
-    if (values.isEmpty) return;
-    final entries = values.entries.toList()
-      ..sort((left, right) => left.key.compareTo(right.key));
-    await _pool.runTx((session) async {
-      for (final entry in entries) {
-        final result = await session.execute(
-          Sql.named(
-            'SELECT record_id FROM control_plane_records '
-            'WHERE collection = @collection:text AND record_id = @id:text '
-            'FOR UPDATE',
-          ),
-          parameters: <String, Object?>{
-            'collection': collection,
-            'id': entry.key,
-          },
-        );
-        if (result.isEmpty) {
-          throw const StorageConflict('Record does not exist');
-        }
-      }
-      for (final entry in entries) {
-        final result = await session.execute(
-          Sql.named(
-            'UPDATE control_plane_records SET organization_id = @organization:text, '
-            'body = @body:jsonb, updated_at = now() '
-            'WHERE collection = @collection:text AND record_id = @id:text',
-          ),
-          parameters: <String, Object?>{
-            'collection': collection,
-            'id': entry.key,
-            'organization': entry.value['organizationId'],
-            'body': entry.value,
-          },
-        );
-        if (result.affectedRows != 1) {
-          throw const StorageConflict('Record does not exist');
-        }
-      }
-    });
+  Future<bool> deleteJson(String collection, String id) async {
+    final result = await _pool.execute(
+      Sql.named(
+        'DELETE FROM control_plane_records '
+        'WHERE collection = @collection:text AND record_id = @id:text',
+      ),
+      parameters: <String, Object?>{'collection': collection, 'id': id},
+    );
+    return result.affectedRows > 0;
   }
 
   @override
-  Future<bool> replaceJsonIfCurrent({
+  Future<Map<String, Object?>?> consumeOneTimeTokenIfUnused({
     required String collection,
     required String id,
-    required Map<String, Object?> expected,
-    required Map<String, Object?> replacement,
+    required DateTime consumedAt,
   }) async {
-    return replaceJsonBatchIfCurrent(
-      collection: collection,
-      expected: <String, Map<String, Object?>>{id: expected},
-      replacements: <String, Map<String, Object?>>{id: replacement},
+    final result = await _pool.runTx(
+      (session) => session.execute(
+        Sql.named(
+          'UPDATE control_plane_records SET body = jsonb_set('
+          'body, \'{consumedAt}\', to_jsonb(@consumed_at:text), true), '
+          'updated_at = now() WHERE collection = @collection:text '
+          'AND record_id = @id:text AND body->>\'consumedAt\' IS NULL '
+          'RETURNING body::text AS body_json',
+        ),
+        parameters: <String, Object?>{
+          'collection': collection,
+          'id': id,
+          'consumed_at': consumedAt.toUtc().toIso8601String(),
+        },
+      ),
     );
-  }
-
-  @override
-  Future<bool> replaceJsonBatchIfCurrent({
-    required String collection,
-    required Map<String, Map<String, Object?>> expected,
-    required Map<String, Map<String, Object?>> replacements,
-  }) async {
-    if (expected.isEmpty || expected.length != replacements.length) {
-      throw const StorageConflict('Conditional replacement set is invalid');
-    }
-    final expectedKeys = expected.keys.toSet();
-    if (!expectedKeys.containsAll(replacements.keys) ||
-        !replacements.keys.toSet().containsAll(expectedKeys)) {
-      throw const StorageConflict('Conditional replacement set is invalid');
-    }
-    final entries = expected.entries.toList()
-      ..sort((left, right) => left.key.compareTo(right.key));
-    return _pool.runTx((session) async {
-      for (final entry in entries) {
-        final result = await session.execute(
-          Sql.named(
-            'SELECT record_id FROM control_plane_records '
-            'WHERE collection = @collection:text AND record_id = @id:text '
-            'AND body = @body:jsonb FOR UPDATE',
-          ),
-          parameters: <String, Object?>{
-            'collection': collection,
-            'id': entry.key,
-            'body': entry.value,
-          },
-        );
-        if (result.isEmpty) return false;
-      }
-      for (final entry in entries) {
-        final result = await session.execute(
-          Sql.named(
-            'UPDATE control_plane_records SET organization_id = @organization:text, '
-            'body = @body:jsonb, updated_at = now() '
-            'WHERE collection = @collection:text AND record_id = @id:text',
-          ),
-          parameters: <String, Object?>{
-            'collection': collection,
-            'id': entry.key,
-            'organization': replacements[entry.key]!['organizationId'],
-            'body': replacements[entry.key],
-          },
-        );
-        if (result.affectedRows != 1) {
-          throw const StorageConflict('Record does not exist');
-        }
-      }
-      return true;
-    });
+    if (result.isEmpty) return null;
+    return _decodeBody(result.first.toColumnMap()['body_json']);
   }
 
   @override
@@ -900,6 +634,27 @@ final class PostgresControlPlaneStore
     if (value is Uint8List) return List<int>.from(value);
     if (value is List<int>) return List<int>.from(value);
     throw const StorageConflict('Stored artifact has an invalid byte value');
+  }
+
+  @override
+  Future<bool> deleteArtifact(String digest) async {
+    final artifacts = _artifacts;
+    if (artifacts != null) {
+      if (artifacts case final ArtifactDeletion deletion) {
+        return deletion.deleteArtifact(digest);
+      }
+      throw const StorageUnavailable(
+        'Artifact deletion is unavailable for the configured object store',
+      );
+    }
+    final normalized = requireSha256Digest(digest);
+    final result = await _pool.execute(
+      Sql.named(
+        'DELETE FROM control_plane_artifacts WHERE digest = @digest:text',
+      ),
+      parameters: <String, Object?>{'digest': normalized},
+    );
+    return result.affectedRows > 0;
   }
 
   @override
@@ -1093,6 +848,37 @@ final class PostgresControlPlaneStore
     String? applicationId,
     String? environmentId,
     required DateTime olderThan,
+  }) => _deleteObservations(
+    organizationId: organizationId,
+    applicationId: applicationId,
+    environmentId: environmentId,
+    olderThan: olderThan,
+  );
+
+  @override
+  Future<int> deleteObservationsBatch({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    required int limit,
+  }) {
+    if (limit < 1) return Future<int>.value(0);
+    return _deleteObservations(
+      organizationId: organizationId,
+      applicationId: applicationId,
+      environmentId: environmentId,
+      olderThan: olderThan,
+      limit: limit,
+    );
+  }
+
+  Future<int> _deleteObservations({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    int? limit,
   }) async {
     final conditions = <String>['organization_id = @organization:text'];
     final parameters = <String, Object?>{
@@ -1108,10 +894,15 @@ final class PostgresControlPlaneStore
       parameters['environment'] = environmentId;
     }
     conditions.add('received_at < @older:timestamptz');
+    final statement = limit == null
+        ? 'DELETE FROM control_plane_observations WHERE ${conditions.join(' AND ')}'
+        : 'DELETE FROM control_plane_observations WHERE ctid IN ('
+              'SELECT ctid FROM control_plane_observations '
+              'WHERE ${conditions.join(' AND ')} '
+              'ORDER BY received_at, event_id LIMIT @limit:int)';
+    if (limit != null) parameters['limit'] = limit;
     final result = await _pool.execute(
-      Sql.named(
-        'DELETE FROM control_plane_observations WHERE ${conditions.join(' AND ')}',
-      ),
+      Sql.named(statement),
       parameters: parameters,
     );
     return result.affectedRows;
@@ -1311,11 +1102,183 @@ final class PostgresControlPlaneStore
     );
   }
 
+  bool _notificationClaimIsEligible(
+    Map<String, Object?> delivery,
+    DateTime now,
+  ) {
+    final state = delivery['state'];
+    if (state == 'pending' || state == 'soft_failed') {
+      final nextAttemptAt = delivery['nextAttemptAt'];
+      final next = nextAttemptAt is String
+          ? DateTime.tryParse(nextAttemptAt)
+          : null;
+      return next == null || !next.isAfter(now.toUtc());
+    }
+    if (state != 'processing') return false;
+    final lease = delivery['processingLeaseUntil'];
+    final leaseUntil = lease is String ? DateTime.tryParse(lease) : null;
+    return leaseUntil == null || !leaseUntil.isAfter(now.toUtc());
+  }
+
   bool _sameBytes(List<int> left, List<int> right) {
     if (left.length != right.length) return false;
     for (var index = 0; index < left.length; index++) {
       if (left[index] != right[index]) return false;
     }
     return true;
+  }
+}
+
+final class _PostgresBillingRefundTransaction
+    implements BillingRefundTransaction {
+  _PostgresBillingRefundTransaction(this.session, this.store);
+
+  final Session session;
+  final PostgresControlPlaneStore store;
+
+  @override
+  Future<Map<String, Object?>?> readJson(String collection, String id) async {
+    final result = await session.execute(
+      Sql.named(
+        'SELECT body::text AS body_json FROM control_plane_records '
+        'WHERE collection = @collection:text AND record_id = @id:text',
+      ),
+      parameters: <String, Object?>{'collection': collection, 'id': id},
+    );
+    if (result.isEmpty) return null;
+    return store._decodeBody(result.first.toColumnMap()['body_json']);
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> listJson(String collection) async {
+    final result = await session.execute(
+      Sql.named(
+        'SELECT body::text AS body_json FROM control_plane_records '
+        'WHERE collection = @collection:text ORDER BY record_id',
+      ),
+      parameters: <String, Object?>{'collection': collection},
+    );
+    return List.unmodifiable(
+      result.map((row) => store._decodeBody(row.toColumnMap()['body_json'])),
+    );
+  }
+
+  @override
+  Future<void> createJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) async {
+    final canonical = canonicalJson(value);
+    await session.execute(
+      Sql.named(
+        'INSERT INTO control_plane_records '
+        '(collection, record_id, organization_id, body) '
+        'VALUES (@collection:text, @id:text, @organization:text, @body:jsonb) '
+        'ON CONFLICT (collection, record_id) DO NOTHING',
+      ),
+      parameters: <String, Object?>{
+        'collection': collection,
+        'id': id,
+        'organization': value['organizationId'],
+        'body': value,
+      },
+    );
+    final existing = await readJson(collection, id);
+    if (existing == null || canonicalJson(existing) != canonical) {
+      if (existing == null) {
+        throw const StorageConflict('Record insert did not persist');
+      }
+      throw const StorageConflict('Immutable record already exists');
+    }
+  }
+
+  @override
+  Future<void> replaceJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) async {
+    final result = await session.execute(
+      Sql.named(
+        'UPDATE control_plane_records SET organization_id = @organization:text, '
+        'body = @body:jsonb, updated_at = now() '
+        'WHERE collection = @collection:text AND record_id = @id:text',
+      ),
+      parameters: <String, Object?>{
+        'collection': collection,
+        'id': id,
+        'organization': value['organizationId'],
+        'body': value,
+      },
+    );
+    if (result.affectedRows != 1) {
+      throw const StorageConflict('Record does not exist');
+    }
+  }
+
+  @override
+  Future<void> appendAudit(String id, Map<String, Object?> value) async {
+    final existing = await session.execute(
+      Sql.named(
+        'SELECT body::text AS body_json FROM control_plane_records '
+        'WHERE collection = @collection:text AND record_id = @id:text '
+        'FOR UPDATE',
+      ),
+      parameters: <String, Object?>{'collection': 'audit', 'id': id},
+    );
+    if (existing.isNotEmpty) {
+      final current = store._decodeBody(
+        existing.first.toColumnMap()['body_json'],
+      );
+      if (canonicalJson(current) != canonicalJson(value)) {
+        throw const StorageConflict('Audit record already exists differently');
+      }
+      return;
+    }
+
+    final body = canonicalJson(value);
+    final digest = sha256Digest(<int>[...utf8.encode(body)]);
+    await session.execute('SELECT pg_advisory_xact_lock(7812451)');
+    final previous = await session.execute(
+      'SELECT record_digest FROM control_plane_audit_chain '
+      'ORDER BY sequence DESC LIMIT 1',
+    );
+    final previousDigest = previous.isEmpty
+        ? null
+        : previous.first.toColumnMap()['record_digest'] as String?;
+    final nextSequence = await session.execute(
+      'SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence '
+      'FROM control_plane_audit_chain',
+    );
+    await session.execute(
+      Sql.named(
+        'INSERT INTO control_plane_audit_chain '
+        '(sequence, audit_id, organization_id, previous_digest, record_digest, body) '
+        'VALUES (@sequence:int8, @id:text, @organization:text, @previous:text, '
+        '@digest:text, @body:jsonb)',
+      ),
+      parameters: <String, Object?>{
+        'sequence': nextSequence.first.toColumnMap()['next_sequence'],
+        'id': id,
+        'organization': value['organizationId'],
+        'previous': previousDigest,
+        'digest': digest,
+        'body': value,
+      },
+    );
+    await session.execute(
+      Sql.named(
+        'INSERT INTO control_plane_records '
+        '(collection, record_id, organization_id, body) '
+        'VALUES (@collection:text, @id:text, @organization:text, @body:jsonb)',
+      ),
+      parameters: <String, Object?>{
+        'collection': 'audit',
+        'id': id,
+        'organization': value['organizationId'],
+        'body': value,
+      },
+    );
   }
 }

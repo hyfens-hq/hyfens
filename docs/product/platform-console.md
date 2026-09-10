@@ -1,23 +1,20 @@
 # Platform Console
 
-Status: AUTHORITATIVE product contract; implementation owned by private Cloud.
+Status: AUTHORITATIVE current product guide.
 
 The Platform Console is the privileged operator surface for Hyfens itself. It
 is intended for authorized Hyfens owners, administrators, support, operations,
 security, and commercial operators where the corresponding capability exists.
-The source owner is the private `hyfens-cloud-web` project. The canonical
-managed host is `platform.hyfens.com`; its DNS record, TLS certificate, edge
-route, and API-origin allow-list are active. Local Cloud development uses the
-`/platform` route root.
+The canonical managed host is `platform.hyfens.com`; local development uses
+the `/platform` route root.
 
 ## Audience and boundary
 
 Platform sessions use an explicit `platform` authorization audience and
-server-side platform capabilities. Legacy deployments may retain the
-configured platform-admin identity as a compatibility guard; new staff use an
-explicit `platform_system` membership with a bounded role capability bundle.
-A customer session cannot gain this context by changing a URL or by belonging
-to several organizations.
+server-side platform capabilities. The current compatibility guard also
+requires the configured platform-admin identity and an eligible platform
+membership. A customer session cannot gain this context by changing a URL or
+by belonging to several organizations.
 
 The Platform Console is not a customer workspace with extra menu items. It has
 its own navigation and context bar, and it does not use the customer
@@ -25,27 +22,17 @@ membership switcher or silently impersonate a customer.
 
 ## Current navigation
 
-- **Overview** — aggregate platform metrics plus available commercial and
-  support-queue signals.
+- **Overview** — aggregate platform metrics and their availability boundary.
 - **Organizations** — a bounded cross-tenant directory and read-focused
   organization detail projection. It includes metadata, counts, activity,
-  subscription summary, open support-case count, applications, and
-  environments, not customer secrets.
-- **Commercial** — read-only MRR/ARR and subscription metrics derived from
-  active control-plane plan/subscription records. When a billing source,
-  currency, or payment history is unavailable, the page says so instead of
-  fabricating revenue.
-- **Support** — tenant-aware case queue and detail view. Authorized staff can
-  assign cases to active platform users, change status/priority, and send
-  customer-visible replies or explicitly internal notes.
+  applications, and environments, not customer secrets.
 - **Security & audit** — events explicitly recorded for the platform audience;
   customer audit rows are not relabeled as platform events.
 - **Operations** — the current metrics-backed operational view. It reports only
   signals the control plane actually provides and uses unavailable/unknown
   states instead of implying production availability.
-- **Platform users** — staff identity, status, platform role/capability,
-  invitation, deactivation/reactivation, and session-revocation controls.
-  Customer members and credential material are excluded.
+- **Platform users** — staff identity, status, platform role/capability, and
+  access metadata. Customer members and credential material are excluded.
 - **Plans & entitlements** — read-only plan and subscription metadata without
   payment/provider secrets.
 - **Platform settings** — the current operator access boundary and endpoint
@@ -70,31 +57,7 @@ platform:audit:read
 platform:operations:read
 platform:accounts:read
 platform:entitlements:read
-platform:commercial:read
-platform:support:read
-platform:support:write
-platform:staff:manage
-platform:sessions:revoke
 ```
-
-Staff administration is capability-checked. Staff invitations are single-use
-and store only token hashes; staff role changes, deactivation/reactivation,
-and platform-session revocation are audited. Staff administration never
-appears in the Customer Workspace. A recipient can use the generated
-`/staff-invite/<token>` link to create the invited staff account; the
-acceptance response establishes a platform-audience session without exposing
-any existing credential material.
-
-Commercial metrics are sourced from `billing_plans` and
-`billing_subscriptions`. They represent active recurring plan amounts only;
-the current control plane does not record payment/revenue history, so cash
-revenue, churn, expansion, and contraction are not claimed. Multiple
-currencies are reported as a source boundary rather than summed together.
-
-Support staff mutations are explicit and audited. Assignment accepts active
-platform users only. Customer-visible replies and platform-internal notes use
-separate visibility values; internal notes never enter Customer Workspace
-responses.
 
 No platform projection returns passwords, sessions, customer credential
 plaintext, token hashes, signing keys, database credentials, or provider
@@ -108,17 +71,11 @@ self-hosted operator may inspect the Customer Workspace on the instance origin
 and use the deployment/operator documentation; an instance-admin surface is a
 separate future capability, not a disguised global console.
 
-Billing mutation, incident management, infrastructure/provider controls, and
-support impersonation remain backlog until their explicit contracts are
-ready. Platform MFA has an enforcement seam controlled by
-`HYFENS_PLATFORM_MFA_REQUIRED`; when enabled, a platform session without a
-verified MFA state is denied with `PLATFORM_MFA_REQUIRED`. The current
-repository does not provide an MFA enrollment/provider flow, so enabling this
-flag requires the deployment's approved MFA integration. Support inspection
-is performed through platform APIs, not customer-session impersonation.
+Time-limited support access, staff role mutation, billing mutation, incident
+management, infrastructure/provider controls, and MFA/network hardening remain
+backlog until their explicit contracts are ready. Silent customer
+impersonation is not part of the product.
 
 See [dashboard separation architecture](../architecture/dashboard-separation.md)
-for routes and ownership, and the [security architecture](../architecture/security.md)
-for the broader trust boundary. The public OSS dashboard retains only the
-shared API/auth contract and the Customer/Instance Workspace required for
-self-hosting; it does not ship this console.
+for routes and the [security architecture](../architecture/security.md) for
+the broader trust boundary.

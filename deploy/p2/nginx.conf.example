@@ -1,0 +1,23 @@
+# Example boundary only. Supply certificates and trust policy through the
+# operator's existing reverse-proxy deployment; do not commit private keys.
+server {
+    listen 443 ssl;
+    server_name control-plane.example.invalid;
+
+    ssl_certificate /run/secrets/tls_certificate.pem;
+    ssl_certificate_key /run/secrets/tls_private_key.pem;
+
+    client_max_body_size 4m;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    proxy_send_timeout 30s;
+
+    location / {
+        proxy_pass http://127.0.0.1:18082;
+        proxy_set_header Host $host;
+        proxy_set_header X-Request-Id $request_id;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_http_version 1.1;
+    }
+}

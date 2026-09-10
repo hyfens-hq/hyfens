@@ -896,6 +896,46 @@ code {
   opacity: 1;
 }
 
+.platform-context {
+  display: grid;
+  gap: 9px;
+  margin: 16px 14px 12px;
+  padding: 12px;
+}
+
+.platform-context strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-context-note {
+  margin: 0;
+  color: var(--faint);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.platform-sidebar-footer .button {
+  width: 100%;
+}
+
+.platform-context-bar {
+  grid-template-columns: minmax(190px, 0.4fr) minmax(0, 1fr);
+}
+
+.platform-context-summary {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
 .workspace-context-select select option {
   background: var(--surface);
   color: var(--text);
@@ -2184,44 +2224,6 @@ html[data-theme="light"] body {
   margin-top: 4px;
   color: var(--faint);
   font-size: 0.66rem;
-}
-
-.resource-actions {
-  display: grid;
-  gap: 8px;
-  min-width: 170px;
-}
-
-.inline-action-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.support-message-list {
-  display: grid;
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.support-message {
-  display: grid;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--surface-soft);
-}
-
-.support-message p {
-  margin: 0;
-  color: var(--text);
-  font-size: 0.74rem;
-  line-height: 1.55;
-  white-space: pre-wrap;
 }
 
 .status-tag {

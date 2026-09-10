@@ -8,9 +8,10 @@ import 'diagnostics.dart';
 
 /// The resolved Dart application boundary for one target build.
 ///
-/// A native flavor and its Dart entrypoint are one release boundary. Keeping
-/// them together prevents release, patch, and build adapters from selecting
-/// different application entrypoints.
+/// A flavor is a native build selection. The entrypoint is the Dart file that
+/// owns the application's `main()` function for that selection. Keeping both
+/// values together prevents release, patch, and build adapters from silently
+/// choosing different application boundaries.
 final class EntrypointSelection {
   const EntrypointSelection({
     required this.target,
@@ -29,6 +30,11 @@ final class EntrypointSelection {
   };
 }
 
+/// Normalizes and validates a project-relative Flutter Dart entrypoint.
+///
+/// The instrumentation graph only scans package `lib/` trees. Rejecting
+/// absolute paths, traversal, non-Dart files, and paths outside `lib/` before
+/// graph work begins avoids ambiguous or unsafe build behavior.
 String normalizeEntrypointPath(String value) {
   final normalizedSeparators = value.trim().replaceAll(r'\', '/');
   final segments = normalizedSeparators.split('/');
@@ -229,8 +235,9 @@ final class ToolConfig {
     return include.any((pattern) => globMatches(pattern, normalized));
   }
 
-  /// Resolve an explicit entrypoint or a target/flavor mapping. A flavor with
-  /// no mapping is rejected instead of silently falling back to lib/main.dart.
+  /// Resolves an entrypoint from an explicit CLI override or the configured
+  /// target/flavor map. A flavor without an explicit/configured entrypoint is
+  /// rejected instead of silently instrumenting lib/main.dart.
   EntrypointSelection resolveEntrypoint({
     required String target,
     String? flavor,
@@ -293,10 +300,6 @@ final class HyfensProjectBinding {
     this.applicationId,
     this.environmentId,
     this.runtimeApplicationId,
-    this.projectPath,
-    this.flavor,
-    this.entrypointPath,
-    this.targetSelections = const <String, HyfensTargetBinding>{},
     this.version = 1,
   });
 
@@ -306,22 +309,6 @@ final class HyfensProjectBinding {
   final String? applicationId;
   final String? environmentId;
   final String? runtimeApplicationId;
-  final String? projectPath;
-  final String? flavor;
-  final String? entrypointPath;
-  final Map<String, HyfensTargetBinding> targetSelections;
-
-  HyfensTargetBinding? selectionFor(String target) {
-    final targetSelection = targetSelections[target];
-    if (targetSelection != null) return targetSelection;
-    if (targetSelections.isNotEmpty) return null;
-    if (flavor == null && entrypointPath == null) return null;
-    return HyfensTargetBinding(
-      target: target,
-      flavor: flavor,
-      entrypointPath: entrypointPath,
-    );
-  }
 
   static HyfensProjectBinding? load(File file) {
     if (!file.existsSync()) return null;
@@ -354,11 +341,6 @@ final class HyfensProjectBinding {
       'environment',
       'environment_id',
       'runtime_application_id',
-      'project',
-      'project_path',
-      'flavor',
-      'entrypoint',
-      'targets',
     };
     final unknownFields = raw.keys
         .whereType<String>()
@@ -371,7 +353,7 @@ final class HyfensProjectBinding {
         summary: 'hyfens.yaml contains unsupported fields',
         detail: unknownFields.join(', '),
         path: file.path,
-        action: 'Keep only profile, safe project identifiers, and release selection metadata in hyfens.yaml.',
+        action: 'Keep only profile and safe organization/application/environment identifiers in hyfens.yaml.',
       );
     }
     _rejectSecretFields(raw, file);
@@ -404,13 +386,6 @@ final class HyfensProjectBinding {
         raw['runtime_application_id'],
         'runtime_application_id',
       ),
-      projectPath: _hyfensNullableProjectPath(
-        raw['project'] ?? raw['project_path'],
-        'project',
-      ),
-      flavor: _hyfensNullableFlavor(raw['flavor']),
-      entrypointPath: _hyfensNullableEntrypoint(raw['entrypoint']),
-      targetSelections: _hyfensTargetBindings(raw['targets']),
     );
   }
 
@@ -418,22 +393,6 @@ final class HyfensProjectBinding {
     final lines = <String>[
       'version: 1',
       'profile: $profile',
-      if (projectPath != null) 'project: $projectPath',
-      if (flavor != null) 'flavor: $flavor',
-      if (entrypointPath != null) 'entrypoint: $entrypointPath',
-      if (targetSelections.isNotEmpty) ...<String>[
-        '',
-        'targets:',
-        for (final target
-            in targetSelections.keys.toList()..sort()) ...<String>[
-          '  $target:',
-          if (targetSelections[target]!.flavor != null)
-            '    flavor: ' + targetSelections[target]!.flavor.toString(),
-          if (targetSelections[target]!.entrypointPath != null)
-            '    entrypoint: ' +
-                targetSelections[target]!.entrypointPath.toString(),
-        ],
-      ],
       if (organizationId != null) 'organization: $organizationId',
       if (applicationId != null) 'application: $applicationId',
       if (environmentId != null) 'environment: $environmentId',
@@ -447,35 +406,10 @@ final class HyfensProjectBinding {
   Map<String, Object?> toJson() => <String, Object?>{
     'version': version,
     'profile': profile,
-    'project': projectPath,
-    'flavor': flavor,
-    'entrypoint': entrypointPath,
-    'targets': <String, Object?>{
-      for (final entry in targetSelections.entries)
-        entry.key: entry.value.toJson(),
-    },
     'organization': organizationId,
     'application': applicationId,
     'environment': environmentId,
     'runtimeApplicationId': runtimeApplicationId,
-  };
-}
-
-final class HyfensTargetBinding {
-  const HyfensTargetBinding({
-    required this.target,
-    this.flavor,
-    this.entrypointPath,
-  });
-
-  final String target;
-  final String? flavor;
-  final String? entrypointPath;
-
-  Map<String, Object?> toJson() => <String, Object?>{
-    'target': target,
-    'flavor': flavor,
-    'entrypoint': entrypointPath,
   };
 }
 
@@ -565,134 +499,6 @@ String? _nullableString(Object? value) {
     summary: 'Invalid tool.yaml string',
     detail: 'Expected a non-empty string.',
   );
-}
-
-String? _hyfensNullableProjectPath(Object? value, String name) {
-  if (value == null) return null;
-  if (value is! String || value.trim().isEmpty) {
-    throw ToolFailure.single(
-      exitCode: ToolExitCode.environment,
-      code: 'H1206',
-      summary: 'Invalid hyfens.yaml project selection',
-      detail: name,
-      action: 'Use a project-relative path such as apps/mobile or . and rerun hyfens init.',
-    );
-  }
-  final normalized = p.posix.normalize(value.trim().replaceAll(r'\', '/'));
-  if (normalized.startsWith('/') ||
-      normalized == '..' ||
-      normalized.startsWith('../') ||
-      RegExp(r'^[A-Za-z]:/').hasMatch(normalized)) {
-    throw ToolFailure.single(
-      exitCode: ToolExitCode.environment,
-      code: 'H1206',
-      summary: 'Invalid hyfens.yaml project selection',
-      detail: value,
-      action: 'Use a project-relative path such as apps/mobile or . and rerun hyfens init.',
-    );
-  }
-  return normalized;
-}
-
-String? _hyfensNullableFlavor(Object? value) {
-  if (value == null) return null;
-  if (value is! String || value.trim().isEmpty) {
-    throw ToolFailure.single(
-      exitCode: ToolExitCode.environment,
-      code: 'H1207',
-      summary: 'Invalid hyfens.yaml flavor selection',
-      detail: '$value',
-      action: 'Run hyfens init and choose a valid Flutter flavor.',
-    );
-  }
-  try {
-    return normalizeFlavorName(value);
-  } on ToolFailure {
-    throw ToolFailure.single(
-      exitCode: ToolExitCode.environment,
-      code: 'H1207',
-      summary: 'Invalid hyfens.yaml flavor selection',
-      detail: value,
-      action: 'Run hyfens init and choose a valid Flutter flavor.',
-    );
-  }
-}
-
-String? _hyfensNullableEntrypoint(Object? value) {
-  if (value == null) return null;
-  if (value is! String) {
-    throw ToolFailure.single(
-      exitCode: ToolExitCode.environment,
-      code: 'H1208',
-      summary: 'Invalid hyfens.yaml entrypoint selection',
-      detail: '$value',
-      action: 'Run hyfens init and choose a Dart entrypoint under lib/.',
-    );
-  }
-  try {
-    return normalizeEntrypointPath(value);
-  } on ToolFailure {
-    throw ToolFailure.single(
-      exitCode: ToolExitCode.environment,
-      code: 'H1208',
-      summary: 'Invalid hyfens.yaml entrypoint selection',
-      detail: value,
-      action: 'Run hyfens init and choose a Dart entrypoint under lib/.',
-    );
-  }
-}
-
-Map<String, HyfensTargetBinding> _hyfensTargetBindings(Object? value) {
-  if (value == null) return const <String, HyfensTargetBinding>{};
-  if (value is! YamlMap) {
-    throw ToolFailure.single(
-      exitCode: ToolExitCode.environment,
-      code: 'H1210',
-      summary: 'Invalid hyfens.yaml target selections',
-      detail: 'Expected a mapping for targets.',
-      action: 'Run hyfens init again after reviewing the project targets.',
-    );
-  }
-  final result = <String, HyfensTargetBinding>{};
-  for (final entry in value.entries) {
-    final target = entry.key;
-    if (target is! String || (target != 'android' && target != 'ios')) {
-      throw ToolFailure.single(
-        exitCode: ToolExitCode.environment,
-        code: 'H1210',
-        summary: 'Invalid hyfens.yaml target selection',
-        detail: '$target',
-        action: 'Use android or ios as a target and run hyfens init again.',
-      );
-    }
-    final raw = entry.value;
-    if (raw is! YamlMap) {
-      throw ToolFailure.single(
-        exitCode: ToolExitCode.environment,
-        code: 'H1210',
-        summary: 'Invalid hyfens.yaml target selection',
-        detail: target,
-        action: 'Run hyfens init again after reviewing the target mapping.',
-      );
-    }
-    final flavor = _hyfensNullableFlavor(raw['flavor']);
-    final entrypoint = _hyfensNullableEntrypoint(raw['entrypoint']);
-    if (flavor == null && entrypoint == null) {
-      throw ToolFailure.single(
-        exitCode: ToolExitCode.environment,
-        code: 'H1210',
-        summary: 'Empty hyfens.yaml target selection',
-        detail: target,
-        action: 'Run hyfens init and choose a flavor or Dart entrypoint.',
-      );
-    }
-    result[target] = HyfensTargetBinding(
-      target: target,
-      flavor: flavor,
-      entrypointPath: entrypoint,
-    );
-  }
-  return Map.unmodifiable(result);
 }
 
 String _url(Object? value, String defaultValue) {
@@ -810,8 +616,10 @@ Map<String, Map<String, String>> _applicationIdMappings(Object? value) {
               'Use default or a native flavor identifier as the mapping key.',
         );
       }
-      final id = flavorEntry.value;
-      if (id is! String || id.isEmpty || id.contains(RegExp(r'[\u0000\r\n]'))) {
+      final applicationId = flavorEntry.value;
+      if (applicationId is! String ||
+          applicationId.isEmpty ||
+          applicationId.contains(RegExp(r'[\u0000\r\n]'))) {
         throw ToolFailure.single(
           exitCode: ToolExitCode.environment,
           code: 'T1203',
@@ -820,7 +628,7 @@ Map<String, Map<String, String>> _applicationIdMappings(Object? value) {
           action: 'Map each flavor to one non-empty application identifier.',
         );
       }
-      targetIds[flavor] = id;
+      targetIds[flavor] = applicationId;
     }
     result[target] = Map.unmodifiable(targetIds);
   }

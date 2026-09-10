@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const MANAGED_DASHBOARD_HOSTNAMES = new Set(['app.hyfens.com']);
+  const MANAGED_DASHBOARD_HOSTNAMES = new Set(['app.hyfens.com', 'platform.hyfens.com']);
 
   function isLoopback(hostname) {
     return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
@@ -24,7 +24,7 @@
     const runtime = window.__HYFENS_RUNTIME_CONFIG__?.apiBase?.trim();
     if (runtime) return normalizeApiBase(runtime);
     if (MANAGED_DASHBOARD_HOSTNAMES.has(window.location.hostname.toLowerCase())) {
-      return normalizeApiBase('https://api.hyfens.com/');
+      return normalizeApiBase('https://api.hyfens.com/p2/');
     }
     return normalizeApiBase(`${window.location.origin}/`);
   }

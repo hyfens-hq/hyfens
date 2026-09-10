@@ -61,16 +61,16 @@ test('the managed dashboard keeps its public control-plane fallback', () => {
     origin: 'https://app.hyfens.com',
   });
 
-  assert.equal(api.apiBase(), 'https://api.hyfens.com/');
+  assert.equal(api.apiBase(), 'https://api.hyfens.com/p2/');
   assert.equal(api.displayApiBase(), 'Hyfens Cloud (managed)');
 });
 
-test('an unconfigured self-hosted instance uses its own origin', () => {
+test('the platform console shares the managed control-plane fallback', () => {
   const { api } = loadAuthFlow({
-    hostname: 'instance.example.com',
-    origin: 'https://instance.example.com',
+    hostname: 'platform.hyfens.com',
+    origin: 'https://platform.hyfens.com',
   });
 
-  assert.equal(api.apiBase(), 'https://instance.example.com/');
-  assert.equal(api.displayApiBase(), 'https://instance.example.com/');
+  assert.equal(api.apiBase(), 'https://api.hyfens.com/p2/');
+  assert.equal(api.displayApiBase(), 'Hyfens Cloud (managed)');
 });

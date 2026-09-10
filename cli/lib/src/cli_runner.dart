@@ -12,16 +12,13 @@ import 'auth_command.dart';
 import 'auth_storage.dart';
 import 'canonical.dart';
 import 'configuration.dart';
-import 'control_plane_delivery.dart';
 import 'diagnostics.dart';
 import 'mcp/mcp_server.dart';
-import 'patch_compatibility.dart';
 import 'profile.dart';
-import 'project.dart';
-import 'project_initialization.dart';
 import 'server.dart';
 import 'signing.dart';
 import 'toolchain.dart';
+import 'upgrade.dart';
 
 final class HyfensCommandRunner extends CommandRunner<void> {
   HyfensCommandRunner({
@@ -32,6 +29,7 @@ final class HyfensCommandRunner extends CommandRunner<void> {
     AuthPrompt? authPrompt,
     AuthBrowserLauncher? authBrowserLauncher,
     AuthSleeper? authSleeper,
+    HyfensUpgradeService? upgradeService,
     IOSink? out,
     IOSink? err,
   }) : _deprecatedToolShim = deprecatedToolShim,
@@ -44,13 +42,10 @@ final class HyfensCommandRunner extends CommandRunner<void> {
              sleeper: authSleeper,
            ),
        authPrompt = authPrompt ?? defaultAuthPrompt,
+       upgradeService = upgradeService ?? HyfensUpgradeService(),
        out = out ?? stdout,
        err = err ?? stderr,
-       super(
-         'hyfens',
-         'Hyfens — Flutter live-update tooling.',
-         usageLineLength: 100,
-       ) {
+       super('hyfens', 'Hyfens developer platform CLI.', usageLineLength: 100) {
     argParser
       ..addFlag('verbose', help: 'Show detailed Hyfens diagnostics.')
       ..addFlag('json', help: 'Emit machine-readable JSON where supported.')
@@ -64,9 +59,10 @@ final class HyfensCommandRunner extends CommandRunner<void> {
         negatable: false,
       );
     addCommand(VersionCommand(this));
+    addCommand(UpgradeCommand(this));
+    addCommand(McpCommand(this));
     addCommand(DoctorCommand(this));
     addCommand(StatusCommand(this));
-    addCommand(McpCommand(this));
     addCommand(LoginCommand(this));
     addCommand(LogoutCommand(this));
     addCommand(ProfileCommand(this));
@@ -77,6 +73,7 @@ final class HyfensCommandRunner extends CommandRunner<void> {
     addCommand(PatchCommand(this));
     addCommand(RollbackCommand(this));
     addCommand(CleanupCommand(this));
+    addCommand(DetachCommand(this));
     addCommand(InspectCommand(this));
     addCommand(VerifyCommand(this));
     addCommand(KeysCommand(this));
@@ -90,6 +87,7 @@ final class HyfensCommandRunner extends CommandRunner<void> {
   final HyfensToolchain toolchain;
   final AuthClient authClient;
   final AuthPrompt authPrompt;
+  final HyfensUpgradeService upgradeService;
   final IOSink out;
   final IOSink err;
 
@@ -124,17 +122,7 @@ final class HyfensCommandRunner extends CommandRunner<void> {
   }
 
   @override
-  void printUsage() {
-    write(usage);
-    write('');
-    write('Examples:');
-    write('  hyfens login');
-    write('  hyfens release android --metadata-only');
-    write('  hyfens patch android');
-    write('  hyfens mcp --profile acme');
-    write('');
-    write('Documentation: https://github.com/hyfens-hq/hyfens/tree/main/docs');
-  }
+  void printUsage() => write(usage);
 
   void writeDiagnosticReport(DiagnosticReport report) {
     if (jsonMode) {
@@ -203,138 +191,6 @@ abstract base class _ToolCommand extends Command<void> {
       argResults?['project'] as String? ?? globalResults?['project'] as String?;
 }
 
-bool _nonInteractive(ArgResults? results) =>
-    results?['non-interactive'] == true || !stdin.hasTerminal;
-
-void _writeDiscoveryChoices(
-  HyfensCommandRunner runner,
-  ProjectDiscoveryReport report,
-) {
-  if (report.candidates.isEmpty) {
-    runner.write('! ${report.issueSummary ?? 'No Flutter application found'}');
-    if (report.issueDetail != null) runner.write('  ${report.issueDetail}');
-    if (report.issueAction != null)
-      runner.write('  Action: ${report.issueAction}');
-    return;
-  }
-  runner.write('! ${report.issueSummary ?? 'Selection required'}');
-  runner.write('');
-  for (var index = 0; index < report.candidates.length; index++) {
-    final candidate = report.candidates[index];
-    runner.write(
-      '  ${index + 1}. ${candidate.relativePath} (${candidate.packageName})',
-    );
-  }
-  runner.write('');
-  runner.write(report.issueAction ?? 'Run hyfens init to choose one.');
-}
-
-FlutterProjectCandidate _promptForProject(
-  HyfensCommandRunner runner,
-  ProjectDiscoveryReport report,
-) {
-  _writeDiscoveryChoices(runner, report);
-  while (true) {
-    runner.write(
-      'Choose a Flutter application [1-${report.candidates.length}]:',
-    );
-    final input = stdin.readLineSync()?.trim();
-    final choice = input == null ? null : int.tryParse(input);
-    if (choice != null && choice >= 1 && choice <= report.candidates.length) {
-      return report.candidates[choice - 1];
-    }
-    runner.write(
-      'Please enter a number from 1 to ${report.candidates.length}.',
-    );
-  }
-}
-
-_TargetChoice _promptForTarget(
-  HyfensCommandRunner runner,
-  FlutterProject project,
-  String target,
-) {
-  final flavors = project.flavorsFor(target);
-  if (flavors.length > 1) {
-    runner.write('Hyfens found ${flavors.length} Flutter flavors for $target:');
-    runner.write('');
-    for (var index = 0; index < flavors.length; index++) {
-      final flavor = flavors[index];
-      final candidates = project.entrypointsForFlavor(target, flavor);
-      runner.write('  ${index + 1}. $flavor');
-      if (candidates.isNotEmpty)
-        runner.write('     Entry point: ${candidates.first.path}');
-    }
-    while (true) {
-      runner.write(
-        'Which flavor should this Hyfens project use [1-${flavors.length}]:',
-      );
-      final input = stdin.readLineSync()?.trim();
-      final choice = input == null ? null : int.tryParse(input);
-      if (choice != null && choice >= 1 && choice <= flavors.length) {
-        final flavor = flavors[choice - 1];
-        final entrypoints = project.entrypointsForFlavor(target, flavor);
-        return _TargetChoice(
-          flavor: flavor,
-          entrypointPath: entrypoints.isEmpty ? null : entrypoints.first.path,
-        );
-      }
-      runner.write('Please enter a number from 1 to ${flavors.length}.');
-    }
-  }
-  if (project.entrypointCandidates.length > 1) {
-    runner.write('Hyfens found multiple Dart entrypoints for $target:');
-    for (var index = 0; index < project.entrypointCandidates.length; index++) {
-      runner.write(
-        '  ${index + 1}. ${project.entrypointCandidates[index].path}',
-      );
-    }
-    while (true) {
-      runner.write('Which entrypoint should this Hyfens project use:');
-      final input = stdin.readLineSync()?.trim();
-      final choice = input == null ? null : int.tryParse(input);
-      if (choice != null &&
-          choice >= 1 &&
-          choice <= project.entrypointCandidates.length) {
-        return _TargetChoice(
-          entrypointPath: project.entrypointCandidates[choice - 1].path,
-        );
-      }
-      runner.write(
-        'Please enter a number from 1 to ${project.entrypointCandidates.length}.',
-      );
-    }
-  }
-  throw ToolFailure.single(
-    exitCode: ToolExitCode.environment,
-    code: 'T1304',
-    summary: 'Flutter target selection is ambiguous',
-    detail: project.root.path,
-    action: 'Pass --flavor or --entrypoint explicitly.',
-  );
-}
-
-final class _TargetChoice {
-  const _TargetChoice({this.flavor, this.entrypointPath});
-
-  final String? flavor;
-  final String? entrypointPath;
-}
-
-final class _InitSelection {
-  const _InitSelection({
-    required this.projectPath,
-    this.flavor,
-    this.entrypointPath,
-    this.targetSelections = const <String, HyfensTargetBinding>{},
-  });
-
-  final String projectPath;
-  final String? flavor;
-  final String? entrypointPath;
-  final Map<String, HyfensTargetBinding> targetSelections;
-}
-
 final class VersionCommand extends Command<void> {
   VersionCommand(this.runner);
 
@@ -353,17 +209,72 @@ final class VersionCommand extends Command<void> {
   Future<void> run() async => runner.writeVersion();
 }
 
+final class UpgradeCommand extends Command<void> {
+  UpgradeCommand(this.runner) {
+    argParser
+      ..addFlag('json', help: 'Emit machine-readable JSON.')
+      ..addFlag(
+        'check',
+        help: 'Check for a newer stable release without installing it.',
+        negatable: false,
+      )
+      ..addOption(
+        'version',
+        help: 'Install one explicit release instead of the latest stable release.',
+      );
+  }
+
+  final HyfensCommandRunner runner;
+
+  @override
+  String get name => 'upgrade';
+
+  @override
+  String get description => 'Install the latest stable Hyfens CLI release.';
+
+  @override
+  void printUsage() => runner.write(usage);
+
+  @override
+  Future<void> run() async {
+    final result = await runner.upgradeService.upgrade(
+      requestedVersion: argResults?['version'] as String?,
+      checkOnly: argResults?['check'] == true,
+    );
+    if (runner.jsonMode || argResults?['json'] == true) {
+      runner.writeJson(result.toJson());
+      return;
+    }
+    runner.write('Current version: ${result.currentVersion}');
+    runner.write('Latest version:  ${result.latestVersion}');
+    if (!result.updateAvailable) {
+      runner.write('Hyfens is already up to date.');
+    } else if (result.checkOnly) {
+      runner.write('An update is available. Run hyfens upgrade to install it.');
+    } else {
+      runner.write('Hyfens upgraded to ${result.latestVersion}.');
+      if (result.installedPath != null) {
+        runner.write('  Binary: ${result.installedPath}');
+      }
+      if (Platform.isWindows) {
+        runner.write(
+          'Restart the terminal before running the upgraded binary.',
+        );
+      }
+    }
+  }
+}
+
 final class McpCommand extends Command<void> {
   McpCommand(this.runner) {
     argParser
       ..addOption(
         'profile',
-        help:
-            'Use this host-bound Hyfens profile instead of the active profile.',
+        help: 'Use a named host-bound profile instead of the active profile.',
       )
       ..addFlag(
         'debug',
-        help: 'Write diagnostic information to stderr.',
+        help: 'Write MCP diagnostics to stderr while serving.',
         negatable: false,
       );
   }
@@ -375,33 +286,33 @@ final class McpCommand extends Command<void> {
 
   @override
   String get description =>
-      'Start the Hyfens MCP server for AI coding agents over stdio.';
+      'Start the Hyfens MCP server over stdio for compatible AI coding agents.';
 
   @override
   void printUsage() {
     runner.write(usage);
     runner.write('');
     runner.write(
-      'Transport: local MCP over stdio; stdout is reserved for protocol messages.',
+      'Uses the active authenticated profile; use --profile for a named profile.',
     );
     runner.write(
-      'Profile: uses the active host-bound profile, or --profile NAME.',
-    );
-    runner.write('Authentication: run hyfens login before launching an agent.');
-    runner.write(
-      'Debug: --debug writes diagnostics to stderr and never to protocol stdout.',
+      'The server waits for an agent on stdio. Startup and debug messages use stderr.',
     );
   }
 
   @override
   Future<void> run() async {
+    final profileName = argResults?['profile'] as String?;
+    if (profileName != null &&
+        !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$').hasMatch(profileName)) {
+      throw UsageException('Invalid --profile name.', usage);
+    }
+    runner.err.writeln(hyfensMcpStartupMessage);
     await runHyfensMcp(
       toolchain: runner.toolchain,
       authStorage: runner.authClient.storage,
-      authClient: runner.authClient,
-      profileName: argResults!['profile'] as String?,
-      debug: argResults!['debug'] as bool,
-      output: runner.out,
+      profileName: profileName,
+      debug: argResults?['debug'] == true,
       log: runner.err,
     );
   }
@@ -419,77 +330,22 @@ final class DoctorCommand extends _ToolCommand {
 
   @override
   Future<void> run() async {
-    final discovery = runner.toolchain.projectReport(projectPath: projectPath);
-    if (!discovery.isResolved) {
-      if (jsonMode) {
-        runner.writeJson(<String, Object?>{
-          'result': 'NEEDS_SELECTION',
-          'discovery': discovery.toJson(),
-        });
-      } else {
-        _writeDiscoveryChoices(runner, discovery);
-      }
-      return;
-    }
     final project = runner.toolchain.project(projectPath: projectPath);
-    final environment = await runner.toolchain.doctor(
-      projectPath: project.root.path,
-    );
-    final binding =
-        HyfensProjectBinding.load(project.hyfensConfigFile) ??
-        (project.workspaceHyfensConfigFile.existsSync()
-            ? HyfensProjectBinding.load(project.workspaceHyfensConfigFile)
-            : null);
-    final targetSelections = <String, Object?>{};
-    var targetSelectionNeedsChoice = false;
-    for (final target in const <String>['android', 'ios']) {
-      if (!Directory(p.join(project.root.path, target)).existsSync()) {
-        continue;
-      }
-      try {
-        final selection = runner.toolchain.resolveTarget(
-          target: target,
-          projectPath: project.root.path,
-        );
-        targetSelections[target] = <String, Object?>{
-          'status': 'RESOLVED',
-          ...selection.toJson(),
-          'applicationId': runner.toolchain.resolveApplicationId(
-            project: project,
-            target: target,
-            flavor: selection.flavor,
-          ),
-        };
-      } on ToolFailure catch (failure) {
-        final diagnostic = failure.diagnostics.single;
-        if (diagnostic.code != 'T1304' &&
-            diagnostic.code != 'T1305' &&
-            diagnostic.code != 'T1306' &&
-            diagnostic.code != 'T1307' &&
-            diagnostic.code != 'T1308') {
-          rethrow;
-        }
-        targetSelectionNeedsChoice = true;
-        targetSelections[target] = <String, Object?>{
-          'status': 'NEEDS_SELECTION',
-          'diagnostic': diagnostic.toJson(),
-        };
-      }
+    final environment = await runner.toolchain.doctor(projectPath: projectPath);
+    final binding = HyfensProjectBinding.load(project.hyfensConfigFile);
+    if (binding?.runtimeApplicationId != null &&
+        binding!.runtimeApplicationId != project.applicationId) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.compatibility,
+        code: 'H1205',
+        summary: 'Project application identity does not match hyfens.yaml',
+        detail: '${project.applicationId} != ${binding.runtimeApplicationId}',
+        action: 'Run hyfens init --force after reviewing the exact identity.',
+      );
     }
     final data = <String, Object?>{
       'projectRoot': project.root.path,
-      'repositoryRoot': project.repositoryRoot.path,
-      'workspaceRoot': project.workspaceRoot.path,
-      'workspaceType': project.workspaceType.name,
-      'projectPath': project.relativeProjectPath,
-      'discovery': discovery.toJson(),
-      'flavors': project.flavors,
-      'entrypoints': project.entrypointCandidates
-          .map((item) => item.toJson())
-          .toList(),
-      'targetSelections': targetSelections,
-      'toolchainHint': project.toolchainHint,
-      'applicationId': binding?.runtimeApplicationId ?? project.applicationId,
+      'applicationId': project.applicationId,
       'pubspec': 'SUPPORTED',
       'pubspecLock': project.pubspecLockFile.existsSync()
           ? 'SUPPORTED'
@@ -505,11 +361,10 @@ final class DoctorCommand extends _ToolCommand {
           : 'NOT AVAILABLE',
       'hyfensBinding': binding == null ? 'NOT_INITIALIZED' : 'SUPPORTED',
       ...environment.toJson(),
-      'result': targetSelectionNeedsChoice
-          ? 'NEEDS_SELECTION'
-          : environment.flutterStatus == 'SUPPORTED' &&
-                environment.dartStatus == 'SUPPORTED' &&
-                environment.runtimeStatus == 'SUPPORTED'
+      'result':
+          environment.flutterStatus == 'SUPPORTED' &&
+              environment.dartStatus == 'SUPPORTED' &&
+              environment.runtimeStatus == 'SUPPORTED'
           ? 'READY'
           : 'WARNING',
     };
@@ -518,33 +373,6 @@ final class DoctorCommand extends _ToolCommand {
       return;
     }
     runner.write('Flutter OTA Doctor');
-    runner.write('');
-    runner.write('✓ Flutter project detected');
-    runner.write('  Package:      ${project.packageName}');
-    runner.write('  Workspace:    ${project.workspaceType.name}');
-    runner.write('  App path:     ${project.relativeProjectPath}');
-    if (project.flavors.isNotEmpty) {
-      runner.write('  Flavors:      ${project.flavors.join(', ')}');
-    }
-    if (project.entrypointCandidates.isNotEmpty) {
-      runner.write(
-        '  Entrypoints:  ${project.entrypointCandidates.map((item) => item.path).join(', ')}',
-      );
-    }
-    for (final entry in targetSelections.entries) {
-      final selection = entry.value as Map<String, Object?>;
-      if (selection['status'] == 'RESOLVED') {
-        runner.write(
-          '  ${entry.key.padRight(13)} ${selection['flavor'] ?? 'default'} → ${selection['entrypoint']}',
-        );
-      } else {
-        runner.write(
-          '  ${entry.key.padRight(13)} selection required; run hyfens init',
-        );
-      }
-    }
-    if (project.toolchainHint != null)
-      runner.write('  ${project.toolchainHint}');
     runner.write('');
     runner.write(
       'Flutter       ${environment.flutterVersion.padRight(12)} ${environment.flutterStatus}',
@@ -591,7 +419,7 @@ final class StatusCommand extends _ToolCommand {
       endpoint: profile.endpoint,
     );
     final auth = <String, Object?>{
-      'profile': profile.toJson(),
+      'profile': profile.toPublicJson(),
       'session': <String, Object?>{
         'status': session == null
             ? 'NOT_LOGGED_IN'
@@ -632,7 +460,9 @@ final class StatusCommand extends _ToolCommand {
       'Dart:         ${environment.dartVersion} ${environment.dartStatus}',
     );
     runner.write('Runtime pkg:  ${environment.runtimeStatus}');
-    runner.write('Profile:      ${profile.name} (${profile.endpoint})');
+    runner.write(
+      'Profile:      ${profile.name} (${displayControlPlaneEndpoint(profile.endpoint)})',
+    );
     runner.write('Auth session: ${auth['session']! as Map<String, Object?>}');
     runner.write(
       'App runtime:  ${status.applicationRuntimeStatus} (local tool only; introspection unavailable)',
@@ -660,7 +490,7 @@ final class StatusCommand extends _ToolCommand {
       endpoint: profile.endpoint,
     );
     final auth = <String, Object?>{
-      'profile': profile.toJson(),
+      'profile': profile.toPublicJson(),
       'session': session == null
           ? 'NOT_LOGGED_IN'
           : session.isSessionExpired
@@ -678,7 +508,9 @@ final class StatusCommand extends _ToolCommand {
     } else {
       runner.write('Hyfens status');
       runner.write('Result:       NOT_INITIALIZED');
-      runner.write('Profile:      ${profile.name} (${profile.endpoint})');
+      runner.write(
+        'Profile:      ${profile.name} (${displayControlPlaneEndpoint(profile.endpoint)})',
+      );
       runner.write('Auth session: ${auth['session']}');
       runner.write('Project:      no Flutter project found');
     }
@@ -689,15 +521,7 @@ final class InitCommand extends _ToolCommand {
   InitCommand(super.runner) {
     argParser
       ..addFlag('dry-run', help: 'Show changes without modifying the project.')
-      ..addFlag('force', help: 'Replace the tool-owned metadata after review.')
-      ..addOption(
-        'flavor',
-        help: 'Override the automatically selected Flutter flavor.',
-      )
-      ..addOption(
-        'entrypoint',
-        help: 'Override the automatically selected Dart entrypoint under lib/.',
-      );
+      ..addFlag('force', help: 'Replace the tool-owned metadata after review.');
   }
 
   @override
@@ -709,30 +533,55 @@ final class InitCommand extends _ToolCommand {
 
   @override
   Future<void> run() async {
-    final selection = await _selectInitProject();
-    final initialization =
-        await ProjectInitializationService(
-          toolchain: runner.toolchain,
-          authStorage: runner.authClient.storage,
-        ).initialize(
-          projectPath: selection.projectPath,
-          flavor: selection.flavor,
-          entrypointPath: selection.entrypointPath,
-          targetSelections: selection.targetSelections,
-          dryRun: argResults!['dry-run'] as bool,
-          force: argResults!['force'] as bool,
-        );
-    final result = initialization.result;
-    final binding = initialization.binding;
+    // Validate the project-owned binding before toolchain initialization can
+    // write legacy local metadata. A malformed or secret-bearing binding must
+    // fail closed without weakening the existing identity guard.
+    final plannedProject = runner.toolchain.project(projectPath: projectPath);
+    final bindingFile = plannedProject.hyfensConfigFile;
+    final existingBinding = HyfensProjectBinding.load(bindingFile);
+    if (existingBinding != null &&
+        existingBinding.runtimeApplicationId != null &&
+        existingBinding.runtimeApplicationId != plannedProject.applicationId &&
+        !(argResults!['force'] as bool)) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.compatibility,
+        code: 'H1205',
+        summary: 'Project application identity does not match hyfens.yaml',
+        detail:
+            '${plannedProject.applicationId} != ${existingBinding.runtimeApplicationId}',
+        path: bindingFile.path,
+        action: 'Review the existing binding and pass --force only after confirming the exact application identity.',
+      );
+    }
+    final result = await runner.toolchain.init(
+      projectPath: projectPath,
+      dryRun: argResults!['dry-run'] as bool,
+      force: argResults!['force'] as bool,
+    );
     final activeProfile = await runner.authClient.storage.readActiveProfile();
-    final actions = initialization.actions;
+    final binding = HyfensProjectBinding(
+      profile: activeProfile.name,
+      organizationId: activeProfile.organizationId,
+      applicationId: activeProfile.applicationId,
+      environmentId: activeProfile.environmentId,
+      runtimeApplicationId: result.project.applicationId,
+    );
+    final actions = <String>[...result.actions];
+    if (existingBinding == null || argResults!['force'] as bool) {
+      actions.add(
+        '${existingBinding == null ? 'create' : 'replace'} ${result.project.relative(bindingFile)}',
+      );
+      if (!result.dryRun)
+        await writeHyfensBinding(bindingFile, binding: binding);
+    } else {
+      actions.add('preserve ${result.project.relative(bindingFile)}');
+    }
     final data = <String, Object?>{
       'projectRoot': result.project.root.path,
-      'projectPath': result.project.relativeProjectPath,
       'dryRun': result.dryRun,
       'flutterVersion': result.environment.flutterVersion,
       'dartVersion': result.environment.dartVersion,
-      'profile': activeProfile.toJson(),
+      'profile': activeProfile.toPublicJson(),
       'binding': binding.toJson(),
       'actions': actions,
     };
@@ -757,76 +606,6 @@ final class InitCommand extends _ToolCommand {
     runner.write('No private signing key was generated.');
     runner.write('Next: hyfens keys generate');
     runner.write('Next: hyfens release android --metadata-only');
-  }
-
-  Future<_InitSelection> _selectInitProject() async {
-    final discovery = runner.toolchain.projectReport(projectPath: projectPath);
-    var selected = discovery.selected;
-    if (selected == null) {
-      if (_nonInteractive(globalResults)) {
-        throw discovery.toFailure();
-      }
-      selected = _promptForProject(runner, discovery);
-    }
-    final effectiveProjectPath = selected.root.path;
-    final project = runner.toolchain.project(projectPath: effectiveProjectPath);
-    final existing =
-        HyfensProjectBinding.load(project.hyfensConfigFile) ??
-        (project.workspaceHyfensConfigFile.path == project.hyfensConfigFile.path
-            ? null
-            : HyfensProjectBinding.load(project.workspaceHyfensConfigFile));
-    final selectedFlavor = argResults!['flavor'] as String?;
-    final selectedEntrypoint = argResults!['entrypoint'] as String?;
-    final targetSelections = <String, HyfensTargetBinding>{};
-    final targets = <String>[
-      if (Directory(p.join(project.root.path, 'android')).existsSync())
-        'android',
-      if (Directory(p.join(project.root.path, 'ios')).existsSync()) 'ios',
-    ];
-    for (final targetName in targets) {
-      final persisted = existing?.selectionFor(targetName);
-      final targetFlavor = selectedFlavor ?? persisted?.flavor;
-      final targetEntrypoint = selectedEntrypoint ?? persisted?.entrypointPath;
-      try {
-        final resolved = runner.toolchain.resolveTarget(
-          target: targetName,
-          projectPath: effectiveProjectPath,
-          flavor: targetFlavor,
-          entrypointPath: targetEntrypoint,
-        );
-        targetSelections[targetName] = HyfensTargetBinding(
-          target: targetName,
-          flavor: resolved.flavor,
-          entrypointPath: resolved.entrypointPath,
-        );
-      } on ToolFailure catch (failure) {
-        final code = failure.diagnostics.single.code;
-        final canPrompt =
-            (code == 'T1304' || code == 'T1305' || code == 'T1307') &&
-            selectedFlavor == null &&
-            selectedEntrypoint == null &&
-            !_nonInteractive(globalResults);
-        if (!canPrompt) rethrow;
-        final choice = _promptForTarget(runner, project, targetName);
-        final resolved = runner.toolchain.resolveTarget(
-          target: targetName,
-          projectPath: effectiveProjectPath,
-          flavor: choice.flavor,
-          entrypointPath: choice.entrypointPath,
-        );
-        targetSelections[targetName] = HyfensTargetBinding(
-          target: targetName,
-          flavor: resolved.flavor,
-          entrypointPath: resolved.entrypointPath,
-        );
-      }
-    }
-    return _InitSelection(
-      projectPath: effectiveProjectPath,
-      flavor: selectedFlavor,
-      entrypointPath: selectedEntrypoint,
-      targetSelections: targetSelections,
-    );
   }
 }
 
@@ -868,15 +647,12 @@ final class AnalyzeCommand extends _ToolCommand {
     );
     runner.write('');
     for (final item in result.items) {
-      runner.write(_classificationLabel(item));
+      runner.write(_classificationLabel(item.classification));
       final location = item.line == null
           ? item.path
           : '${item.path}:${item.line}:${item.column ?? 1}';
       runner.write('  $location');
       runner.write('    ${item.detail}');
-      if (item.compatibility != PatchCompatibilityDecision.patchable) {
-        runner.write('    Why: ${item.compatibilityExplanation}');
-      }
     }
     if (result.items.isEmpty) runner.write('NO_EFFECT\n  No changes detected.');
     if (result.diagnostics.isNotEmpty) {
@@ -910,11 +686,14 @@ final class AnalyzeCommand extends _ToolCommand {
   }
 }
 
-String _classificationLabel(AnalysisItem item) {
-  final label = item.compatibility.label;
-  if (item.classification == ChangeClassification.noEffect) return 'NO EFFECT';
-  return label;
-}
+String _classificationLabel(ChangeClassification classification) =>
+    switch (classification) {
+      ChangeClassification.patchable => 'PATCHABLE',
+      ChangeClassification.unsupported => 'UNSUPPORTED',
+      ChangeClassification.storeReleaseRequired => 'STORE RELEASE REQUIRED',
+      ChangeClassification.noEffect => 'NO EFFECT',
+      ChangeClassification.unknown => 'UNKNOWN',
+    };
 
 final class ReleaseCommand extends _ToolCommand {
   ReleaseCommand(super.runner) {
@@ -964,8 +743,6 @@ final class ReleaseCommand extends _ToolCommand {
       'entrypoint': record.entrypointPath,
       'flavor': record.flavor,
       'buildFingerprint': record.buildFingerprint,
-      'flutterEngineRevision': record.flutterEngineRevision,
-      'resourceSnapshotFingerprint': record.resourceSnapshot?.fingerprint,
       'functions': record.functions.length,
       'sourceUnits': record.sources.length,
       'build': record.build,
@@ -1061,7 +838,13 @@ final class PatchCommand extends _ToolCommand {
     }
     var releaseId = argResults!['release'] as String?;
     final requestedFlavor = argResults!['flavor'] as String?;
+    final normalizedFlavor = requestedFlavor == null
+        ? null
+        : normalizeFlavorName(requestedFlavor);
     final requestedEntrypoint = argResults!['entrypoint'] as String?;
+    final normalizedEntrypoint = requestedEntrypoint == null
+        ? null
+        : normalizeEntrypointPath(requestedEntrypoint);
     if (targets.isNotEmpty) {
       final target = targets.single;
       final project = runner.toolchain.project(projectPath: projectPath);
@@ -1079,19 +862,15 @@ final class PatchCommand extends _ToolCommand {
           );
         }
       } else {
-        final automaticSelection = runner.toolchain.resolveTarget(
-          target: target,
-          projectPath: projectPath,
-          flavor: requestedFlavor,
-          entrypointPath: requestedEntrypoint,
-        );
         final matches = store
             .listReleases()
             .where(
               (release) =>
                   release.target == target &&
-                  release.flavor == automaticSelection.flavor &&
-                  release.entrypointPath == automaticSelection.entrypointPath,
+                  (normalizedFlavor == null ||
+                      release.flavor == normalizedFlavor) &&
+                  (normalizedEntrypoint == null ||
+                      release.entrypointPath == normalizedEntrypoint),
             )
             .toList(growable: false);
         if (matches.isEmpty) {
@@ -1154,6 +933,39 @@ final class RollbackCommand extends _ToolCommand {
         'to',
         defaultsTo: 'base',
         help: 'Rollback target; only the trusted store-installed AOT base is supported.',
+      )
+      ..addFlag(
+        'cloud',
+        help: 'Request rollback from the authenticated managed Cloud environment.',
+        negatable: false,
+      )
+      ..addOption(
+        'endpoint',
+        help: 'Cloud or self-hosted control-plane URL or HYFENS_CONTROL_PLANE_URL.',
+      )
+      ..addOption(
+        'token',
+        help: 'Customer token or HYFENS_TOKEN (never written to disk).',
+      )
+      ..addOption(
+        'organization-id',
+        help: 'Customer organization ID or HYFENS_ORGANIZATION_ID.',
+      )
+      ..addOption(
+        'application-id',
+        help: 'Control-plane application ID or HYFENS_APPLICATION_ID.',
+      )
+      ..addOption(
+        'environment-id',
+        help: 'Control-plane environment ID or HYFENS_ENVIRONMENT_ID.',
+      )
+      ..addOption(
+        'idempotency-key',
+        help: 'Request idempotency key or HYFENS_IDEMPOTENCY_KEY.',
+      )
+      ..addOption(
+        'ca-cert',
+        help: 'PEM CA certificate for a private HTTPS control plane or HYFENS_TLS_CA_CERT.',
       );
   }
 
@@ -1162,10 +974,28 @@ final class RollbackCommand extends _ToolCommand {
 
   @override
   String get description =>
-      'Record an explicit rollback to the trusted store-installed AOT base.';
+      'Rollback locally or request a trusted base rollback from managed Cloud.';
 
   @override
   Future<void> run() async {
+    final endpointValue = _rolloutOptionOrEnvironment(
+      argResults,
+      globalResults,
+      'endpoint',
+      'HYFENS_CONTROL_PLANE_URL',
+    );
+    final profile = endpointValue == null || argResults!['cloud'] == true
+        ? await runner.authClient.readProfile()
+        : null;
+    final cloudRequested =
+        argResults!['cloud'] == true ||
+        endpointValue != null ||
+        profile?.managed == true;
+    if (cloudRequested) {
+      await _runCloudRollback(endpointValue: endpointValue, profile: profile);
+      return;
+    }
+
     final result = await runner.toolchain.rollback(
       projectPath: projectPath,
       releaseId: argResults!['release'] as String?,
@@ -1194,6 +1024,111 @@ final class RollbackCommand extends _ToolCommand {
       '  Signature:     verified by the release trust key ${result.keyId}',
     );
     runner.write('  Patch files and sequence evidence were preserved.');
+  }
+
+  Future<void> _runCloudRollback({
+    required String? endpointValue,
+    required Profile? profile,
+  }) async {
+    final auth = await _resolveControlPlaneRequest(
+      runner: runner,
+      endpoint: endpointValue == null
+          ? profile?.managed == true
+                ? profile!.endpoint
+                : Uri.parse(managedCloudApiBase)
+          : _rolloutEndpoint(endpointValue, usage),
+      token: _rolloutOptionOrEnvironment(
+        argResults,
+        globalResults,
+        'token',
+        'HYFENS_TOKEN',
+      ),
+      organizationId: _rolloutOptionOrEnvironment(
+        argResults,
+        globalResults,
+        'organization-id',
+        'HYFENS_ORGANIZATION_ID',
+      ),
+      applicationId: _rolloutOptionOrEnvironment(
+        argResults,
+        globalResults,
+        'application-id',
+        'HYFENS_APPLICATION_ID',
+      ),
+      environmentId: _rolloutOptionOrEnvironment(
+        argResults,
+        globalResults,
+        'environment-id',
+        'HYFENS_ENVIRONMENT_ID',
+      ),
+      missingSummary: 'Cloud rollback configuration is incomplete',
+      missingCode: 'R8901',
+      requireApplication: true,
+      requireEnvironment: true,
+    );
+    final releaseId = argResults!['release'] as String?;
+    final command = await runner.toolchain.signRollbackControl(
+      projectPath: projectPath,
+      releaseId: releaseId,
+      target: argResults!['to'] as String,
+    );
+    final commandBytes = command.encodeBytes();
+    final idempotencyKey =
+        _rolloutOptionOrEnvironment(
+          argResults,
+          globalResults,
+          'idempotency-key',
+          'HYFENS_IDEMPOTENCY_KEY',
+        ) ??
+        'rollback-${sha256Hex(commandBytes).substring(0, 32)}';
+    final caCertPath = _rolloutOptionOrEnvironment(
+      argResults,
+      globalResults,
+      'ca-cert',
+      'HYFENS_TLS_CA_CERT',
+    );
+    final response = await _deployJson(
+      method: 'POST',
+      uri: _deployUri(
+        auth.endpoint,
+        'v1/organizations/${Uri.encodeComponent(auth.organizationId)}'
+        '/applications/${Uri.encodeComponent(auth.applicationId!)}'
+        '/environments/${Uri.encodeComponent(auth.environmentId!)}'
+        '/rollback',
+      ),
+      token: auth.token,
+      securityContext: _securityContext(caCertPath),
+      idempotencyKey: idempotencyKey,
+      body: <String, Object?>{'rollback_control': base64.encode(commandBytes)},
+    );
+    final result = <String, Object?>{
+      ...response,
+      'result': response['status'] ?? 'ROLLBACK_REQUESTED',
+      'releaseId': command.releaseId,
+      'highWaterSequence': command.highWaterSequence,
+      'keyId': command.keyId,
+      'mode': 'managed_cloud',
+    };
+    if (jsonMode) {
+      runner.writeJson(result);
+      return;
+    }
+    runner.write('Cloud rollback requested');
+    runner.write('  Organization: ${auth.organizationId}');
+    runner.write('  Application:  ${auth.applicationId}');
+    runner.write('  Environment:  ${auth.environmentId}');
+    runner.write('  Release:      ${command.releaseId}');
+    runner.write('  Target:       base');
+    runner.write('  High-water:   ${command.highWaterSequence} (retained)');
+    runner.write(
+      '  Result:       ${response['status'] ?? 'ROLLBACK_REQUESTED'}',
+    );
+    runner.write(
+      '  Signature:    verified by the release trust key ${command.keyId}',
+    );
+    runner.write(
+      '  Runtime:      will apply the directive on its next Cloud poll.',
+    );
   }
 }
 
@@ -1238,6 +1173,64 @@ final class CleanupCommand extends _ToolCommand {
     for (final path in result.removedPaths) runner.write('    $path');
     runner.write('  Retained protected state/evidence:');
     for (final path in result.retainedPaths) runner.write('    $path');
+  }
+}
+
+final class DetachCommand extends _ToolCommand {
+  DetachCommand(super.runner) {
+    argParser
+      ..addFlag(
+        'dry-run',
+        help: 'Show the project files that would be removed.',
+        negatable: false,
+      )
+      ..addFlag(
+        'keep-keys',
+        help: 'Retain the local .tool/keys directory and signing material.',
+        negatable: false,
+      )
+      ..addOption(
+        'confirm',
+        help: 'Type DETACH to remove the Hyfens project integration state.',
+      );
+  }
+
+  @override
+  String get name => 'detach';
+
+  @override
+  String get description =>
+      'Remove confirmed Hyfens project metadata without touching Flutter source.';
+
+  @override
+  Future<void> run() async {
+    final result = await runner.toolchain.detach(
+      projectPath: projectPath,
+      dryRun: argResults!['dry-run'] as bool,
+      keepKeys: argResults!['keep-keys'] as bool,
+      confirmation: argResults!['confirm'] as String?,
+    );
+    if (jsonMode) {
+      runner.writeJson(result.toJson());
+      return;
+    }
+    runner.write(result.dryRun ? 'Detach plan' : 'Hyfens project detached');
+    runner.write('  Project: ${result.project.root.path}');
+    if (result.removedPaths.isEmpty) {
+      runner.write('  Removed: none');
+    } else {
+      runner.write('  Removed:');
+      for (final path in result.removedPaths) runner.write('    $path');
+    }
+    if (result.retainedPaths.isNotEmpty) {
+      runner.write('  Retained:');
+      for (final path in result.retainedPaths) runner.write('    $path');
+    }
+    if (!result.dryRun) {
+      runner.write(
+        '  Flutter source and native project files were not changed.',
+      );
+    }
   }
 }
 
@@ -1929,58 +1922,221 @@ final class DeployCommand extends _ToolCommand {
 
   @override
   Future<void> run() async {
-    final endpointValue = _optionOrEnvironment(
-      'endpoint',
-      'HYFENS_CONTROL_PLANE_URL',
+    final profile = await runner.authClient.readProfile();
+    final endpointValue =
+        _optionOrEnvironment('endpoint', 'HYFENS_CONTROL_PLANE_URL') ??
+        profile?.endpoint.toString() ??
+        managedCloudApiBase;
+    final endpoint = _deployEndpoint(endpointValue);
+    final profileScope = _profileScopeForEndpoint(profile, endpoint);
+    final explicitToken = _optionOrEnvironment('token', 'HYFENS_TOKEN');
+    final token = await _resolveControlPlaneToken(
+      runner: runner,
+      endpoint: endpoint,
+      fallback: explicitToken,
     );
+    final organizationId =
+        _optionOrEnvironment('organization-id', 'HYFENS_ORGANIZATION_ID') ??
+        profileScope?.organizationId;
+    final applicationId =
+        _optionOrEnvironment('application-id', 'HYFENS_APPLICATION_ID') ??
+        profileScope?.applicationId;
+    final environmentId =
+        _optionOrEnvironment('environment-id', 'HYFENS_ENVIRONMENT_ID') ??
+        profileScope?.environmentId;
+    final caCertPath = _optionOrEnvironment('ca-cert', 'HYFENS_TLS_CA_CERT');
+    final project = runner.toolchain.project(projectPath: projectPath);
+    final store = ToolStore(project);
+    var releaseId = argResults!['release'] as String?;
+    var patchPath = argResults!['patch'] as String?;
+    if (releaseId == null) {
+      final releases = store.listReleases();
+      if (releases.length != 1) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.environment,
+          code: 'D8001',
+          summary: releases.isEmpty
+              ? 'Deploy requires a local release baseline'
+              : 'Deploy release selection is ambiguous',
+          detail: releases.isEmpty
+              ? 'No complete release baseline was found.'
+              : releases.map((release) => release.releaseId).join(', '),
+          action: releases.isEmpty
+              ? 'Run hyfens release android or hyfens release ios first.'
+              : 'Pass --release <release-id> explicitly.',
+        );
+      }
+      releaseId = releases.single.releaseId;
+    }
+    if (patchPath == null) {
+      final patchDirectory = store.patchDirectory(releaseId);
+      final patches = patchDirectory.existsSync()
+          ? patchDirectory
+                .listSync(followLinks: false)
+                .whereType<File>()
+                .map((file) {
+                  final match = RegExp(r'^(\d+)\.patch$')
+                      .firstMatch(p.basename(file.path));
+                  final sequence = match == null
+                      ? null
+                      : int.tryParse(match.group(1)!);
+                  return (file: file, sequence: sequence);
+                })
+                .where((entry) => entry.sequence != null && entry.sequence! > 0)
+                .toList()
+          : <({File file, int? sequence})>[];
+      patches.sort((left, right) => left.sequence!.compareTo(right.sequence!));
+      if (patches.isEmpty) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.environment,
+          code: 'D8001',
+          summary: 'Deploy requires a local patch artifact',
+          detail: releaseId,
+          action: 'Run hyfens patch android or hyfens patch ios first, or pass --patch <path>.',
+        );
+      }
+      patchPath = patches.last.file.path;
+    }
+    if (token == null ||
+        organizationId == null ||
+        applicationId == null ||
+        environmentId == null) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'D8001',
+        summary: 'Deploy configuration is incomplete',
+        detail: 'Provide --endpoint, --organization-id, --application-id, and --environment-id plus --token (or their HYFENS_* environment variables), or run hyfens login with one selected profile.',
+        action: 'Explicit credentials are request-scoped; auth login stores session secrets only in protected local storage.',
+      );
+    }
     final expectedVersion = int.tryParse(
       argResults!['expected-version'] as String,
     );
-    if (expectedVersion == null) {
+    if (expectedVersion == null || expectedVersion < 0) {
       throw UsageException(
         'deploy --expected-version must be a non-negative integer',
         usage,
       );
     }
-    final deployment =
-        await ControlPlaneDeliveryService(
-          toolchain: runner.toolchain,
-          authClient: runner.authClient,
-        ).deploy(
-          projectPath: projectPath,
-          releaseId: argResults!['release'] as String?,
-          patchPath: argResults!['patch'] as String?,
-          endpoint: endpointValue == null
-              ? null
-              : _deployEndpoint(endpointValue),
-          token: _optionOrEnvironment('token', 'HYFENS_TOKEN'),
-          organizationId: _optionOrEnvironment(
-            'organization-id',
-            'HYFENS_ORGANIZATION_ID',
-          ),
-          applicationId: _optionOrEnvironment(
-            'application-id',
-            'HYFENS_APPLICATION_ID',
-          ),
-          environmentId: _optionOrEnvironment(
-            'environment-id',
-            'HYFENS_ENVIRONMENT_ID',
-          ),
-          caCertPath: _optionOrEnvironment('ca-cert', 'HYFENS_TLS_CA_CERT'),
-          expectedVersion: expectedVersion,
-          displayVersion: argResults!['display-version'] as String,
-        );
-    final result = deployment.data;
+    final release = store.readRelease(releaseId);
+    final patchFile = File(patchPath);
+    if (!patchFile.existsSync()) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'D8002',
+        summary: 'Deploy patch artifact is missing',
+        detail: patchFile.path,
+      );
+    }
+    final inspection = await runner.toolchain.verify(
+      file: patchFile,
+      projectPath: projectPath,
+      releaseId: release.releaseId,
+    );
+    final artifactBytes = await patchFile.readAsBytes();
+    final artifact = inspection.artifact;
+    final publicKey = runner.toolchain.inspectPublicKey(
+      projectPath: projectPath,
+    );
+    final endpointUri = endpoint;
+    final securityContext = _securityContext(caCertPath);
+    final releaseBody = <String, Object?>{
+      'application_id': applicationId,
+      'platform_id': 'plt_${release.target}_${release.architecture}',
+      'runtime_application_id': release.applicationId,
+      'runtime_release_id': release.releaseId,
+      'build_target':
+          '${release.target}-${release.architecture}-${release.buildMode}',
+      'runtime_compatibility_version':
+          release.manifest.runtimeCompatibilityVersion,
+      'patch_format_version': release.manifest.patchFormatVersion,
+      'build_fingerprint': release.buildFingerprint,
+      'capability_authority_digest': digestJson(
+        release.manifest.capabilities.map((item) => item.toJson()).toList(),
+      ),
+      'function_signature_digest': digestJson(
+        release.manifest.functions.map((item) => item.toJson()).toList(),
+      ),
+      'display_version': argResults!['display-version'] as String,
+      'signing_public_keys': <String, String>{
+        publicKey.keyId: base64.encode(publicKey.publicKey),
+      },
+    };
+    final releaseResponse = await _deployJson(
+      method: 'POST',
+      uri: _deployUri(
+        endpointUri,
+        'v1/organizations/$organizationId/applications/$applicationId/releases',
+      ),
+      token: token,
+      securityContext: securityContext,
+      idempotencyKey: 'release-${release.releaseId}',
+      body: releaseBody,
+    );
+    final serviceReleaseId = _responseString(releaseResponse, 'id');
+    final artifactId = 'art_${sha256Hex(artifactBytes).substring(0, 24)}';
+    final patchBody = <String, Object?>{
+      'runtime_patch_id': artifact.patchId,
+      'sequence': artifact.sequence,
+      'artifact_id': artifactId,
+      'sha256': _sha256Digest(artifactBytes),
+      'size_bytes': artifactBytes.length,
+      'signature_key_id': artifact.signatureMetadata.keyId,
+    };
+    final patchResponse = await _deployJson(
+      method: 'POST',
+      uri: _deployUri(
+        endpointUri,
+        'v1/organizations/$organizationId/releases/$serviceReleaseId/patches',
+      ),
+      token: token,
+      securityContext: securityContext,
+      idempotencyKey: 'patch-${artifact.patchId}',
+      body: patchBody,
+    );
+    await _deployBytes(
+      uri: _deployUri(
+        endpointUri,
+        'v1/organizations/$organizationId/artifacts/$artifactId',
+      ),
+      token: token,
+      securityContext: securityContext,
+      idempotencyKey: 'artifact-${sha256Hex(artifactBytes)}',
+      bytes: artifactBytes,
+    );
+    final promotion = await _deployJson(
+      method: 'POST',
+      uri: _deployUri(
+        endpointUri,
+        'v1/organizations/$organizationId/environments/$environmentId/release-promotions',
+      ),
+      token: token,
+      securityContext: securityContext,
+      idempotencyKey: 'promote-${release.releaseId}-$expectedVersion',
+      body: <String, Object?>{
+        'release_id': serviceReleaseId,
+        'expected_version': expectedVersion,
+      },
+    );
+    final result = <String, Object?>{
+      'result': 'DEPLOYED',
+      'releaseId': release.releaseId,
+      'serviceReleaseId': serviceReleaseId,
+      'patchId': artifact.patchId,
+      'servicePatchId': _responseString(patchResponse, 'id'),
+      'artifactId': artifactId,
+      'environmentId': environmentId,
+      'environmentVersion': promotion['version'],
+      'signature': 'verified locally before upload',
+    };
     if (jsonMode) {
       runner.writeJson(result);
     } else {
       runner.write('Deploy completed');
-      runner.write('  Release:     ${result['releaseId']}');
-      runner.write('  Patch:       ${result['patchId']}');
-      runner.write('  Artifact:    ${result['artifactId']}');
-      runner.write(
-        '  Environment: ${result['environmentId']} v${result['environmentVersion']}',
-      );
+      runner.write('  Release:     ${release.releaseId}');
+      runner.write('  Patch:       ${artifact.patchId}');
+      runner.write('  Artifact:    $artifactId');
+      runner.write('  Environment: $environmentId v${promotion['version']}');
       runner.write('  Signature:   verified locally before upload');
     }
   }
@@ -2000,7 +2156,8 @@ ProfileScope? _singleProfileScope(Profile? profile) {
 
 ProfileScope? _profileScopeForEndpoint(Profile? profile, Uri endpoint) {
   if (profile == null ||
-      !controlPlaneEndpointsMatch(profile.endpoint, endpoint)) {
+      controlPlaneEndpointKey(profile.endpoint) !=
+          controlPlaneEndpointKey(endpoint)) {
     return null;
   }
   return _singleProfileScope(profile);
@@ -2580,6 +2737,64 @@ Uri _deployUri(Uri endpoint, String path) {
   return Uri.parse(root).resolve(path);
 }
 
+Future<Map<String, Object?>> _deployJson({
+  required String method,
+  required Uri uri,
+  required String token,
+  SecurityContext? securityContext,
+  required String idempotencyKey,
+  required Map<String, Object?> body,
+}) async {
+  final client = HttpClient(context: securityContext);
+  try {
+    final request = await client.openUrl(method, uri);
+    final bytes = utf8.encode(jsonEncode(body));
+    request
+      ..headers.contentType = ContentType.json
+      ..headers.set('Authorization', 'Bearer $token')
+      ..headers.set('Idempotency-Key', idempotencyKey)
+      ..headers.set(
+        'X-Request-Id',
+        'cli-${DateTime.now().microsecondsSinceEpoch}',
+      )
+      ..contentLength = bytes.length;
+    request.add(bytes);
+    final response = await request.close();
+    final decodedBytes = await response.fold<List<int>>(
+      <int>[],
+      (all, chunk) => all..addAll(chunk),
+    );
+    final source = utf8.decode(decodedBytes, allowMalformed: false);
+    final decoded = source.isEmpty ? <String, Object?>{} : jsonDecode(source);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code:
+            decoded is Map<String, Object?> &&
+                decoded['error'] is Map<String, Object?>
+            ? ((decoded['error']! as Map<String, Object?>)['code'] as String? ??
+                  'D8003')
+            : 'D8003',
+        summary: 'Control-plane request was rejected',
+        detail: decoded is Map<String, Object?>
+            ? jsonEncode(decoded['error'] ?? decoded)
+            : 'HTTP ${response.statusCode}',
+      );
+    }
+    if (decoded is! Map<String, Object?>) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'D8004',
+        summary: 'Control-plane response is malformed',
+        detail: displayControlPlaneUri(uri),
+      );
+    }
+    return decoded;
+  } finally {
+    client.close(force: true);
+  }
+}
+
 String? _bundleOptionOrEnvironment(
   ArgResults? local,
   ArgResults? global,
@@ -2779,7 +2994,7 @@ Future<Map<String, Object?>> _bundleHttpRequest({
         exitCode: ToolExitCode.environment,
         code: 'B9009',
         summary: 'Control-plane bundle response is malformed',
-        detail: uri.toString(),
+        detail: displayControlPlaneUri(uri),
       );
     }
     return responseBody;
@@ -3091,6 +3306,56 @@ int _rolloutResponseInt(Map<String, Object?> body, String key) {
     detail: key,
   );
 }
+
+Future<void> _deployBytes({
+  required Uri uri,
+  required String token,
+  SecurityContext? securityContext,
+  required String idempotencyKey,
+  required List<int> bytes,
+}) async {
+  final client = HttpClient(context: securityContext);
+  try {
+    final request = await client.putUrl(uri);
+    request
+      ..headers.contentType = ContentType('application', 'octet-stream')
+      ..headers.set('Authorization', 'Bearer $token')
+      ..headers.set('Idempotency-Key', idempotencyKey)
+      ..headers.set(
+        'X-Request-Id',
+        'cli-${DateTime.now().microsecondsSinceEpoch}',
+      )
+      ..contentLength = bytes.length;
+    request.add(bytes);
+    final response = await request.close();
+    final source = await response.transform(utf8.decoder).join();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'D8005',
+        summary: 'Artifact upload was rejected',
+        detail: source,
+      );
+    }
+  } finally {
+    client.close(force: true);
+  }
+}
+
+String _responseString(Map<String, Object?> body, String key) {
+  final value = body[key];
+  if (value is! String || value.isEmpty) {
+    throw ToolFailure.single(
+      exitCode: ToolExitCode.environment,
+      code: 'D8004',
+      summary: 'Control-plane response is missing a required identifier',
+      detail: key,
+    );
+  }
+  return value;
+}
+
+String _sha256Digest(List<int> bytes) => 'sha256:${sha256Hex(bytes)}';
 
 final class KeysCommand extends _ToolCommand {
   KeysCommand(super.runner) {

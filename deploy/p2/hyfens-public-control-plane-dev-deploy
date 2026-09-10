@@ -288,11 +288,25 @@ deploy_release() {
       "$docker" image inspect --format '{{.Id}}' "$current_image" \
         2>/dev/null || true
     )
+  elif ! "$docker" image inspect "$old_image_id" >/dev/null 2>&1; then
+    # A running container can retain a content digest after Docker has
+    # removed the corresponding local image record. Fall back to the durable
+    # current tag rather than attempting to tag a stale digest.
+    old_image_id=$(
+      "$docker" image inspect --format '{{.Id}}' "$current_image" \
+        2>/dev/null || true
+    )
   fi
   old_previous_image_id=$(
     "$docker" image inspect --format '{{.Id}}' "$previous_image" \
       2>/dev/null || true
   )
+
+  # Preserve the currently running image before rebuilding the mutable
+  # current tag. BuildKit may remove the old image ID during the build.
+  if [ -n "$old_image_id" ]; then
+    "$docker" tag "$old_image_id" "$previous_image"
+  fi
 
   build_dir=$(mktemp -d /opt/hyfens/.public-control-plane-build.XXXXXX)
   install -d "$build_dir/deploy/p2" "$build_dir/packages/control_plane" \
@@ -317,10 +331,6 @@ deploy_release() {
   "$docker" image inspect "$current_image" >/dev/null 2>&1 || {
     fail 'control-plane image was not produced'
   }
-  if [ -n "$old_image_id" ]; then
-    "$docker" tag "$old_image_id" "$previous_image"
-  fi
-
   work_dir=$(mktemp -d /opt/hyfens/.public-control-plane-deploy.XXXXXX)
   if [ -d "$target" ]; then
     mv "$target" "$work_dir/target"

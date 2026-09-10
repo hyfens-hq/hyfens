@@ -5,6 +5,34 @@ import 'package:hyfens_tool/tool.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('managed endpoint is hidden only in public profile projections', () {
+    final profile = CliProfile(
+      name: managedCloudProfileName,
+      endpoint: Uri.parse(managedCloudApiBase),
+      managed: true,
+    );
+    final publicMetadata = profile.toPublicMetadataJson();
+
+    expect(profile.toMetadataJson()['endpoint'], managedCloudApiBase);
+    expect(publicMetadata['endpoint'], managedCloudDisplayName);
+    expect(publicMetadata['endpoint'], isNot(contains('api.hyfens.com')));
+    expect(
+      displayControlPlaneUri(
+        Uri.parse('https://api.hyfens.com/p2/v1/organizations/org_1'),
+      ),
+      managedCloudDisplayName,
+    );
+    expect(
+      displayControlPlaneUri(Uri.parse('https://self-host.example/p2/v1')),
+      'https://self-host.example/p2/v1',
+    );
+    expect(
+      Profile(endpoint: Uri.parse(managedCloudApiBase))
+          .toPublicJson()['endpoint'],
+      managedCloudDisplayName,
+    );
+  });
+
   test(
     'profiles select host-bound sessions without cross-host fallback',
     () async {
@@ -88,13 +116,14 @@ void main() {
         'hyfens-profile-cli-output-',
       );
       addTearDown(() => outputDirectory.delete(recursive: true));
+      final storage = AuthStorage(root: root);
       final outputFile = File('${outputDirectory.path}/stdout');
       final errorFile = File('${outputDirectory.path}/stderr');
       final output = outputFile.openWrite();
       final error = errorFile.openWrite();
       try {
         await HyfensCommandRunner(
-          authStorage: AuthStorage(root: root),
+          authStorage: storage,
           out: output,
           err: error,
         ).run(const <String>['profile', 'list', '--json']);
@@ -107,71 +136,58 @@ void main() {
       expect(result['active_profile'], 'hyfens-cloud');
       final profiles = result['profiles']! as List<Object?>;
       final firstProfile = profiles.single as Map<String, Object?>;
-      expect(firstProfile['endpoint'], managedCloudApiBase);
+      expect(firstProfile['endpoint'], managedCloudDisplayName);
+      expect(firstProfile['endpoint'], isNot(contains('api.hyfens.com')));
+      final persisted = await storage.readProfileCatalog();
+      expect(persisted.active.toJson()['endpoint'], managedCloudApiBase);
       expect(File('${root.path}/credentials').existsSync(), isFalse);
     },
   );
 
   test(
-    'managed Cloud legacy alias migrates its profile and keyed session',
+    'profile bind persists customer resource context without secrets',
     () async {
       final root = await Directory.systemTemp.createTemp(
-        'hyfens-managed-migration-',
+        'hyfens-profile-bind-',
       );
       addTearDown(() => root.delete(recursive: true));
-      final storage = AuthStorage(root: root);
-      final legacyKey = controlPlaneEndpointKey(
-        Uri.parse(legacyManagedCloudApiBase),
-      );
-      await storage.profilesFile.parent.create(recursive: true);
-      await storage.profilesFile.writeAsString(
-        jsonEncode(<String, Object?>{
-          'active_profile': managedCloudProfileName,
-          'profiles': <String, Object?>{
-            managedCloudProfileName: <String, Object?>{
-              'endpoint': legacyManagedCloudApiBase,
-              'managed': true,
-            },
-          },
-        }),
-      );
-      await storage.credentialsFile.writeAsString(
-        jsonEncode(<String, Object?>{
-          legacyKey: const AuthSession(
-            accessToken: 'legacy-access',
-            sessionToken: 'legacy-session',
-          ).toJson(),
-        }),
-      );
+      final outputFile = File('${root.path}/stdout');
+      final errorFile = File('${root.path}/stderr');
+      final output = outputFile.openWrite();
+      final error = errorFile.openWrite();
+      try {
+        await HyfensCommandRunner(
+          authStorage: AuthStorage(root: root),
+          out: output,
+          err: error,
+        ).run(const <String>[
+          'profile',
+          'bind',
+          '--organization-id',
+          'org_customer',
+          '--application-id',
+          'app_flutter',
+          '--environment-id',
+          'env_free',
+          '--json',
+        ]);
+      } finally {
+        await output.close();
+        await error.close();
+      }
 
-      final active = await storage.readActiveProfile();
-      expect(active.endpoint.toString(), managedCloudApiBase);
-      final session = await storage.readSession(endpoint: active.endpoint);
-      expect(session?.accessToken, 'legacy-access');
-      expect(session?.sessionToken, 'legacy-session');
-
-      final credentials = jsonDecode(
-        await storage.credentialsFile.readAsString(),
-      ) as Map<String, Object?>;
-      expect(credentials.containsKey(legacyKey), isFalse);
+      final result =
+          jsonDecode(await outputFile.readAsString()) as Map<String, Object?>;
+      expect(result['result'], 'PROFILE_BOUND');
+      final profile = result['profile']! as Map<String, Object?>;
+      expect(profile['organization'], 'org_customer');
+      expect(profile['application'], 'app_flutter');
+      expect(profile['environment'], 'env_free');
       expect(
-        credentials.containsKey(
-          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase)),
-        ),
-        isTrue,
+        (await AuthStorage(root: root).readActiveProfile()).organizationId,
+        'org_customer',
       );
+      expect(File('${root.path}/credentials').existsSync(), isFalse);
     },
   );
-
-  test('only managed Cloud aliases share endpoint identity', () {
-    final canonical = Uri.parse(managedCloudApiBase);
-    final legacy = Uri.parse(legacyManagedCloudApiBase);
-    final selfHosted = Uri.parse('https://self-host.example/p2/');
-
-    expect(isManagedCloudEndpoint(canonical), isTrue);
-    expect(isManagedCloudEndpoint(legacy), isTrue);
-    expect(isManagedCloudEndpoint(selfHosted), isFalse);
-    expect(controlPlaneEndpointsMatch(canonical, legacy), isTrue);
-    expect(controlPlaneEndpointsMatch(legacy, selfHosted), isFalse);
-  });
 }

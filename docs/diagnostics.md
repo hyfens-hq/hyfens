@@ -48,7 +48,6 @@ the default; `--json` preserves the same code and action fields for automation.
 | `T1605` | Patch runtime package is unavailable to the tool | Install/use the complete tool distribution and retry. |
 | `T1606` | Flutter completed without a release artifact | Resolve signing/export settings; no release baseline was committed. |
 | `T1607` | Selected external package cannot be instrumented safely | Use a supported local package path or create a normal release. |
-| `F3011` | Flutter base artifact resource evidence is incomplete | Create a new base release with complete asset/font manifest evidence. |
 | `P2001` | Some declarations were excluded | Changes in those declarations require a store release. |
 | `P2002` | Source unit is outside the patchable subset | Use supported source or perform a store release. |
 | `P2003` | Changed source contains unsupported declarations | Remove the unsupported change or perform a store release. |
@@ -60,8 +59,6 @@ the default; `--json` preserves the same code and action fields for automation.
 | `P2009` | Changed function is absent from the release | Do not manually add function IDs; create a store release. |
 | `P2010` | No patchable changes were found | Do not create an empty patch artifact. |
 | `P2011` | Compiled patch requires an undeclared host contract | Add a release-owned capability contract or create a normal release. |
-| `P2012` | Selected source uses an unsupported patch compiler construct | Create a new base release or change only a supported method body. |
-| `P2013` | Patch compiler preflight failed unexpectedly | Preserve the diagnostic and report the compiler failure before retrying. |
 | `N3001` | Native/store-reviewed input changed | Create a normal store release. |
 | `N3003` | Resolved package graph changed | Review dependency/plugin changes and create a store release. |
 | `N3004` | Toolchain configuration changed | Create a new baseline after changing policy. |

@@ -57,8 +57,7 @@ final class LoginCommand extends _AuthCommand {
     argParser
       ..addOption(
         'host',
-        help:
-            'Control-plane API base. Defaults to managed Cloud (${managedCloudApiBase}).',
+        help: 'Self-hosted control-plane URL. Omit to use managed Cloud.',
       )
       ..addOption('profile', help: 'Named profile to create or activate.')
       ..addFlag(
@@ -139,7 +138,7 @@ final class LoginCommand extends _AuthCommand {
     if (jsonMode) {
       runner.writeJson(<String, Object?>{
         'result': 'LOGGED_IN',
-        'profile': result.profile.toJson(),
+        'profile': result.profile.toPublicJson(),
       });
       return;
     }
@@ -186,6 +185,7 @@ final class ProfileCommand extends Command<void> {
     addSubcommand(ProfileUseCommand(runner));
     addSubcommand(ProfileRemoveCommand(runner));
     addSubcommand(ProfileCurrentCommand(runner));
+    addSubcommand(ProfileBindCommand(runner));
   }
 
   final HyfensCommandRunner runner;
@@ -241,12 +241,14 @@ abstract base class _ProfileCommand extends Command<void> {
   }
 
   void writeProfileJson(ControlPlaneProfile profile) =>
-      runner.writeJson(profile.toJson());
+      runner.writeJson(profile.toPublicJson());
 
   void writeProfileText(ControlPlaneProfile profile, {String? prefix}) {
     if (prefix != null) runner.write(prefix);
     runner.write('Name:         ${profile.name}');
-    runner.write('Endpoint:     ${profile.endpoint}');
+    runner.write(
+      'Endpoint:     ${displayControlPlaneEndpoint(profile.endpoint)}',
+    );
     runner.write('Managed:      ${profile.managed}');
     if (profile.organizationId != null) {
       runner.write('Organization: ${profile.organizationId}');
@@ -276,7 +278,7 @@ final class ProfileListCommand extends _ProfileCommand {
       runner.writeJson(<String, Object?>{
         'active_profile': catalog.active.name,
         'profiles': catalog.profiles
-            .map((profile) => profile.toJson())
+            .map((profile) => profile.toPublicJson())
             .toList(),
       });
       return;
@@ -284,7 +286,9 @@ final class ProfileListCommand extends _ProfileCommand {
     runner.write('Profiles');
     for (final profile in catalog.profiles) {
       final marker = profile.name == catalog.active.name ? '*' : ' ';
-      runner.write('$marker ${profile.name}  ${profile.endpoint}');
+      runner.write(
+        '$marker ${profile.name}  ${displayControlPlaneEndpoint(profile.endpoint)}',
+      );
     }
   }
 }
@@ -339,6 +343,83 @@ final class ProfileCurrentCommand extends _ProfileCommand {
     } else {
       writeProfileText(catalog.active, prefix: 'Current profile');
     }
+  }
+}
+
+final class ProfileBindCommand extends _ProfileCommand {
+  ProfileBindCommand(super.runner) {
+    argParser
+      ..addOption(
+        'profile',
+        help: 'Named profile to update. Defaults to active.',
+      )
+      ..addOption('organization-id', help: 'Customer organization identifier.')
+      ..addOption('application-id', help: 'Customer application identifier.')
+      ..addOption('environment-id', help: 'Customer environment identifier.');
+  }
+
+  @override
+  String get name => 'bind';
+
+  @override
+  String get description =>
+      'Bind a profile to an organization, application, or environment.';
+
+  @override
+  Future<void> run() async {
+    final organizationId = _optionalValue('organization-id');
+    final applicationId = _optionalValue('application-id');
+    final environmentId = _optionalValue('environment-id');
+    if (organizationId == null &&
+        applicationId == null &&
+        environmentId == null) {
+      throw UsageException(
+        'Provide at least one of --organization-id, --application-id, or --environment-id.',
+        usage,
+      );
+    }
+    final catalog = await storage.readProfileCatalog();
+    final name = _optionalValue('profile') ?? catalog.active.name;
+    final current =
+        catalog.byName(name) ??
+        (catalog.profiles.isEmpty && name == managedCloudProfileName
+            ? catalog.active
+            : null);
+    if (current == null) {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.usage,
+        code: 'A1025',
+        summary: 'Profile does not exist',
+        detail: name,
+        action: 'Run hyfens profile list to see available profiles.',
+      );
+    }
+    final updated = ControlPlaneProfile(
+      name: current.name,
+      endpoint: current.endpoint,
+      managed: current.managed,
+      organizationId: organizationId ?? current.organizationId,
+      applicationId: applicationId ?? current.applicationId,
+      environmentId: environmentId ?? current.environmentId,
+    );
+    await storage.writeNamedProfile(
+      updated,
+      makeActive: catalog.active.name == current.name,
+    );
+    if (jsonMode) {
+      runner.writeJson(<String, Object?>{
+        'result': 'PROFILE_BOUND',
+        'profile': updated.toPublicJson(),
+      });
+    } else {
+      writeProfileText(updated, prefix: 'Bound profile');
+    }
+  }
+
+  String? _optionalValue(String name) {
+    final value = argResults?[name] as String?;
+    if (value == null || value.trim().isEmpty) return null;
+    return value.trim();
   }
 }
 
@@ -491,7 +572,9 @@ abstract base class _AuthCommand extends Command<void> {
     if (profile.organizationId != null) {
       runner.write('  Organization:  ${profile.organizationId}');
     }
-    runner.write('  Endpoint:     ${profile.endpoint}');
+    runner.write(
+      '  Endpoint:     ${displayControlPlaneEndpoint(profile.endpoint)}',
+    );
   }
 }
 
@@ -542,7 +625,7 @@ final class AuthLoginCommand extends _AuthCommand {
     if (jsonMode) {
       runner.writeJson(<String, Object?>{
         'result': 'LOGGED_IN',
-        'profile': result.profile.toJson(),
+        'profile': result.profile.toPublicJson(),
       });
       return;
     }
@@ -567,7 +650,7 @@ final class AuthStatusCommand extends _AuthCommand {
     if (jsonMode) {
       runner.writeJson(<String, Object?>{
         'result': loggedIn ? 'LOGGED_IN' : 'NOT_LOGGED_IN',
-        'profile': profile?.toJson(),
+        'profile': profile?.toPublicJson(),
       });
       return;
     }

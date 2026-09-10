@@ -124,6 +124,39 @@ void main() {
     expect(await store.listJson('sessions'), hasLength(1));
   });
 
+  test('enterprise inquiry notification is durable and retryable', () async {
+    var shouldFail = true;
+    final deliveries = <Map<String, Object?>>[];
+    final onboarding = PublicOnboardingService(
+      store: store,
+      enterpriseInquiryNotifier: (inquiry) async {
+        if (shouldFail) throw StateError('test delivery failure');
+        deliveries.add(inquiry);
+      },
+    );
+
+    final first = await onboarding.submitEnterpriseInquiry(
+      email: 'sales@example.com',
+      message: 'We need a managed Enterprise workspace.',
+      idempotencyKey: 'enterprise-notification-retry',
+      organization: 'Example Systems',
+    );
+    expect(first['notificationStatus'], 'failed');
+    expect(deliveries, isEmpty);
+
+    shouldFail = false;
+    final retry = await onboarding.submitEnterpriseInquiry(
+      email: 'sales@example.com',
+      message: 'We need a managed Enterprise workspace.',
+      idempotencyKey: 'enterprise-notification-retry',
+      organization: 'Example Systems',
+    );
+    expect(retry['notificationStatus'], 'sent');
+    expect(deliveries, hasLength(1));
+    expect(deliveries.single['email'], 'sales@example.com');
+    expect(deliveries.single['message'], contains('managed Enterprise'));
+  });
+
   test(
     'waitlist and newsletter are durable, separate, normalized, and idempotent',
     () async {

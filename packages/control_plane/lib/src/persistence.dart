@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -13,6 +14,13 @@ abstract interface class ArtifactStore {
   Future<List<int>?> readArtifact(String digest);
 }
 
+/// Optional physical-deletion seam for lifecycle cleanup. A false result
+/// means the content-addressed object was already absent, which is a safe
+/// idempotent outcome for a terminal PURGED metadata transition.
+abstract interface class ArtifactDeletion {
+  Future<bool> deleteArtifact(String digest);
+}
+
 /// Optional dependency probe used by hosted readiness checks.
 abstract interface class ArtifactStoreReadiness {
   Future<void> checkReadiness();
@@ -23,6 +31,23 @@ abstract interface class ArtifactStoreReadiness {
 /// metadata or regenerating signed artifacts.
 abstract interface class ArtifactInventory {
   Future<Set<String>> listArtifactKeys();
+}
+
+/// Optional exact-record deletion for staged lifecycle cleanup. It is kept
+/// outside [ControlPlaneStore] so decorators and focused test stores do not
+/// need to implement destructive operations they do not support.
+abstract interface class JsonRecordDeletion {
+  Future<bool> deleteJson(String collection, String id);
+}
+
+/// Optional compare-and-set seam for one-time security tokens. A null result
+/// means that the token is missing or has already been consumed.
+abstract interface class OneTimeTokenConsumption {
+  Future<Map<String, Object?>?> consumeOneTimeTokenIfUnused({
+    required String collection,
+    required String id,
+    required DateTime consumedAt,
+  });
 }
 
 final class ObservationWriteResult {
@@ -36,92 +61,6 @@ final class RolloutTransitionCommitResult {
   const RolloutTransitionCommitResult({required this.applied});
 
   final bool applied;
-}
-
-/// Result of the one atomic runtime-receipt settlement operation.
-///
-/// A receipt and its canonical usage event are committed together. Retrying a
-/// previously committed receipt returns [createdReceipt] and [createdUsage]
-/// as false rather than creating another usage event.
-final class RuntimeReceiptCommitResult {
-  const RuntimeReceiptCommitResult({
-    required this.createdReceipt,
-    required this.createdUsage,
-  });
-
-  final bool createdReceipt;
-  final bool createdUsage;
-}
-
-/// Result of the one atomic managed-Cloud signup verification operation.
-///
-/// Verification creates the organization, owner account, onboarding marker,
-/// and verified signup record together. A repeated verification returns
-/// [created] false after comparing the existing records instead of creating a
-/// second organization or account.
-final class ManagedCloudOnboardingCommitResult {
-  const ManagedCloudOnboardingCommitResult({required this.created});
-
-  final bool created;
-}
-
-/// Persistence seam for managed Cloud self-service onboarding. It is kept
-/// separate from [ControlPlaneStore] so existing store implementations and
-/// test doubles do not acquire a new required capability merely by upgrading
-/// the public control-plane package.
-abstract interface class ManagedCloudOnboardingStore {
-  Future<Map<String, Object?>?> readJson(String collection, String id);
-
-  Future<void> createJson(
-    String collection,
-    String id,
-    Map<String, Object?> value,
-  );
-
-  Future<void> replaceJson(
-    String collection,
-    String id,
-    Map<String, Object?> value,
-  );
-
-  Future<void> appendAudit(String id, Map<String, Object?> value);
-
-  Future<ManagedCloudOnboardingCommitResult> commitManagedCloudOnboarding({
-    required String signupId,
-    required Map<String, Object?> expectedSignup,
-    required Map<String, Object?> verifiedSignup,
-    required Map<String, Object?> organization,
-    required Map<String, Object?> user,
-    required Map<String, Object?> onboarding,
-  });
-}
-
-/// Durable storage for the runtime trust boundary. Implementations must keep
-/// registration records immutable and settle a receipt plus its canonical
-/// usage event atomically.
-abstract interface class RuntimeReceiptStore {
-  Future<void> createRuntimeAdmission(String id, Map<String, Object?> value);
-
-  Future<Map<String, Object?>?> readRuntimeAdmission(String id);
-
-  Future<void> createRuntimeInstallation(String id, Map<String, Object?> value);
-
-  Future<Map<String, Object?>?> readRuntimeInstallation(String id);
-
-  Future<void> createRuntimeRegistration(String id, Map<String, Object?> value);
-
-  Future<Map<String, Object?>?> readRuntimeRegistration(String id);
-
-  Future<void> createRuntimeRejection(String id, Map<String, Object?> value);
-
-  Future<Map<String, Object?>?> readRuntimeReceipt(String id);
-
-  Future<RuntimeReceiptCommitResult> commitRuntimeReceipt({
-    required String receiptId,
-    required Map<String, Object?> receipt,
-    required String usageEventId,
-    required Map<String, Object?> usageEvent,
-  });
 }
 
 /// Storage operations whose correctness depends on a durable unique key.
@@ -150,6 +89,19 @@ abstract interface class ObservationStore {
   });
 }
 
+/// Optional bounded observation cleanup used by privacy workers. Keeping this
+/// separate preserves compatibility with focused decorators that only expose
+/// the original observation store contract.
+abstract interface class BoundedObservationDeletion {
+  Future<int> deleteObservationsBatch({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    required int limit,
+  });
+}
+
 /// The one rollout write that must be serialized across control-plane
 /// processes. PostgreSQL implements this as a transaction with a row lock;
 /// the file store provides the equivalent single-node queue.
@@ -167,22 +119,62 @@ abstract interface class RolloutTransitionStore {
   });
 }
 
-/// Optional compare-and-swap seam for metadata whose state transition must be
-/// safe across multiple control-plane processes. Stores that do not implement
-/// this capability remain valid for the single-process file/test contract;
-/// stateful services use the fallback only where that contract is sufficient.
-abstract interface class ConditionalJsonStore {
-  Future<bool> replaceJsonIfCurrent({
-    required String collection,
-    required String id,
-    required Map<String, Object?> expected,
-    required Map<String, Object?> replacement,
+/// Transactional record access for billing refund decisions.
+///
+/// Refund approval and provider-attempt claims need to reserve a captured
+/// balance as one durable operation. This optional seam lets stores with a
+/// transaction implementation provide that guarantee without widening the
+/// general JSON store contract or making every test/decorator implement a
+/// billing-specific method.
+abstract interface class BillingRefundTransaction {
+  Future<Map<String, Object?>?> readJson(String collection, String id);
+
+  Future<List<Map<String, Object?>>> listJson(String collection);
+
+  Future<void> createJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  );
+
+  Future<void> replaceJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  );
+
+  Future<void> appendAudit(String id, Map<String, Object?> value);
+}
+
+/// Optional durable transaction support for refund balance reservation and
+/// provider-attempt idempotency. Implementations must serialize operations for
+/// the supplied lock key and commit the callback atomically where supported.
+abstract interface class BillingRefundTransactionStore {
+  Future<T> runBillingRefundTransaction<T>(
+    String lockKey,
+    Future<T> Function(BillingRefundTransaction transaction) action,
+  );
+}
+
+/// Optional durable claim/compare-and-set support for notification delivery.
+///
+/// A worker must claim a delivery before calling an external provider. The
+/// lease lets another worker recover a process that stopped while the provider
+/// call was in flight, while the claim check prevents that stale worker from
+/// overwriting the newer worker's result. Stores without this seam retain the
+/// single-process dispatcher fallback.
+abstract interface class NotificationDeliveryClaimStore {
+  Future<Map<String, Object?>?> claimNotificationDelivery({
+    required String deliveryId,
+    required DateTime now,
+    required DateTime leaseUntil,
+    required String claimId,
   });
 
-  Future<bool> replaceJsonBatchIfCurrent({
-    required String collection,
-    required Map<String, Map<String, Object?>> expected,
-    required Map<String, Map<String, Object?>> replacements,
+  Future<bool> updateClaimedNotificationDelivery({
+    required String deliveryId,
+    required String claimId,
+    required Map<String, Object?> value,
   });
 }
 
@@ -208,16 +200,6 @@ abstract interface class ControlPlaneStore
     String collection,
     String id,
     Map<String, Object?> value,
-  );
-
-  /// Replaces multiple records as one serialized metadata operation.
-  ///
-  /// PostgreSQL commits the replacements in one transaction. The file store
-  /// serializes the operation and keeps each replacement atomic, which is the
-  /// supported single-process semantics for local self-hosted storage.
-  Future<void> replaceJsonBatch(
-    String collection,
-    Map<String, Map<String, Object?>> values,
   );
 
   /// Touches an active human session only when its secret hash still matches.
@@ -261,13 +243,19 @@ final class FileControlPlaneStore
     implements
         ControlPlaneStore,
         ArtifactInventory,
-        ConditionalJsonStore,
-        RuntimeReceiptStore,
-        ManagedCloudOnboardingStore {
+        ArtifactDeletion,
+        JsonRecordDeletion,
+        OneTimeTokenConsumption,
+        BoundedObservationDeletion,
+        BillingRefundTransactionStore,
+        NotificationDeliveryClaimStore {
   FileControlPlaneStore(this.root);
 
   final Directory root;
   Future<void> _sessionOperationTail = Future<void>.value();
+  Future<void> _notificationOperationTail = Future<void>.value();
+  final Map<String, Future<void>> _billingRefundTails =
+      <String, Future<void>>{};
 
   static final RegExp _safeId = RegExp(r'^[A-Za-z0-9_.:-]{1,256}$');
 
@@ -285,6 +273,9 @@ final class FileControlPlaneStore
       'credentials',
       'users',
       'sessions',
+      'auth_verification_tokens',
+      'auth_recovery_tokens',
+      'auth_deletion_tokens',
       'auth_bootstrap_consumptions',
       'audit',
       'audit_chain',
@@ -292,18 +283,27 @@ final class FileControlPlaneStore
       'observations',
       'waitlist',
       'newsletter',
-      'organization_invitations',
-      'platform_staff_invitations',
-      'support_cases',
-      'support_messages',
-      'runtime_admissions',
-      'runtime_installations',
-      'runtime_registrations',
-      'runtime_rejections',
-      'runtime_receipts',
-      'runtime_usage_events',
-      'cloud_signups',
-      'cloud_onboarding',
+      'billing_plan_catalog',
+      'billing_plans',
+      'billing_subscriptions',
+      'billing_events',
+      'billing_provider_mappings',
+      'billing_payments',
+      'billing_refund_requests',
+      'billing_refund_decisions',
+      'billing_provider_refunds',
+      'enterprise_quotes',
+      'enterprise_quote_versions',
+      'enterprise_contracts',
+      'enterprise_provider_mappings',
+      'cloud_usage_events',
+      'environment_runtime_states',
+      'account_deletion_requests',
+      'organization_deletion_requests',
+      'deletion_artifact_items',
+      'deletion_evidence',
+      'notification_events',
+      'notification_deliveries',
     ]) {
       await Directory(p.join(root.path, name)).create(recursive: true);
     }
@@ -311,6 +311,62 @@ final class FileControlPlaneStore
 
   @override
   Future<void> close() async {}
+
+  @override
+  Future<T> runBillingRefundTransaction<T>(
+    String lockKey,
+    Future<T> Function(BillingRefundTransaction transaction) action,
+  ) async {
+    final previous = _billingRefundTails[lockKey] ?? Future<void>.value();
+    final gate = Completer<void>();
+    _billingRefundTails[lockKey] = gate.future;
+    await previous;
+    try {
+      return await action(_FileBillingRefundTransaction(this));
+    } finally {
+      gate.complete();
+      if (identical(_billingRefundTails[lockKey], gate.future)) {
+        _billingRefundTails.remove(lockKey);
+      }
+    }
+  }
+
+  @override
+  Future<Map<String, Object?>?> claimNotificationDelivery({
+    required String deliveryId,
+    required DateTime now,
+    required DateTime leaseUntil,
+    required String claimId,
+  }) => _notificationOperation(() async {
+    const collection = 'notification_deliveries';
+    final current = await readJson(collection, deliveryId);
+    if (current == null || !_notificationClaimIsEligible(current, now)) {
+      return null;
+    }
+    final updated = <String, Object?>{
+      ...current,
+      'state': 'processing',
+      'attempts': (current['attempts'] as int? ?? 0) + 1,
+      'claimId': claimId,
+      'processingAt': now.toUtc().toIso8601String(),
+      'processingLeaseUntil': leaseUntil.toUtc().toIso8601String(),
+    };
+    await replaceJson(collection, deliveryId, updated);
+    return updated;
+  });
+
+  @override
+  Future<bool> updateClaimedNotificationDelivery({
+    required String deliveryId,
+    required String claimId,
+    required Map<String, Object?> value,
+  }) => _notificationOperation(() async {
+    const collection = 'notification_deliveries';
+    final current = await readJson(collection, deliveryId);
+    if (current == null || current['claimId'] != claimId) return false;
+    await replaceJson(collection, deliveryId, value);
+    return true;
+  });
 
   @override
   Future<void> checkReadiness() async {
@@ -356,136 +412,6 @@ final class FileControlPlaneStore
   }
 
   @override
-  Future<void> createRuntimeAdmission(String id, Map<String, Object?> value) =>
-      _metadataOperation(() => createJson('runtime_admissions', id, value));
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeAdmission(String id) =>
-      readJson('runtime_admissions', id);
-
-  @override
-  Future<void> createRuntimeInstallation(
-    String id,
-    Map<String, Object?> value,
-  ) => _metadataOperation(() => createJson('runtime_installations', id, value));
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeInstallation(String id) =>
-      readJson('runtime_installations', id);
-
-  @override
-  Future<void> createRuntimeRegistration(
-    String id,
-    Map<String, Object?> value,
-  ) => _metadataOperation(() => createJson('runtime_registrations', id, value));
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeRegistration(String id) =>
-      readJson('runtime_registrations', id);
-
-  @override
-  Future<void> createRuntimeRejection(String id, Map<String, Object?> value) =>
-      _metadataOperation(() => createJson('runtime_rejections', id, value));
-
-  @override
-  Future<ManagedCloudOnboardingCommitResult> commitManagedCloudOnboarding({
-    required String signupId,
-    required Map<String, Object?> expectedSignup,
-    required Map<String, Object?> verifiedSignup,
-    required Map<String, Object?> organization,
-    required Map<String, Object?> user,
-    required Map<String, Object?> onboarding,
-  }) => _metadataOperation(() async {
-    final current = await readJson('cloud_signups', signupId);
-    if (current == null) {
-      throw const StorageConflict('Cloud signup does not exist');
-    }
-    if (canonicalJson(current) == canonicalJson(verifiedSignup)) {
-      await _verifyManagedCloudRecord('organizations', organization);
-      await _verifyManagedCloudRecord('users', user);
-      await _verifyManagedCloudRecord('cloud_onboarding', onboarding);
-      return const ManagedCloudOnboardingCommitResult(created: false);
-    }
-    if (canonicalJson(current) != canonicalJson(expectedSignup)) {
-      throw const StorageConflict('Cloud signup changed during verification');
-    }
-    await _createManagedCloudRecord('organizations', organization);
-    await _createManagedCloudRecord('users', user);
-    await _createManagedCloudRecord('cloud_onboarding', onboarding);
-    await replaceJson('cloud_signups', signupId, verifiedSignup);
-    return const ManagedCloudOnboardingCommitResult(created: true);
-  });
-
-  Future<void> _createManagedCloudRecord(
-    String collection,
-    Map<String, Object?> value,
-  ) async {
-    final id = value['id'];
-    if (id is! String) {
-      throw const StorageConflict('Managed Cloud record has no ID');
-    }
-    await createJson(collection, id, value);
-  }
-
-  Future<void> _verifyManagedCloudRecord(
-    String collection,
-    Map<String, Object?> value,
-  ) async {
-    final id = value['id'];
-    if (id is! String) {
-      throw const StorageConflict('Managed Cloud record has no ID');
-    }
-    final current = await readJson(collection, id);
-    if (current == null || canonicalJson(current) != canonicalJson(value)) {
-      throw const StorageConflict(
-        'Managed Cloud onboarding record is incomplete',
-      );
-    }
-  }
-
-  @override
-  Future<Map<String, Object?>?> readRuntimeReceipt(String id) =>
-      readJson('runtime_receipts', id);
-
-  @override
-  Future<RuntimeReceiptCommitResult> commitRuntimeReceipt({
-    required String receiptId,
-    required Map<String, Object?> receipt,
-    required String usageEventId,
-    required Map<String, Object?> usageEvent,
-  }) => _metadataOperation(() async {
-    final existingReceipt = await readJson('runtime_receipts', receiptId);
-    if (existingReceipt != null) {
-      if (canonicalJson(existingReceipt) != canonicalJson(receipt)) {
-        throw const StorageConflict('Runtime receipt ID was reused');
-      }
-      final existingUsage = await readJson(
-        'runtime_usage_events',
-        usageEventId,
-      );
-      if (existingUsage == null) {
-        throw const StorageConflict(
-          'Runtime receipt exists without its usage event',
-        );
-      }
-      return const RuntimeReceiptCommitResult(
-        createdReceipt: false,
-        createdUsage: false,
-      );
-    }
-    final existingUsage = await readJson('runtime_usage_events', usageEventId);
-    if (existingUsage != null) {
-      throw const StorageConflict('Runtime usage key was already settled');
-    }
-    await createJson('runtime_receipts', receiptId, receipt);
-    await createJson('runtime_usage_events', usageEventId, usageEvent);
-    return const RuntimeReceiptCommitResult(
-      createdReceipt: true,
-      createdUsage: true,
-    );
-  });
-
-  @override
   Future<void> replaceJson(
     String collection,
     String id,
@@ -498,70 +424,27 @@ final class FileControlPlaneStore
   }
 
   @override
-  Future<void> replaceJsonBatch(
-    String collection,
-    Map<String, Map<String, Object?>> values,
-  ) => _metadataOperation(() async {
-    if (values.isEmpty) return;
-    final entries = values.entries.toList()
-      ..sort((left, right) => left.key.compareTo(right.key));
-    for (final entry in entries) {
-      if (!await _jsonFile(collection, entry.key).exists()) {
-        throw const StorageConflict('Record does not exist');
-      }
-    }
-    for (final entry in entries) {
-      await _writeAtomic(
-        _jsonFile(collection, entry.key),
-        utf8.encode('${canonicalJson(entry.value)}\n'),
-      );
-    }
-  });
-
-  @override
-  Future<bool> replaceJsonIfCurrent({
-    required String collection,
-    required String id,
-    required Map<String, Object?> expected,
-    required Map<String, Object?> replacement,
-  }) async {
-    return replaceJsonBatchIfCurrent(
-      collection: collection,
-      expected: <String, Map<String, Object?>>{id: expected},
-      replacements: <String, Map<String, Object?>>{id: replacement},
-    );
+  Future<bool> deleteJson(String collection, String id) async {
+    final file = _jsonFile(collection, id);
+    if (!await file.exists()) return false;
+    await file.delete();
+    return true;
   }
 
   @override
-  Future<bool> replaceJsonBatchIfCurrent({
+  Future<Map<String, Object?>?> consumeOneTimeTokenIfUnused({
     required String collection,
-    required Map<String, Map<String, Object?>> expected,
-    required Map<String, Map<String, Object?>> replacements,
-  }) => _metadataOperation(() async {
-    if (expected.isEmpty || expected.length != replacements.length) {
-      throw const StorageConflict('Conditional replacement set is invalid');
-    }
-    final expectedKeys = expected.keys.toSet();
-    if (!expectedKeys.containsAll(replacements.keys) ||
-        !replacements.keys.toSet().containsAll(expectedKeys)) {
-      throw const StorageConflict('Conditional replacement set is invalid');
-    }
-    final entries = expected.entries.toList()
-      ..sort((left, right) => left.key.compareTo(right.key));
-    for (final entry in entries) {
-      final current = await readJson(collection, entry.key);
-      if (current == null) {
-        throw const StorageConflict('Record does not exist');
-      }
-      if (canonicalJson(current) != canonicalJson(entry.value)) return false;
-    }
-    for (final entry in entries) {
-      await _writeAtomic(
-        _jsonFile(collection, entry.key),
-        utf8.encode('${canonicalJson(replacements[entry.key]!)}\n'),
-      );
-    }
-    return true;
+    required String id,
+    required DateTime consumedAt,
+  }) => _sessionOperation(() async {
+    final current = await readJson(collection, id);
+    if (current == null || current['consumedAt'] != null) return null;
+    final updated = <String, Object?>{
+      ...current,
+      'consumedAt': consumedAt.toUtc().toIso8601String(),
+    };
+    await replaceJson(collection, id, updated);
+    return updated;
   });
 
   @override
@@ -652,6 +535,17 @@ final class FileControlPlaneStore
   }
 
   @override
+  Future<bool> deleteArtifact(String digest) async {
+    final normalized = requireSha256Digest(digest);
+    final file = File(
+      p.join(root.path, 'artifacts', normalized.substring(7), 'bytes'),
+    );
+    if (!await file.exists()) return false;
+    await file.delete();
+    return true;
+  }
+
+  @override
   Future<void> createIdempotency(
     String scope,
     String key,
@@ -718,6 +612,37 @@ final class FileControlPlaneStore
     String? applicationId,
     String? environmentId,
     required DateTime olderThan,
+  }) => _deleteObservations(
+    organizationId: organizationId,
+    applicationId: applicationId,
+    environmentId: environmentId,
+    olderThan: olderThan,
+  );
+
+  @override
+  Future<int> deleteObservationsBatch({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    required int limit,
+  }) {
+    if (limit < 1) return Future<int>.value(0);
+    return _deleteObservations(
+      organizationId: organizationId,
+      applicationId: applicationId,
+      environmentId: environmentId,
+      olderThan: olderThan,
+      limit: limit,
+    );
+  }
+
+  Future<int> _deleteObservations({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+    int? limit,
   }) async {
     final directory = Directory(p.join(root.path, 'observations'));
     if (!await directory.exists()) return 0;
@@ -738,6 +663,7 @@ final class FileControlPlaneStore
       if (received == null || !received.isBefore(olderThan.toUtc())) continue;
       await entry.delete();
       deleted++;
+      if (limit != null && deleted >= limit) break;
     }
     return deleted;
   }
@@ -778,7 +704,6 @@ final class FileControlPlaneStore
       'result': idempotencyResult,
       'createdAt': DateTime.now().toUtc().toIso8601String(),
     });
-
     await appendAudit(audit['id']! as String, audit);
   }
 
@@ -848,16 +773,32 @@ final class FileControlPlaneStore
     return result;
   }
 
-  Future<T> _metadataOperation<T>(Future<T> Function() action) {
-    final result = _metadataOperationTail.then((_) => action());
-    _metadataOperationTail = result.then<void>(
+  Future<T> _notificationOperation<T>(Future<T> Function() action) {
+    final result = _notificationOperationTail.then((_) => action());
+    _notificationOperationTail = result.then<void>(
       (_) {},
       onError: (Object _, StackTrace __) {},
     );
     return result;
   }
 
-  Future<void> _metadataOperationTail = Future<void>.value();
+  bool _notificationClaimIsEligible(
+    Map<String, Object?> delivery,
+    DateTime now,
+  ) {
+    final state = delivery['state'];
+    if (state == 'pending' || state == 'soft_failed') {
+      final nextAttemptAt = delivery['nextAttemptAt'];
+      final next = nextAttemptAt is String
+          ? DateTime.tryParse(nextAttemptAt)
+          : null;
+      return next == null || !next.isAfter(now.toUtc());
+    }
+    if (state != 'processing') return false;
+    final lease = delivery['processingLeaseUntil'];
+    final leaseUntil = lease is String ? DateTime.tryParse(lease) : null;
+    return leaseUntil == null || !leaseUntil.isAfter(now.toUtc());
+  }
 
   File _jsonFile(String collection, String id) =>
       File(p.join(root.path, _safeCollection(collection), '${_safe(id)}.json'));
@@ -899,4 +840,36 @@ final class FileControlPlaneStore
     }
     return true;
   }
+}
+
+final class _FileBillingRefundTransaction implements BillingRefundTransaction {
+  const _FileBillingRefundTransaction(this.store);
+
+  final FileControlPlaneStore store;
+
+  @override
+  Future<Map<String, Object?>?> readJson(String collection, String id) =>
+      store.readJson(collection, id);
+
+  @override
+  Future<List<Map<String, Object?>>> listJson(String collection) =>
+      store.listJson(collection);
+
+  @override
+  Future<void> createJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) => store.createJson(collection, id, value);
+
+  @override
+  Future<void> replaceJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) => store.replaceJson(collection, id, value);
+
+  @override
+  Future<void> appendAudit(String id, Map<String, Object?> value) =>
+      store.appendAudit(id, value);
 }

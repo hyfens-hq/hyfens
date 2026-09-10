@@ -62,6 +62,14 @@ void main() {
         await request.response.close();
         return;
       }
+      if (request.method == 'DELETE') {
+        final existed = objects.remove(key) != null;
+        request.response.statusCode = existed
+            ? HttpStatus.noContent
+            : HttpStatus.notFound;
+        await request.response.close();
+        return;
+      }
       request.response.statusCode = HttpStatus.methodNotAllowed;
       await request.response.close();
     });
@@ -88,6 +96,8 @@ void main() {
     await store.putArtifact(digest, bytes);
     await store.putArtifact(digest, bytes);
     expect(await store.readArtifact(digest), bytes);
+    expect(await store.deleteArtifact(digest), isTrue);
+    expect(await store.deleteArtifact(digest), isFalse);
   });
 
   test('rejects corrupted object bytes', () async {

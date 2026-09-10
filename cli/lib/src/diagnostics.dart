@@ -38,18 +38,14 @@ abstract final class ToolDiagnosticCodes {
   static const cleanupRequiresBaseRollback = 'C7005';
   static const cleanupFailed = 'C7006';
 
+  static const detachConfirmationRequired = 'D8101';
+  static const detachTargetInvalid = 'D8102';
+  static const detachFailed = 'D8103';
+  static const detachUnexpectedContent = 'D8104';
+
   static const statusNotInitialized = 'T1801';
   static const statusStoreIncomplete = 'T1802';
   static const statusInventoryTruncated = 'T1803';
-
-  static const resourceAssetChanged = 'A3010';
-  static const resourceFontChanged = 'F3010';
-  static const resourceNativeChanged = 'N3010';
-  static const resourceSnapshotMissing = 'R5010';
-  static const resourceArtifactEvidenceUnavailable = 'F3011';
-  static const engineRevisionUnavailable = 'T1103';
-  static const patchCompilerUnsupported = 'P2012';
-  static const patchCompilerPreflightFailed = 'P2013';
 }
 
 final class ToolDiagnostic {

@@ -23,7 +23,7 @@ void main() {
       final repairRoot = Directory('${root.path}/reconciliation');
       addTearDown(() => root.delete(recursive: true));
       final p3e = FileP3ePersistenceStore(p3eRoot);
-      final schedules = FileP3e5ScheduleStore(scheduleRoot, clock: () => now);
+      final schedules = FileP3e5ScheduleStore(scheduleRoot);
       final repairs = FileReconciliationStore(repairRoot);
       await p3e.initialize();
       await schedules.initialize();
@@ -147,10 +147,7 @@ void main() {
       await schedules.close();
       await p3e.close();
       final reopenedP3e = FileP3ePersistenceStore(p3eRoot);
-      final reopenedSchedules = FileP3e5ScheduleStore(
-        scheduleRoot,
-        clock: () => now,
-      );
+      final reopenedSchedules = FileP3e5ScheduleStore(scheduleRoot);
       await reopenedP3e.initialize();
       await reopenedSchedules.initialize();
       final persisted = await reopenedSchedules.readWork('org', key.workId);
@@ -185,7 +182,7 @@ void main() {
     final controlRoot = Directory('${root.path}/control');
     addTearDown(() => root.delete(recursive: true));
     final p3e = FileP3ePersistenceStore(p3eRoot);
-    final schedules = FileP3e5ScheduleStore(scheduleRoot, clock: () => now);
+    final schedules = FileP3e5ScheduleStore(scheduleRoot);
     final repairs = FileReconciliationStore(repairRoot);
     final failedRepairs = FileReconciliationStore(failedRepairRoot);
     final control = FileControlPlaneStore(controlRoot);
@@ -322,7 +319,6 @@ void main() {
       final p3e = FileP3ePersistenceStore(Directory('${root.path}/p3e'));
       final schedules = FileP3e5ScheduleStore(
         Directory('${root.path}/schedule'),
-        clock: () => now,
       );
       final repairs = FileReconciliationStore(
         Directory('${root.path}/reconciliation'),
@@ -399,7 +395,6 @@ void main() {
     final p3e = FileP3ePersistenceStore(p3eRoot);
     final schedules = FileP3e5ScheduleStore(
       scheduleRoot,
-      clock: () => now,
       automaticHaltCompletionFailure: (point) {
         if (point == P3e5AutomaticHaltCompletionFailurePoint.afterCommit) {
           throw const StorageUnavailable('completion response lost');
@@ -601,7 +596,7 @@ void main() {
       final repairRoot = Directory('${root.path}/reconciliation');
       addTearDown(() => root.delete(recursive: true));
       final p3e = FileP3ePersistenceStore(p3eRoot);
-      final schedules = FileP3e5ScheduleStore(scheduleRoot, clock: () => now);
+      final schedules = FileP3e5ScheduleStore(scheduleRoot);
       final repairs = FileReconciliationStore(repairRoot);
       await p3e.initialize();
       await schedules.initialize();

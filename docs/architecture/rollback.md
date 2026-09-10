@@ -1,6 +1,6 @@
 # Phase 1B rollback and cleanup boundary
 
-Status: Phase 1B implementation boundary; local and experimental.
+Status: Phase 1B implementation boundary; local and managed Cloud.
 
 Rollback is a lifecycle control operation. It does not change Patch Format v1,
 carry code, add capabilities, or lower the runtime's patch high-water.
@@ -41,8 +41,9 @@ checksummed host journal, and writes the control message atomically. The
 private key is used only by the CLI; the application release contains the
 trusted public key.
 
-The control message is served by the development-only `/v1/control` endpoint.
-The runtime accepts it only when all of the following match:
+For the local/self-hosted path, the control message is served by the
+development-only `/v1/control` endpoint. The runtime accepts it only when all
+of the following match:
 
 - command version and canonical encoding;
 - trusted Ed25519 key ID and signature;
@@ -64,6 +65,50 @@ after rollback.
 This is an explicitly authorized developer operation, not an attacker-provided
 downgrade path. A malformed, wrong-release, wrong-key, stale-high-water, or
 replayed control is rejected and leaves the current state unchanged.
+
+## Managed Cloud base rollback
+
+Managed Cloud uses the same signed base-rollback control as the local path, but
+the control source is the authenticated Cloud environment rather than a local
+rollback-control file. A customer owner with the `environment:rollback`
+capability invokes:
+
+```bash
+hyfens rollback --cloud --release <release-id>
+```
+
+The CLI signs a base rollback control bound to the current release high-water
+and submits it to the customer-scoped environment endpoint:
+
+```text
+POST /v1/organizations/{organization}/applications/{application}/environments/{environment}/rollback
+```
+
+The control plane verifies organization/application/environment ownership,
+release identity, the active patch, the trusted release key, the signature, and
+the exact high-water before persisting a new desired runtime state. The prior
+deployment and patch records are not rewritten or deleted. An immutable audit
+event records the rollback request and the previous and desired states.
+
+The runtime polls the normal Cloud update-check endpoint. It distinguishes
+`ROLLBACK_TO_BASE` from `NO_UPDATE` and `PATCH_AVAILABLE`, then validates the
+rollback control against the application, release, platform, trusted key, and
+high-water before applying it through the existing E1 controller. E1 clears the
+active patch selection, commits `BASE`, and retains the high-water. Repeated
+polls are safe and do not reapply the rolled-back patch; a later higher-sequence
+patch can supersede the base desired state.
+
+Cloud request acceptance is not a runtime acknowledgement. The environment
+records the desired rollback, while the runtime reports its local transition
+through its existing status/log path. An already-running Flutter process may
+need a normal relaunch before already-rendered widgets repaint from patched to
+base behavior. The managed Android acceptance used a force-stop/relaunch
+without reinstalling the APK.
+
+If the runtime is offline, the current patch remains active until it reconnects
+and receives the directive. Cloud rollback does not require or create the local
+rollback-control file. The existing local/self-hosted command and `/v1/control`
+behavior remain unchanged.
 
 ## Cleanup
 

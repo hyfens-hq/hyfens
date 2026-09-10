@@ -3,22 +3,15 @@ import 'dart:io';
 
 import 'diagnostics.dart';
 
-/// The canonical public API base for Hyfens Cloud.
-const managedCloudApiBase = 'https://api.hyfens.com/';
-
-/// Legacy edge path retained for existing installations and saved profiles.
-///
-/// This is a deployment alias, not an API version. New profiles and requests
-/// use [managedCloudApiBase].
-const legacyManagedCloudApiBase = 'https://api.hyfens.com/p2/';
+const managedCloudApiBase = 'https://api.hyfens.com/p2/';
 const defaultHyfensProfileName = 'hyfens-cloud';
 const managedCloudProfileName = defaultHyfensProfileName;
+const managedCloudDisplayName = 'Hyfens Cloud (managed)';
 
 /// Normalize a control-plane API base without dropping its API path.
 ///
-/// The API path is normally part of the credential boundary. The one
-/// intentional exception is the managed Cloud `/p2/` deployment alias, which
-/// is equivalent to the canonical root base during migration.
+/// The API path is part of the credential boundary: `/p2/` and `/v1/` are
+/// different control-plane identities even when they share an origin.
 Uri normalizeControlPlaneEndpoint(Uri endpoint) {
   final scheme = endpoint.scheme.toLowerCase();
   final host = endpoint.host.toLowerCase();
@@ -60,44 +53,58 @@ String controlPlaneEndpointKey(Uri endpoint) {
   return '$scheme://$authority$path';
 }
 
-/// Whether [endpoint] is one of the two known managed Cloud API aliases.
-///
-/// The hostname check is deliberate: a self-hosted `/p2/` endpoint must not
-/// inherit managed Cloud behavior or credentials.
-bool isManagedCloudEndpoint(Uri endpoint) {
-  final normalized = normalizeControlPlaneEndpoint(endpoint);
-  if (normalized.scheme != 'https' ||
-      normalized.host.toLowerCase() != 'api.hyfens.com') {
-    return false;
-  }
-  final key = controlPlaneEndpointKey(normalized);
-  return key == controlPlaneEndpointKey(Uri.parse(managedCloudApiBase)) ||
-      key == controlPlaneEndpointKey(Uri.parse(legacyManagedCloudApiBase));
-}
-
-/// Returns the canonical managed Cloud endpoint while preserving all other
-/// control-plane endpoints exactly as configured.
-Uri canonicalizeManagedCloudEndpoint(Uri endpoint) {
-  final normalized = normalizeControlPlaneEndpoint(endpoint);
-  return isManagedCloudEndpoint(normalized)
-      ? Uri.parse(managedCloudApiBase)
-      : normalized;
-}
-
-/// Compares endpoint identities while allowing only the managed Cloud aliases
-/// to share credentials and profile scope during the path migration.
-bool controlPlaneEndpointsMatch(Uri left, Uri right) {
-  final leftKey = controlPlaneEndpointKey(left);
-  final rightKey = controlPlaneEndpointKey(right);
-  return leftKey == rightKey ||
-      isManagedCloudEndpoint(left) && isManagedCloudEndpoint(right);
-}
-
 bool isExplicitLoopbackEndpoint(Uri endpoint) {
   final host = endpoint.host.toLowerCase();
   if (host == 'localhost') return true;
   final address = InternetAddress.tryParse(host);
   return address?.isLoopback ?? false;
+}
+
+/// Returns whether [endpoint] is the internal managed Cloud control-plane
+/// endpoint. This comparison is kept separate from display formatting so the
+/// exact URL remains available to request and credential-storage code without
+/// being emitted in normal CLI or MCP output.
+bool isManagedCloudEndpoint(Uri endpoint) =>
+    controlPlaneEndpointKey(endpoint) ==
+    controlPlaneEndpointKey(Uri.parse(managedCloudApiBase));
+
+/// Returns a safe user-facing endpoint label.
+///
+/// Self-hosted endpoints remain visible because users need to identify the
+/// server they selected. The managed Cloud route is represented by its
+/// product name instead of exposing an implementation URL.
+String displayControlPlaneEndpoint(Uri endpoint) =>
+    isManagedCloudEndpoint(endpoint)
+    ? managedCloudDisplayName
+    : endpoint.toString();
+
+/// Returns a safe user-facing label for a control-plane request URI.
+///
+/// Request URIs include resource paths below the configured API base, so the
+/// exact-profile comparison in [isManagedCloudEndpoint] is not sufficient for
+/// failure diagnostics. Managed request paths remain an implementation detail;
+/// self-hosted request URIs remain visible for operator troubleshooting.
+String displayControlPlaneUri(Uri uri) {
+  final managed = Uri.parse(managedCloudApiBase);
+  final managedPath = managed.path.endsWith('/')
+      ? managed.path
+      : '${managed.path}/';
+  final path = uri.path.isEmpty ? '/' : uri.path;
+  final sameAuthority =
+      uri.scheme.toLowerCase() == managed.scheme &&
+      uri.host.toLowerCase() == managed.host.toLowerCase() &&
+      _effectivePort(uri) == _effectivePort(managed);
+  if (sameAuthority &&
+      (path == managedPath.substring(0, managedPath.length - 1) ||
+          path.startsWith(managedPath))) {
+    return managedCloudDisplayName;
+  }
+  return uri.toString();
+}
+
+int _effectivePort(Uri uri) {
+  if (uri.hasPort) return uri.port;
+  return uri.scheme.toLowerCase() == 'https' ? 443 : 80;
 }
 
 /// Enforce the credential-bearing transport policy at every CLI boundary.
@@ -178,17 +185,14 @@ typedef AuthProfile = ProfileScope;
 /// Tokens deliberately do not belong to this model or its JSON projection.
 final class Profile {
   Profile({
-    required Uri endpoint,
+    required this.endpoint,
     this.userId,
     this.email,
     this.displayName,
     List<ProfileScope> profiles = const <ProfileScope>[],
     String? organizationId,
     String? organizationName,
-  }) : endpoint = isManagedCloudEndpoint(endpoint)
-           ? Uri.parse(managedCloudApiBase)
-           : endpoint,
-       _organizationId = organizationId,
+  }) : _organizationId = organizationId,
        _organizationName = organizationName,
        profiles = List.unmodifiable(profiles);
 
@@ -209,7 +213,8 @@ final class Profile {
   String? get organizationName => _organizationName;
   List<ProfileScope> get memberships => profiles;
   String? get profileName => profiles.isEmpty ? null : profiles.first.name;
-  bool? get managed => isManagedCloudEndpoint(endpoint);
+  bool? get managed =>
+      endpoint.scheme == 'https' && isManagedCloudEndpoint(endpoint);
   String? get applicationId =>
       profiles.isEmpty ? null : profiles.first.applicationId;
   String? get environmentId =>
@@ -288,6 +293,19 @@ final class Profile {
     if (_organizationName != null) 'organization_name': _organizationName,
   };
 
+  /// Public, non-secret projection for CLI, MCP, and diagnostic output.
+  ///
+  /// Unlike [toJson], this never emits the internal managed Cloud URL.
+  Map<String, Object?> toPublicJson() => <String, Object?>{
+    'endpoint': displayControlPlaneEndpoint(endpoint),
+    if (userId != null) 'user_id': userId,
+    if (email != null) 'email': email,
+    if (displayName != null) 'display_name': displayName,
+    'profiles': profiles.map((item) => item.toJson()).toList(growable: false),
+    if (_organizationId != null) 'organization_id': _organizationId,
+    if (_organizationName != null) 'organization_name': _organizationName,
+  };
+
   String encode() => jsonEncode(toJson());
 }
 
@@ -300,7 +318,7 @@ final class ControlPlaneProfile {
     this.organizationId,
     this.applicationId,
     this.environmentId,
-  }) : endpoint = canonicalizeManagedCloudEndpoint(endpoint) {
+  }) : endpoint = normalizeControlPlaneEndpoint(endpoint) {
     _validateProfileName(name);
     if (this.endpoint.scheme == 'http' &&
         !isExplicitLoopbackEndpoint(this.endpoint)) {
@@ -332,9 +350,27 @@ final class ControlPlaneProfile {
     if (environmentId != null) 'environment': environmentId,
   };
 
+  /// Public, non-secret projection for CLI, MCP, and diagnostic output.
+  ///
+  /// Persistence must continue using [toMetadataJson], which retains the
+  /// exact endpoint required for host-bound credential lookup.
+  Map<String, Object?> toPublicMetadataJson() => <String, Object?>{
+    'endpoint': displayControlPlaneEndpoint(endpoint),
+    'managed': managed,
+    if (organizationId != null) 'organization': organizationId,
+    if (applicationId != null) 'application': applicationId,
+    if (environmentId != null) 'environment': environmentId,
+  };
+
   Map<String, Object?> toJson() => <String, Object?>{
     'name': name,
     ...toMetadataJson(),
+  };
+
+  /// Public, non-secret profile projection for CLI and MCP output.
+  Map<String, Object?> toPublicJson() => <String, Object?>{
+    'name': name,
+    ...toPublicMetadataJson(),
   };
 
   ProfileScope? toScope({String role = 'unknown'}) {

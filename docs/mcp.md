@@ -6,17 +6,17 @@ bounded, structured interface to the Hyfens developer workflow while keeping
 authentication, profile selection, host isolation, and Hyfens' normal
 preconditions in force.
 
-The v0.1.10 integration is a local stdio process. It is not a hosted MCP
+The v0.1.1 integration is a local stdio process. It is not a hosted MCP
 endpoint, a generic filesystem server, or a replacement for the Hyfens control
 plane. The client starts the CLI and communicates with it over stdin/stdout;
 diagnostic output belongs on stderr.
 
-## Current v0.1.10 boundary
+## Current v0.1.1 boundary
 
-The v0.1.10 MCP surface is intentionally small:
+The v0.1.1 MCP surface is intentionally small:
 
 - local stdio launched by `hyfens mcp`;
-- server identity `hyfens`, version `0.1.10`;
+- server identity `hyfens`, version `0.1.1`;
 - the bounded tool catalog in [Tool catalog](#tool-catalog);
 - reuse of an existing Hyfens profile and local session;
 - structured JSON results and errors, with no terminal formatting in protocol
@@ -35,7 +35,7 @@ particular build exposes a tool.
 
 Before adding Hyfens to an MCP client:
 
-1. Install a v0.1.10 Hyfens CLI and make `hyfens` available on `PATH`. A source
+1. Install a v0.1.1 Hyfens CLI and make `hyfens` available on `PATH`. A source
    checkout can use the wrapper described in the [CLI reference](cli.md).
 2. Use an MCP-compatible client that can launch a local stdio subprocess.
 3. Authenticate the profile in a terminal with `hyfens login`.
@@ -85,7 +85,7 @@ not be copied into an MCP client configuration.
 
 ## Start Hyfens MCP over stdio
 
-The command below starts the v0.1.10 MCP stdio server and waits for protocol
+The command below starts the v0.1.1 MCP stdio server and waits for protocol
 messages:
 
 ```bash
@@ -101,7 +101,9 @@ hyfens mcp --profile acme
 The process is intended to be launched by the client for the duration of the
 session. Do not pipe shell output, prompts, or other text into its stdout:
 stdout is reserved for MCP messages and diagnostics go to stderr. A manual
-launch may appear idle until a client sends an MCP request; that is expected.
+launch prints a short running message on stderr, then may appear idle until a
+client sends an MCP request; that is expected. The running message never goes
+to stdout because stdout is reserved for MCP protocol traffic.
 
 ### Generic client process mapping
 
@@ -128,43 +130,44 @@ VS Code, or another product's proprietary syntax.
 
 ## Tool catalog
 
-The v0.1.10 core catalog has these exact public names. Tool descriptions mark
+The v0.1.1 core catalog has these exact public names. Tool descriptions mark
 each operation as read-only or mutation, and the server returns structured
-results rather than terminal output.
+results rather than terminal output. MCP tool names are scoped by the process
+configuration; the binary currently exposes the names below without an
+additional `hyfens_` prefix.
 
-- `hyfens_status` — Read-only. Reports bounded local toolchain and artifact
-  state; it does not query profile, application-runtime, or control-plane
-  state.
-- `hyfens_doctor` — Read-only. Checks supported Flutter/Dart and project
+- `status` — Read-only. Reports the local toolchain, selected project, and
+  bounded artifact inventory.
+- `doctor` — Read-only. Checks supported Flutter/Dart and project
   prerequisites.
-- `hyfens_analyze` — Read-only. Reports the shared typed compatibility result
-  for a selected release without returning application source or patch bytes.
-- `hyfens_profile_list` — Read-only. Lists profile metadata without credential
+- `profile_list` — Read-only. Lists profile metadata without credential
   material.
-- `hyfens_profile_current` — Read-only. Reports the active profile and
-  non-secret endpoint/scope metadata.
-- `hyfens_profile_get` — Read-only. Reads selected/active profile metadata
-  without credential material.
-- `hyfens_project_init` — Mutation. Initializes or updates the bounded local
-  Hyfens project binding.
-- `hyfens_release_create` — Mutation. Creates a supported release
-  baseline/artifact locally.
-- `hyfens_release_inspect` — Read-only. Inspects one local release baseline.
-- `hyfens_patch_create` — Mutation. Analyzes/builds a supported patch artifact
+- `profile_current` — Read-only. Reports the selected profile and non-secret
+  endpoint/scope metadata.
+- `profile_get` — Read-only. Reads one named profile's metadata without
+  credential material.
+- `project_init` — Mutation. Initializes or updates the bounded local Hyfens
+  project binding.
+- `release_create` — Mutation. Creates a supported release baseline/artifact
   locally.
-- `hyfens_patch_verify` — Read-only. Verifies supported patch metadata,
-  signature, and exact release binding.
-- `hyfens_patch_inspect` — Read-only. Inspects one local patch artifact.
-- `hyfens_deploy` — Mutation. Uploads/registers/promotes a selected artifact
-  through the authenticated control plane.
-- `hyfens_rollback` — Mutation. Records a bounded rollback to the trusted
-  local base artifact while preserving sequence evidence.
-- `hyfens_control_plane_discovery` — Read-only. Discovers advertised
-  capabilities for the selected host-bound profile without sending credentials.
+- `release_inspect` — Read-only. Reads bounded release metadata.
+- `patch_create` — Mutation. Analyzes and signs a supported patch artifact
+  locally.
+- `patch_verify` — Read-only. Verifies patch metadata, signature, and exact
+  release binding.
+- `patch_inspect` — Read-only. Reads bounded patch metadata without returning
+  bytecode or signature bytes.
+- `deploy` — Mutation-shaped capability probe. The current public toolchain
+  reports an honest unsupported result because its authenticated delivery
+  sequence is not yet a shared public service.
+- `rollback` — Mutation. Records a bounded local rollback to the trusted base
+  while preserving the patch sequence high-water mark.
+- `control_plane_discovery` — Read-only. Reads non-secret compatibility
+  capabilities for the selected profile.
 
-The available arguments, project-path rules, and result fields are those
-returned by `tools/list` for the running binary. Internal CLI commands and
-APIs are not automatically MCP tools.
+The available arguments, supported artifact kinds, project-path rules, and
+result fields are those returned by `tools/list` for the running binary.
+Internal CLI commands and APIs are not automatically MCP tools.
 
 ### Read-only and mutation behavior
 
@@ -173,10 +176,9 @@ metadata, or authorized control-plane state needed for their checks, but they
 do not intentionally write project files, publish artifacts, change rollout
 state, or alter profiles.
 
-Mutation tools are explicit operations. `hyfens_project_init`, release
-creation, and patch creation affect local project or artifact state;
-`hyfens_deploy` can affect remote control-plane state; `hyfens_rollback`
-changes local trusted-store state only.
+Mutation tools are explicit operations. `project_init`, `release_create`, and
+`patch_create` affect local project or artifact state; `deploy` and `rollback`
+can affect remote control-plane state.
 Creation and deployment are separate calls, so an agent can inspect or verify
 before asking for a deployment. The MCP server does not send an interactive
 confirmation prompt over protocol stdin; use the MCP client's approval policy
@@ -243,7 +245,7 @@ self-hosted profile or the reverse; log in to each endpoint explicitly.
 
 ### `hyfens` is not found
 
-Install the v0.1.10 CLI or put the CLI wrapper from the [CLI reference](cli.md)
+Install the v0.1.1 CLI or put the CLI wrapper from the [CLI reference](cli.md)
 on `PATH`. Confirm the executable outside the client with:
 
 ```bash
@@ -254,7 +256,7 @@ hyfens mcp --help
 ### `mcp` is an unknown command
 
 The client is launching an older or different `hyfens` binary. Check the
-resolved path and version, then install or build the v0.1.10 CLI that includes
+resolved path and version, then install or build the v0.1.1 CLI that includes
 the MCP surface. Do not substitute a different binary in the client mapping
 without checking its version and profile configuration.
 
@@ -277,7 +279,7 @@ not fixed by copying a token into the client.
 Inspect the process' stderr and verify that the client launches exactly
 `hyfens` with `mcp` in its argument list. Remove shell wrappers that print
 startup banners, prompts, or debug text to stdout. Check that the client is
-using a v0.1.10 binary and that no other process is consuming the same stdio
+using a v0.1.1 binary and that no other process is consuming the same stdio
 stream.
 
 ### A project tool rejects the path or project
@@ -298,7 +300,7 @@ do not blindly repeat them when the network result is unknown.
 
 Additional transports, client-specific setup pages, prompts/resources,
 broader bounded control-plane reads, and additional tool names may be added
-later. They are not part of the v0.1.10 contract described here. A future
+later. They are not part of the v0.1.1 contract described here. A future
 catalog change should be reflected in the implementation's `tools/list`
 response and in this document together; internal CLI commands alone do not
 make a public MCP capability.

@@ -59,7 +59,6 @@ Run `scripts/e1_android_physical.sh DEVICE_SERIAL` from the repository root for
 the reproducible release/device proof. It installs once and refuses ambiguous or
 emulated device targets.
 
-The public support boundary is summarized in the
-[Dart and Flutter support matrix](../../docs/dart-support-matrix.md). Raw
-device logs/XML are intentionally ephemeral under
-`.dart_tool/device-evidence/`.
+The recorded 2026-08-22 run is summarized in the local `RESULTS.md` artifact,
+which is intentionally not part of the public source tree. Raw device logs/XML
+are ephemeral under `.dart_tool/device-evidence/`.

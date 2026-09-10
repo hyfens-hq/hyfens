@@ -14,8 +14,6 @@ outside the public documentation tree.
   Flutter project, and run the release/patch workflow.
 - [CLI distribution](cli-distribution.md) — release binaries, installers, and
   package-manager status.
-- [Release process](releases/releasing.md) — changelog, release candidates,
-  immutable tags, and post-release verification.
 - [Self-hosted deployment](../deploy/self-hosted/README.md) — the single-node
   PostgreSQL, MinIO, control-plane, and dashboard package.
 - [Dart/Flutter support matrix](dart-support-matrix.md) — supported toolchain
@@ -25,33 +23,24 @@ outside the public documentation tree.
 
 - [CLI reference](cli.md) — command surface, profiles, authentication, and
   project workflow.
-- [Flutter project discovery](cli/project-discovery.md) — automatic app,
-  flavor, entrypoint, Melos, Pub Workspace, and CI selection.
 - [MCP](mcp.md) — the built-in stdio server for compatible AI coding agents.
 - [Diagnostics](diagnostics.md) — stable diagnostic codes and remediation.
-- [Trusted runtime receipts](runtime/trusted-install-receipts.md) — admission-
-  bound installation evidence, idempotent settlement, and trust boundaries.
 
 ## Product surfaces
 
 - [Customer Workspace](product/customer-workspace.md) — the tenant-scoped
   developer workspace at `app.hyfens.com` or a self-hosted origin.
-- [Managed Cloud onboarding](product/cloud-onboarding.md) — the separate
-  signup, organization, Developer project, and CLI handoff journey.
-- [Platform Console](product/platform-console.md) — the private Cloud-owned
-  privileged Hyfens operator contract at `platform.hyfens.com`.
+- [Platform Console](product/platform-console.md) — the privileged Hyfens
+  operator surface at `platform.hyfens.com`.
 - [Cloud and self-hosted boundary](HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md) — what
   is provided by the managed service versus the Apache-licensed foundation.
+- [Cloud plan and entitlements](architecture/cloud-plan-entitlements.md) — the
+  server-side Free assignment and Cloud versus Self-hosted boundary.
 
 ## Architecture
 
-- [Architecture overview](architecture/dashboard-separation.md) — OSS/Cloud
-  web ownership, shared contracts, routes, APIs, and authorization.
-- [Web product boundary audit](architecture/web-product-boundary-audit.md) —
-  the approved repository and build ownership decision.
-- [Historical OSS exposure audit](architecture/historical-oss-exposure-audit.md)
-  — historical Cloud frontend exposure, release-surface findings, and the
-  non-destructive history decision.
+- [Architecture overview](architecture/dashboard-separation.md) — the two
+  dashboard shells, shared infrastructure, routes, APIs, and authorization.
 - [Control plane](architecture/control-plane.md)
 - [Runtime](architecture/runtime.md)
 - [Patch lifecycle](architecture/patch-lifecycle.md)

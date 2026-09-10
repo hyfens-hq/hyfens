@@ -350,11 +350,10 @@ final class AuthClient {
 
   Future<AuthSession> refresh({
     Uri? endpoint,
-    String? profileName,
     String? caCertPath,
     SecurityContext? securityContext,
   }) async {
-    final storedProfile = await storage.readProfile(name: profileName);
+    final storedProfile = await storage.readProfile();
     final target = endpoint ?? storedProfile?.endpoint;
     if (target == null) {
       throw ToolFailure.single(
@@ -412,22 +411,9 @@ final class AuthClient {
     final refreshedProfile = _hasIdentity(payload)
         ? _profile(payload, storedProfile?.endpoint ?? normalizedTarget)
         : storedProfile;
-    final profile = refreshedProfile ?? Profile(endpoint: normalizedTarget);
-    if (profileName == null) {
-      await storage.writeProfile(profile);
-    } else {
-      await storage.writeNamedProfile(
-        CliProfile(
-          name: profileName,
-          endpoint: profile.endpoint,
-          managed: profile.managed ?? false,
-          organizationId: profile.organizationId,
-          applicationId: profile.applicationId,
-          environmentId: profile.environmentId,
-        ),
-        makeActive: false,
-      );
-    }
+    await storage.writeProfile(
+      refreshedProfile ?? Profile(endpoint: normalizedTarget),
+    );
     await storage.writeSession(refreshed, endpoint: normalizedTarget);
     return refreshed;
   }
@@ -470,11 +456,8 @@ final class AuthClient {
   /// An expired access token is refreshed through the stored session token;
   /// the helper is asynchronous so Deploy does not need to know the storage
   /// or refresh protocol.
-  Future<String?> accessTokenOrNull({
-    Uri? endpoint,
-    String? profileName,
-  }) async {
-    final profile = await storage.readProfile(name: profileName);
+  Future<String?> accessTokenOrNull({Uri? endpoint}) async {
+    final profile = await storage.readProfile();
     final target = endpoint ?? profile?.endpoint;
     if (target == null) return null;
     if (endpoint != null && profile != null) {
@@ -488,10 +471,7 @@ final class AuthClient {
     if (session == null || session.isSessionExpired) return null;
     if (!session.isExpired) return session.accessToken;
     if (session.sessionToken == null) return null;
-    final refreshed = await refresh(
-      endpoint: normalizedTarget,
-      profileName: profileName,
-    );
+    final refreshed = await refresh(endpoint: normalizedTarget);
     return refreshed.accessToken;
   }
 
@@ -573,7 +553,9 @@ final class AuthClient {
     final metadata = CliProfile(
       name: name,
       endpoint: endpoint,
-      managed: isManagedCloudEndpoint(endpoint),
+      managed:
+          controlPlaneEndpointKey(endpoint) ==
+          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase)),
       organizationId: profile.organizationId,
       applicationId: profile.applicationId,
       environmentId: profile.environmentId,
@@ -671,7 +653,7 @@ final class AuthClient {
   }
 
   void _requireMatchingEndpoint(Uri target, Uri stored) {
-    if (controlPlaneEndpointsMatch(target, stored)) {
+    if (controlPlaneEndpointKey(target) == controlPlaneEndpointKey(stored)) {
       return;
     }
     throw ToolFailure.single(
@@ -870,7 +852,8 @@ void _validateToken(String token, String field) {
 }
 
 String _defaultProfileName(Uri endpoint) {
-  return isManagedCloudEndpoint(endpoint)
+  return controlPlaneEndpointKey(endpoint) ==
+          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase))
       ? managedCloudProfileName
       : 'self-hosted';
 }
@@ -1133,7 +1116,7 @@ Future<void> _launchBrowser(Uri uri) async {
     exitCode: ToolExitCode.environment,
     code: 'A1033',
     summary: 'Unable to open the browser for Hyfens login',
-    detail: uri.toString(),
+    detail: displayControlPlaneUri(uri),
     action: 'Open the authorization URL in a browser and retry with a supported desktop environment.',
   );
 }

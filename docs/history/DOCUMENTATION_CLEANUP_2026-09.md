@@ -11,8 +11,8 @@ and provider-operation evidence remains outside the public documentation tree.
 Before cleanup, the working tree contained 61 Markdown files at the `docs/`
 root and 218 files in total. The root contained milestone/review/design
 records alongside developer guides. In the working tree those records were
-reorganized under `history/`; this public commit retains selected dashboard
-and release-boundary records and history indexes. Internal research, generated
+reorganized under `history/`; this public commit retains only the selected
+dashboard-boundary records and history indexes. Internal research, generated
 evidence, and provider-operation reviews remain outside the public tree.
 
 The current root contains the concise navigation and active guides. Current

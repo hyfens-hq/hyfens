@@ -7,19 +7,18 @@ import 'package:dart_mcp/stdio.dart';
 import 'package:hyfens_patch_format/patch_format.dart';
 import 'package:path/path.dart' as p;
 
-import '../auth_client.dart';
 import '../auth_storage.dart';
 import '../canonical.dart';
-import '../control_plane_delivery.dart';
 import '../diagnostics.dart';
 import '../discovery.dart';
 import '../profile.dart';
 import '../project.dart';
-import '../project_initialization.dart';
 import '../toolchain.dart';
 
-/// MCP advertises the same version as the distributed Hyfens CLI.
-const hyfensMcpVersion = hyfensToolVersion;
+/// The MCP identity is independent from the local release-toolchain version.
+const hyfensMcpVersion = '0.1.1';
+const hyfensMcpStartupMessage =
+    'Hyfens MCP server running over stdio; waiting for an agent connection.';
 
 /// SDK decision record: dart_mcp 0.5.2 is the Dart team's experimental,
 /// BSD-3-Clause MCP SDK. It supplies the JSON-RPC, tools, and line-oriented
@@ -31,22 +30,22 @@ const hyfensMcpVersion = hyfensToolVersion;
 /// [HyfensMcpServer.serveStdio] and await [MCPBase.done]; protocol tests can
 /// provide their own byte streams.
 ///
-/// The MCP adapter uses the same local toolchain, auth storage, and delivery
-/// service as the terminal CLI. It never shells out to the CLI binary.
+/// Deploy is a capability probe, not a fake implementation. The current CLI
+/// has no public authenticated delivery service: its HTTP sequence is private
+/// to the command runner. This adapter neither shells out nor duplicates that
+/// private sequence, and returns an honest structured unsupported error.
 final class HyfensMcpServer extends MCPServer with ToolsSupport {
   HyfensMcpServer({
     required Stream<List<int>> input,
     required StreamSink<List<int>> output,
     required HyfensToolchain toolchain,
     required AuthStorage authStorage,
-    AuthClient? authClient,
     String? profileName,
     bool debug = false,
     IOSink? log,
   }) : adapter = HyfensMcpAdapter(
          toolchain: toolchain,
          authStorage: authStorage,
-         authClient: authClient,
          defaultProfileName: profileName,
        ),
        _debug = debug,
@@ -56,7 +55,7 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
          implementation: Implementation(
            name: 'hyfens',
            version: hyfensMcpVersion,
-           description: 'Hyfens Flutter live-update developer platform.',
+           description: 'Bounded MCP adapter for the Hyfens Dart toolchain.',
          ),
          instructions:
              'Use project_path for an explicit Flutter project. Responses are '
@@ -75,7 +74,6 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
   HyfensMcpServer.serveStdio({
     required HyfensToolchain toolchain,
     required AuthStorage authStorage,
-    AuthClient? authClient,
     String? profileName,
     bool debug = false,
     Stream<List<int>>? input,
@@ -86,7 +84,6 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
          output: output ?? stdout,
          toolchain: toolchain,
          authStorage: authStorage,
-         authClient: authClient,
          profileName: profileName,
          debug: debug,
          log: log ?? stderr,
@@ -128,15 +125,15 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
 
   void _addTools() {
     _add(
-      'hyfens_status',
-      'Read-only local toolchain and bounded artifact inventory. No profile, '
-          'application runtime, or control-plane state is queried.',
+      'status',
+      'Read-only local status, toolchain, and bounded artifact inventory. '
+          'No application runtime or control-plane state is queried.',
       _schema({'project_path': _pathSchema()}),
       (args) =>
           adapter.status(projectPath: _optionalPath(args, 'project_path')),
     );
     _add(
-      'hyfens_doctor',
+      'doctor',
       'Read-only inspection of the supported Flutter, Dart, and local runtime '
           'environment for a Flutter project.',
       _schema({'project_path': _pathSchema()}),
@@ -144,68 +141,46 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
           adapter.doctor(projectPath: _optionalPath(args, 'project_path')),
     );
     _add(
-      'hyfens_analyze',
-      'Read-only compatibility analysis for the selected release. It reports '
-          'typed patch decisions and never returns application source or '
-          'patch bytecode.',
-      _schema({
-        'project_path': _pathSchema(),
-        'release_id': _releaseSchema(),
-        'flavor': _flavorSchema(),
-        'entrypoint': _entrypointSchema(),
-      }),
-      (args) => adapter.analyze(
-        projectPath: _optionalPath(args, 'project_path'),
-        releaseId: _optionalRelease(args, 'release_id'),
-        flavor: _optionalString(args, 'flavor'),
-        entrypointPath: _optionalString(args, 'entrypoint'),
-      ),
-    );
-    _add(
-      'hyfens_profile_list',
+      'profile_list',
       'Read-only list of host-bound profiles and login status. Credential '
           'files are checked by endpoint and never returned.',
       _emptySchema(),
       (_) => adapter.profileList(),
     );
     _add(
-      'hyfens_profile_current',
+      'profile_current',
       'Read-only current profile selection and non-secret endpoint/scope metadata.',
       _emptySchema(),
       (_) => adapter.profileCurrent(),
     );
     _add(
-      'hyfens_profile_get',
+      'profile_get',
       'Read-only metadata for one named profile. Access, refresh, and session '
           'tokens are omitted.',
       _schema({'name': _profileSchema()}, required: const ['name']),
       (args) => adapter.profileGet(_requiredProfile(args, 'name')),
     );
     _add(
-      'hyfens_project_init',
-      'MUTATION: writes tool.yaml, the local .tool store, and the safe '
-          'hyfens.yaml profile binding unless dry_run is true. It does not '
-          'edit application source.',
+      'project_init',
+      'MUTATION: writes tool.yaml and the local .tool store unless dry_run '
+          'is true. It does not edit application source.',
       _schema({
         'project_path': _pathSchema(),
         'dry_run': Schema.bool(description: 'Preview local initialization.'),
         'force': Schema.bool(description: 'Replace existing tool.yaml.'),
-        'flavor': _flavorSchema(),
-        'entrypoint': _entrypointSchema(),
       }),
       (args) => adapter.projectInit(
         projectPath: _optionalPath(args, 'project_path'),
         dryRun: _optionalBool(args, 'dry_run') ?? false,
         force: _optionalBool(args, 'force') ?? false,
-        flavor: _optionalString(args, 'flavor'),
-        entrypointPath: _optionalString(args, 'entrypoint'),
       ),
       mutation: true,
     );
     _add(
-      'hyfens_release_create',
+      'release_create',
       'MUTATION: analyzes the project and writes a local release baseline. '
-          'The existing HyfensToolchain build service may run for a full release.',
+          'The existing HyfensToolchain build service may run for a full release. '
+          'For flavor projects, pass the native flavor and its Dart entrypoint.',
       _schema(
         {
           'target': Schema.string(description: 'android or ios.'),
@@ -213,8 +188,8 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
           'architecture': Schema.string(maxLength: 32),
           'build_mode': Schema.string(maxLength: 32),
           'metadata_only': Schema.bool(),
-          'flavor': _flavorSchema(),
-          'entrypoint': _entrypointSchema(),
+          'flavor': Schema.string(maxLength: 64),
+          'entrypoint': Schema.string(maxLength: 4096),
         },
         required: const ['target'],
       ),
@@ -230,7 +205,7 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
       mutation: true,
     );
     _add(
-      'hyfens_release_inspect',
+      'release_inspect',
       'Read-only bounded release metadata. Raw source graphs, artifacts, and '
           'signing material are not returned.',
       _schema({'project_path': _pathSchema(), 'release_id': _releaseSchema()}),
@@ -240,14 +215,16 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
       ),
     );
     _add(
-      'hyfens_patch_create',
+      'patch_create',
       'MUTATION: analyzes changed supported Dart functions, signs a patch with '
-          'the configured local key, and advances the local sequence.',
+          'the configured local key, and advances the local sequence. It reuses '
+          'the release baseline entrypoint; optional flavor/entrypoint values '
+          'must match that baseline.',
       _schema({
         'project_path': _pathSchema(),
         'release_id': _releaseSchema(),
-        'flavor': _flavorSchema(),
-        'entrypoint': _entrypointSchema(),
+        'flavor': Schema.string(maxLength: 64),
+        'entrypoint': Schema.string(maxLength: 4096),
       }),
       (args) => adapter.patchCreate(
         projectPath: _optionalPath(args, 'project_path'),
@@ -258,7 +235,7 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
       mutation: true,
     );
     _add(
-      'hyfens_patch_verify',
+      'patch_verify',
       'Read-only verification of a patch signature and optional release '
           'compatibility against the configured local trust key.',
       _schema(
@@ -276,45 +253,24 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
       ),
     );
     _add(
-      'hyfens_patch_inspect',
+      'patch_inspect',
       'Read-only bounded patch metadata without returning bytecode or signature bytes.',
       _schema({'patch_path': _patchSchema()}, required: const ['patch_path']),
       (args) =>
           adapter.patchInspect(patchPath: _requiredPath(args, 'patch_path')),
     );
     _add(
-      'hyfens_deploy',
-      'MUTATION: verifies a local patch, registers its release and patch, '
-          'uploads the artifact, and promotes it to the selected environment. '
-          'Uses the authenticated host-bound profile and existing server authorization.',
-      _schema({
-        'project_path': _pathSchema(),
-        'release_id': _releaseSchema(),
-        'patch_path': _patchSchema(),
-        'endpoint': Schema.string(maxLength: 4096),
-        'organization_id': _identifierSchema(),
-        'application_id': _identifierSchema(),
-        'environment_id': _identifierSchema(),
-        'ca_cert': _pathSchema(),
-        'expected_version': Schema.int(minimum: 0),
-        'display_version': Schema.string(maxLength: 128),
-      }),
-      (args) => adapter.deploy(
-        projectPath: _optionalPath(args, 'project_path'),
-        releaseId: _optionalRelease(args, 'release_id'),
-        patchPath: _optionalPath(args, 'patch_path'),
-        endpoint: _optionalEndpoint(args, 'endpoint'),
-        organizationId: _optionalString(args, 'organization_id'),
-        applicationId: _optionalString(args, 'application_id'),
-        environmentId: _optionalString(args, 'environment_id'),
-        caCertPath: _optionalPath(args, 'ca_cert'),
-        expectedVersion: _optionalInt(args, 'expected_version') ?? 0,
-        displayVersion: _optionalString(args, 'display_version') ?? 'local',
-      ),
+      'deploy',
+      'UNSUPPORTED CAPABILITY: the current toolchain has no public '
+          'authenticated delivery service. This probe performs no network or '
+          'filesystem mutation; MCP does not shell out or duplicate private '
+          'CLI deploy HTTP wiring.',
+      _emptySchema(),
+      (_) => adapter.deploy(),
       mutation: true,
     );
     _add(
-      'hyfens_rollback',
+      'rollback',
       'MUTATION: records a signed rollback to the trusted store-installed AOT '
           'base and preserves the patch sequence high-water mark. It does not '
           'rewrite app-local runtime state.',
@@ -331,7 +287,7 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
       mutation: true,
     );
     _add(
-      'hyfens_control_plane_discovery',
+      'control_plane_discovery',
       'Read-only unauthenticated compatibility discovery for a host-bound '
           'profile. It returns service capabilities, never credentials.',
       _schema({'profile': _profileSchema()}),
@@ -454,7 +410,6 @@ final class HyfensMcpServer extends MCPServer with ToolsSupport {
 Future<void> runHyfensMcp({
   required HyfensToolchain toolchain,
   required AuthStorage authStorage,
-  AuthClient? authClient,
   String? profileName,
   bool debug = false,
   Stream<List<int>>? input,
@@ -464,7 +419,6 @@ Future<void> runHyfensMcp({
   final server = HyfensMcpServer.serveStdio(
     toolchain: toolchain,
     authStorage: authStorage,
-    authClient: authClient,
     profileName: profileName,
     debug: debug,
     input: input,
@@ -479,32 +433,15 @@ final class HyfensMcpAdapter {
   HyfensMcpAdapter({
     required this.toolchain,
     required this.authStorage,
-    AuthClient? authClient,
-    ControlPlaneDeliveryService? delivery,
     String? defaultProfileName,
     DiscoveryClient? discoveryClient,
-  }) : authClient = authClient ?? AuthClient(storage: authStorage),
-       delivery =
-           delivery ??
-           ControlPlaneDeliveryService(
-             toolchain: toolchain,
-             authClient: authClient ?? AuthClient(storage: authStorage),
-           ),
-       initialization = ProjectInitializationService(
-         toolchain: toolchain,
-         authStorage: authStorage,
-         profileName: defaultProfileName,
-       ),
-       defaultProfileName = defaultProfileName,
+  }) : defaultProfileName = defaultProfileName,
        _discoveryClient = discoveryClient ?? DiscoveryClient() {
     if (defaultProfileName != null) _validateProfile(defaultProfileName);
   }
 
   final HyfensToolchain toolchain;
   final AuthStorage authStorage;
-  final AuthClient authClient;
-  final ControlPlaneDeliveryService delivery;
-  final ProjectInitializationService initialization;
   final String? defaultProfileName;
   final DiscoveryClient _discoveryClient;
 
@@ -512,36 +449,13 @@ final class HyfensMcpAdapter {
       (await toolchain.status(projectPath: projectPath)).toJson();
 
   Future<Map<String, Object?>> doctor({String? projectPath}) async {
-    final report = toolchain.projectReport(projectPath: projectPath);
-    if (!report.isResolved) {
-      return <String, Object?>{
-        'result': 'NEEDS_SELECTION',
-        'discovery': report.toJson(),
-      };
-    }
     final project = toolchain.project(projectPath: projectPath);
     final environment = await toolchain.doctor(projectPath: project.root.path);
     return <String, Object?>{
-      'result': 'READY',
       'project': _projectJson(project),
-      'targetSelections': _targetSelections(toolchain, project),
       'environment': environment.toJson(),
     };
   }
-
-  Future<Map<String, Object?>> analyze({
-    String? projectPath,
-    String? releaseId,
-    String? flavor,
-    String? entrypointPath,
-  }) async => toolchain
-      .analyze(
-        projectPath: projectPath,
-        releaseId: releaseId,
-        flavor: flavor,
-        entrypointPath: entrypointPath,
-      )
-      .toJson();
 
   Future<Map<String, Object?>> profileList() async {
     final catalog = await authStorage.readProfileCatalog();
@@ -555,23 +469,10 @@ final class HyfensMcpAdapter {
 
   Future<Map<String, Object?>> profileCurrent() async {
     final catalog = await authStorage.readProfileCatalog();
-    final selected = defaultProfileName == null
-        ? catalog.active
-        : catalog.byName(defaultProfileName!);
-    if (selected == null) {
-      throw ToolFailure.single(
-        exitCode: ToolExitCode.usage,
-        code: 'A1025',
-        summary: 'Profile does not exist',
-        detail: 'The requested MCP profile is not in the local catalog.',
-        action: 'Run hyfens_profile_list and select an available profile.',
-      );
-    }
     return <String, Object?>{
-      'active_profile': selected.name,
-      if (defaultProfileName != null) 'profile_override': true,
+      'active_profile': catalog.active.name,
       'persisted': catalog.current != null,
-      'profile': await _profileJson(selected),
+      'profile': await _profileJson(catalog.active),
     };
   }
 
@@ -596,24 +497,18 @@ final class HyfensMcpAdapter {
 
   Future<Map<String, Object?>> projectInit({
     String? projectPath,
-    String? flavor,
-    String? entrypointPath,
     bool dryRun = false,
     bool force = false,
   }) async {
-    final initialization = await this.initialization.initialize(
+    final result = await toolchain.init(
       projectPath: projectPath,
-      flavor: flavor,
-      entrypointPath: entrypointPath,
       dryRun: dryRun,
       force: force,
     );
-    final result = initialization.result;
     return <String, Object?>{
       'project': _projectJson(result.project),
       'dryRun': result.dryRun,
-      'actions': initialization.actions,
-      'binding': initialization.binding.toJson(),
+      'actions': result.actions,
       'environment': result.environment.toJson(),
     };
   }
@@ -691,32 +586,17 @@ final class HyfensMcpAdapter {
     };
   }
 
-  Future<Map<String, Object?>> deploy({
-    String? projectPath,
-    String? releaseId,
-    String? patchPath,
-    Uri? endpoint,
-    String? organizationId,
-    String? applicationId,
-    String? environmentId,
-    String? caCertPath,
-    int expectedVersion = 0,
-    String displayVersion = 'local',
-  }) async {
-    final deployment = await delivery.deploy(
-      projectPath: projectPath,
-      releaseId: releaseId,
-      patchPath: patchPath,
-      endpoint: endpoint,
-      organizationId: organizationId,
-      applicationId: applicationId,
-      environmentId: environmentId,
-      caCertPath: caCertPath,
-      expectedVersion: expectedVersion,
-      displayVersion: displayVersion,
-      profileName: defaultProfileName,
+  Future<Map<String, Object?>> deploy() async {
+    throw const _McpOperationException(
+      _McpError(
+        code: 'MCP_CAPABILITY_UNSUPPORTED',
+        summary: 'Authenticated deploy is unavailable through built-in MCP',
+        detail:
+            'There is no public authenticated delivery service in the current '
+            'toolchain. MCP performs no network request and does not shell out.',
+        action: 'Provide a public delivery service before registering a deploy implementation.',
+      ),
     );
-    return deployment.data;
   }
 
   Future<Map<String, Object?>> rollback({
@@ -753,7 +633,9 @@ final class HyfensMcpAdapter {
     final document = await _discoveryClient.discover(profile.endpoint);
     return <String, Object?>{
       'profile': await _profileJson(profile),
-      'discovery': document.toJson(),
+      'discovery': document.toPublicJson(
+        redactEndpoints: isManagedCloudEndpoint(profile.endpoint),
+      ),
     };
   }
 
@@ -784,7 +666,7 @@ final class HyfensMcpAdapter {
         : 'LOGGED_IN';
     return <String, Object?>{
       'name': profile.name,
-      ...profile.toMetadataJson(),
+      ...profile.toPublicMetadataJson(),
       'auth': <String, Object?>{'status': status, 'host_bound': true},
     };
   }
@@ -902,26 +784,6 @@ StringSchema _profileSchema() => Schema.string(
   pattern: r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$',
 );
 
-StringSchema _flavorSchema() => Schema.string(
-  minLength: 1,
-  maxLength: 64,
-  pattern: r'^[A-Za-z][A-Za-z0-9_-]{0,63}$',
-  description: 'Flutter native flavor override.',
-);
-
-StringSchema _entrypointSchema() => Schema.string(
-  minLength: 1,
-  maxLength: 4096,
-  pattern: r'^lib/[^\x00\r\n]+\.dart$',
-  description: 'Project-relative Dart entrypoint under lib/.',
-);
-
-StringSchema _identifierSchema() => Schema.string(
-  minLength: 1,
-  maxLength: 256,
-  pattern: r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$',
-);
-
 String? _optionalPath(Map<String, Object?> args, String name) {
   final value = _optionalString(args, name);
   return value == null ? null : _checkedPath(value, name);
@@ -987,35 +849,6 @@ String? _optionalString(Map<String, Object?> args, String name) {
       detail: name + ' must be a string.',
     ),
   );
-}
-
-int? _optionalInt(Map<String, Object?> args, String name) {
-  final value = args[name];
-  if (value == null) return null;
-  if (value is int) return value;
-  throw _McpOperationException(
-    _McpError(
-      code: 'MCP_INVALID_PARAMS',
-      summary: 'Argument type is invalid',
-      detail: name + ' must be an integer.',
-    ),
-  );
-}
-
-Uri? _optionalEndpoint(Map<String, Object?> args, String name) {
-  final value = _optionalString(args, name);
-  if (value == null) return null;
-  final endpoint = Uri.tryParse(value);
-  if (endpoint == null || endpoint.scheme.isEmpty || endpoint.host.isEmpty) {
-    throw const _McpOperationException(
-      _McpError(
-        code: 'MCP_INVALID_ENDPOINT',
-        summary: 'Control-plane endpoint is invalid',
-        detail: 'endpoint must be an absolute HTTP or HTTPS URL.',
-      ),
-    );
-  }
-  return endpoint;
 }
 
 bool? _optionalBool(Map<String, Object?> args, String name) {
@@ -1099,70 +932,22 @@ String _safeText(String value, {int maxLength = 2048}) {
 Map<String, Object?> _projectJson(FlutterProject project) => <String, Object?>{
   'package': project.packageName,
   'applicationId': project.applicationId,
-  'projectPath': project.relativeProjectPath,
-  'workspaceType': project.workspaceType.name,
-  'flavors': project.flavors,
-  'entrypoints': project.entrypointCandidates
-      .map((item) => item.toJson())
-      .toList(),
-  'toolchainHint': project.toolchainHint,
   if (project.version != null) 'version': _safeText(project.version!),
   'root': '<project>',
 };
-
-Map<String, Object?> _targetSelections(
-  HyfensToolchain toolchain,
-  FlutterProject project,
-) {
-  final result = <String, Object?>{};
-  for (final target in const <String>['android', 'ios']) {
-    if (!Directory(p.join(project.root.path, target)).existsSync()) continue;
-    try {
-      final selection = toolchain.resolveTarget(
-        target: target,
-        projectPath: project.root.path,
-      );
-      result[target] = <String, Object?>{
-        'status': 'RESOLVED',
-        ...selection.toJson(),
-        'applicationId': toolchain.resolveApplicationId(
-          project: project,
-          target: target,
-          flavor: selection.flavor,
-        ),
-      };
-    } on ToolFailure catch (failure) {
-      final diagnostic = failure.diagnostics.single;
-      if (!<String>{
-        'T1304',
-        'T1305',
-        'T1306',
-        'T1307',
-        'T1308',
-      }.contains(diagnostic.code)) {
-        rethrow;
-      }
-      result[target] = <String, Object?>{
-        'status': 'NEEDS_SELECTION',
-        'diagnostic': diagnostic.toJson(),
-      };
-    }
-  }
-  return result;
-}
 
 Map<String, Object?> _releaseJson(ReleaseRecord release) => <String, Object?>{
   'releaseId': release.releaseId,
   'applicationId': release.applicationId,
   'target': release.target,
+  'entrypoint': release.entrypointPath,
+  'flavor': release.flavor,
   'architecture': release.architecture,
   'buildMode': release.buildMode,
   'toolVersion': release.toolVersion,
   'flutterVersion': release.flutterVersion,
   'dartVersion': release.dartVersion,
-  'flutterEngineRevision': release.flutterEngineRevision,
   'buildFingerprint': release.buildFingerprint,
-  'resourceSnapshotFingerprint': release.resourceSnapshot?.fingerprint,
   'sourceFingerprint': release.sourceFingerprint,
   'graphFingerprint': release.graphFingerprint,
   'manifest': <String, Object?>{

@@ -164,58 +164,12 @@ void main() {
 
     expect(E0PatchRuntime.generatedIntegrationStarted, isTrue);
   });
-
-  test(
-    'generated widget authority survives the controller initialization reset',
-    () async {
-      final factories = E0WidgetFactoryRegistry(
-        const <E0WidgetFactoryRegistration>[],
-      );
-      final trustedKey = E1TrustedPublicKey(keyId: _keyId, bytes: _publicKey);
-      final controller = _controller(
-        Directory('${root.path}/generated-widget-authority'),
-        trustedKey,
-        runtimeConfiguration: E1RuntimeConfiguration(
-          widgetFactories: factories,
-        ),
-      );
-
-      final effectiveFactories =
-          E0PatchRuntime.configureWidgetFactoriesIfAbsent(factories);
-      expect(effectiveFactories, same(factories));
-      await controller.initialize();
-
-      expect(
-        () => E0PatchRuntime.configureWidgetFactories(effectiveFactories),
-        throwsStateError,
-      );
-
-      await controller.close();
-    },
-  );
-
-  test('generated bootstrap preserves an app-owned widget authority', () async {
-    final appFactories = E0WidgetFactoryRegistry(
-      const <E0WidgetFactoryRegistration>[],
-    );
-    final generatedFactories = E0WidgetFactoryRegistry(
-      const <E0WidgetFactoryRegistration>[],
-    );
-    E0PatchRuntime.configureWidgetFactories(appFactories);
-
-    final effectiveFactories = E0PatchRuntime.configureWidgetFactoriesIfAbsent(
-      generatedFactories,
-    );
-
-    expect(effectiveFactories, same(appFactories));
-  });
 }
 
 E1PatchController _controller(
   Directory storage,
-  E1TrustedPublicKey trustedKey, {
-  E1RuntimeConfiguration runtimeConfiguration = const E1RuntimeConfiguration(),
-}) => E1PatchController(
+  E1TrustedPublicKey trustedKey,
+) => E1PatchController(
   storageDirectory: storage,
   appId: _appId,
   releaseId: _releaseId,
@@ -227,7 +181,6 @@ E1PatchController _controller(
   receivers: <String, String>{_functionId: E0ReceiverDescriptor.none.encode()},
   patchUri: Uri.parse('http://127.0.0.1:18080/patch.e1.signed.json'),
   trustedPublicKeys: <String, E1TrustedPublicKey>{_keyId: trustedKey},
-  runtimeConfiguration: runtimeConfiguration,
 );
 
 List<int> _compilePatch() {

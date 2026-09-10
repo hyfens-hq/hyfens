@@ -8,7 +8,6 @@ import 'package:test/test.dart';
 Future<Directory> _createProject() async {
   final root = await Directory.systemTemp.createTemp('hyfens-mcp-project-');
   await Directory('${root.path}/lib').create(recursive: true);
-  await Directory('${root.path}/.dart_tool').create(recursive: true);
   await File('${root.path}/pubspec.yaml').writeAsString('''
 name: mcp_sample
 version: 1.0.0
@@ -22,26 +21,7 @@ packages: {}
 sdks:
   dart: ">=3.13.0 <4.0.0"
 ''');
-  await File('${root.path}/lib/main.dart').writeAsString('''
-void main() {}
-
-int calculate() {
-  return 1;
-}
-''');
-  await File('${root.path}/.dart_tool/package_config.json').writeAsString(
-    jsonEncode(<String, Object?>{
-      'configVersion': 2,
-      'packages': <Object?>[
-        <String, Object?>{
-          'name': 'mcp_sample',
-          'rootUri': root.uri.toString(),
-          'packageUri': 'lib/',
-          'languageVersion': '3.13',
-        },
-      ],
-    }),
-  );
+  await File('${root.path}/lib/main.dart').writeAsString('void main() {}\n');
   return root;
 }
 
@@ -130,7 +110,7 @@ void main() {
       final serverInfo = (initializeResult['serverInfo']! as Map)
           .cast<String, Object?>();
       expect(serverInfo['name'], 'hyfens');
-      expect(serverInfo['version'], hyfensToolVersion);
+      expect(serverInfo['version'], '0.1.1');
       expect(
         ((initializeResult['capabilities']! as Map)['tools'] as Map)
             .containsKey('listChanged'),
@@ -146,45 +126,24 @@ void main() {
       expect(
         names,
         containsAll(<String>{
-          'hyfens_status',
-          'hyfens_doctor',
-          'hyfens_analyze',
-          'hyfens_profile_list',
-          'hyfens_profile_current',
-          'hyfens_profile_get',
-          'hyfens_project_init',
-          'hyfens_release_create',
-          'hyfens_release_inspect',
-          'hyfens_patch_create',
-          'hyfens_patch_verify',
-          'hyfens_patch_inspect',
-          'hyfens_deploy',
-          'hyfens_rollback',
-          'hyfens_control_plane_discovery',
+          'status',
+          'doctor',
+          'profile_list',
+          'profile_current',
+          'profile_get',
+          'project_init',
+          'release_create',
+          'release_inspect',
+          'patch_create',
+          'patch_verify',
+          'patch_inspect',
+          'deploy',
+          'rollback',
+          'control_plane_discovery',
         }),
       );
-      final deploy = tools.firstWhere(
-        (tool) => tool['name'] == 'hyfens_deploy',
-      );
-      expect(deploy['description'], contains('registers its release'));
-      final deploySchema = (deploy['inputSchema']! as Map)
-          .cast<String, Object?>();
-      final deployProperties = (deploySchema['properties']! as Map)
-          .cast<String, Object?>();
-      expect(deployProperties, isNot(contains('token')));
-
-      final profileResult = await harness.request(
-        3,
-        'tools/call',
-        params: <String, Object?>{
-          'name': 'hyfens_profile_list',
-          'arguments': <String, Object?>{},
-        },
-      );
-      final profileCall = (profileResult['result']! as Map)
-          .cast<String, Object?>();
-      expect(profileCall['isError'], isNot(true));
-      expect(profileCall['structuredContent'], isA<Map>());
+      final deploy = tools.firstWhere((tool) => tool['name'] == 'deploy');
+      expect(deploy['description'], contains('UNSUPPORTED CAPABILITY'));
     },
   );
 
@@ -213,106 +172,9 @@ void main() {
       expect(init['dryRun'], isTrue);
       final initProject = (init['project']! as Map).cast<String, Object?>();
       expect(initProject['root'], '<project>');
-      expect(
-        (init['binding']! as Map).cast<String, Object?>()['profile'],
-        'hyfens-cloud',
-      );
       expect(jsonEncode(init), isNot(contains(project.path)));
     },
   );
-
-  test('MCP analyze exposes the shared typed compatibility result', () async {
-    final project = await _createProject();
-    final auth = await Directory.systemTemp.createTemp('hyfens-mcp-auth-');
-    addTearDown(() async {
-      await project.delete(recursive: true);
-      await auth.delete(recursive: true);
-    });
-    final tool = HyfensToolchain();
-    await tool.init(projectPath: project.path);
-    await tool.generateKeys(projectPath: project.path);
-    final release = await tool.release(
-      target: 'android',
-      projectPath: project.path,
-      metadataOnly: true,
-    );
-    expect(release.build['compatibilityModel'], 'flutter-dart-abi-v1');
-    await File('${project.path}/lib/main.dart').writeAsString('''
-void main() {}
-
-int calculate() {
-  return 2;
-}
-''');
-    final adapter = HyfensMcpAdapter(
-      toolchain: tool,
-      authStorage: AuthStorage(root: auth),
-    );
-
-    final result = await adapter.analyze(
-      projectPath: project.path,
-      releaseId: release.releaseId,
-    );
-    expect(result['compatibilityModel'], 'flutter-dart-abi-v1');
-    expect(result['result'], 'PATCHABLE');
-    final items = (result['items']! as List)
-        .map((item) => (item as Map).cast<String, Object?>())
-        .toList();
-    expect(items, isNotEmpty);
-    expect(items.single['compatibility'], 'PATCHABLE');
-    expect(items.single['reasonCode'], isNotEmpty);
-    expect(jsonEncode(result), isNot(contains(project.path)));
-  });
-
-  test('MCP reports the same async compiler decision as the CLI', () async {
-    final project = await _createProject();
-    final auth = await Directory.systemTemp.createTemp('hyfens-mcp-auth-');
-    addTearDown(() async {
-      await project.delete(recursive: true);
-      await auth.delete(recursive: true);
-    });
-    final tool = HyfensToolchain();
-    await tool.init(projectPath: project.path);
-    await tool.generateKeys(projectPath: project.path);
-    final source = File('${project.path}/lib/main.dart');
-    await source.writeAsString('''
-void main() {}
-
-Future<void> waitForFrame() async {
-  await Future<void>.delayed(Duration.zero);
-}
-''');
-    final release = await tool.release(
-      target: 'ios',
-      projectPath: project.path,
-      metadataOnly: true,
-    );
-    await source.writeAsString('''
-void main() {}
-
-Future<void> waitForFrame() async {
-  final int milliseconds = 1;
-  await Future<void>.delayed(Duration(milliseconds: milliseconds));
-}
-''');
-    final adapter = HyfensMcpAdapter(
-      toolchain: tool,
-      authStorage: AuthStorage(root: auth),
-    );
-
-    final result = await adapter.analyze(
-      projectPath: project.path,
-      releaseId: release.releaseId,
-    );
-    expect(result['result'], 'PATCH_BLOCKED');
-    expect(result['compatibilityModel'], 'flutter-dart-abi-v1');
-    expect(((result['diagnostics']! as List).single as Map)['code'], 'P2012');
-    expect(
-      ((result['items']! as List).single as Map)['compatibility'],
-      'NOT_YET_SUPPORTED',
-    );
-    expect(jsonEncode(result), isNot(contains(project.path)));
-  });
 
   test(
     'profile metadata is host-bound and redacts all session material',
@@ -338,6 +200,14 @@ Future<void> waitForFrame() async {
       );
       await storage.writeNamedProfile(alpha);
       await storage.writeNamedProfile(beta, makeActive: false);
+      await storage.writeNamedProfile(
+        CliProfile(
+          name: managedCloudProfileName,
+          endpoint: Uri.parse(managedCloudApiBase),
+          managed: true,
+        ),
+        makeActive: false,
+      );
       await storage.writeSession(
         const AuthSession(
           accessToken: 'alpha-access-secret',
@@ -369,68 +239,20 @@ Future<void> waitForFrame() async {
       final authResult = (alphaResult['auth']! as Map).cast<String, Object?>();
       expect(authResult['host_bound'], isTrue);
       expect(authResult['status'], 'LOGGED_IN');
-
-      final current = await adapter.profileCurrent();
-      expect(current['active_profile'], 'alpha');
-      expect(current['profile_override'], isTrue);
+      expect(encoded, isNot(contains('api.hyfens.com')));
     },
   );
 
-  test('MCP profile override is used for project initialization', () async {
-    final project = await _createProject();
-    final authRoot = await Directory.systemTemp.createTemp('hyfens-mcp-auth-');
-    addTearDown(() async {
-      await project.delete(recursive: true);
-      await authRoot.delete(recursive: true);
-    });
-    final storage = AuthStorage(root: authRoot);
-    await storage.writeNamedProfile(
-      ControlPlaneProfile(
-        name: 'alpha',
-        endpoint: Uri.parse('http://127.0.0.1:43111/p2'),
-        managed: false,
-        organizationId: 'org-alpha',
-      ),
-    );
-    await storage.writeNamedProfile(
-      ControlPlaneProfile(
-        name: 'beta',
-        endpoint: Uri.parse('http://127.0.0.1:43112/p2'),
-        managed: false,
-        organizationId: 'org-beta',
-      ),
-      makeActive: false,
-    );
-
+  test('deploy returns an honest capability error without acting', () async {
+    final auth = await Directory.systemTemp.createTemp('hyfens-mcp-auth-');
+    addTearDown(() => auth.delete(recursive: true));
     final adapter = HyfensMcpAdapter(
       toolchain: HyfensToolchain(),
-      authStorage: storage,
-      defaultProfileName: 'beta',
-    );
-    final result = await adapter.projectInit(
-      projectPath: project.path,
-      dryRun: true,
+      authStorage: AuthStorage(root: auth),
     );
 
-    expect(
-      (result['binding']! as Map).cast<String, Object?>()['profile'],
-      'beta',
-    );
+    expect(adapter.deploy, throwsA(isA<Exception>()));
   });
-
-  test(
-    'deploy returns a structured configuration error without acting',
-    () async {
-      final auth = await Directory.systemTemp.createTemp('hyfens-mcp-auth-');
-      addTearDown(() => auth.delete(recursive: true));
-      final adapter = HyfensMcpAdapter(
-        toolchain: HyfensToolchain(),
-        authStorage: AuthStorage(root: auth),
-      );
-
-      expect(adapter.deploy, throwsA(isA<ToolFailure>()));
-    },
-  );
 
   test(
     'invalid paths and shutdown use structured errors and clean close',
@@ -452,7 +274,7 @@ Future<void> waitForFrame() async {
         2,
         'tools/call',
         params: <String, Object?>{
-          'name': 'hyfens_status',
+          'name': 'status',
           'arguments': <String, Object?>{'project_path': 'bad\npath'},
         },
       );

@@ -7,9 +7,6 @@ import 'package:crypto/crypto.dart';
 import 'package:hyfens_patch_format/patch_format.dart';
 import 'package:patch_loading_e1/patch_loading_e1.dart';
 
-import 'install_receipts.dart';
-import 'runtime_attestation.dart';
-
 /// Read-only application delivery configuration for the authenticated local
 /// control-plane contract. The credential is intentionally app-scoped and
 /// extractable; it is not a control-plane or signing credential.
@@ -23,31 +20,31 @@ final class HyfensControlPlaneConfiguration {
     this.runtimeCompatibilityVersion = patchFormatRuntimeCompatibilityV1,
     this.patchFormatVersion = patchFormatV1,
     this.requestTimeout = const Duration(seconds: 8),
-    this.receiptMode = HyfensInstallReceiptMode.disabled,
-    this.attestationProducer,
-    this.productionGate,
   }) {
     if ((baseUrl.scheme != 'http' && baseUrl.scheme != 'https') ||
         !baseUrl.hasAuthority ||
         baseUrl.userInfo.isNotEmpty ||
         baseUrl.query.isNotEmpty ||
         baseUrl.fragment.isNotEmpty) {
-      throw ArgumentError(
-        'must be an HTTP(S) URL without credentials or query state',
+      throw ArgumentError.value(
+        baseUrl,
         'baseUrl',
+        'must be an HTTP(S) URL without credentials or query state',
       );
     }
     if (baseUrl.scheme == 'http' && !_isExplicitLoopbackEndpoint(baseUrl)) {
-      throw ArgumentError(
-        'remote control-plane HTTP is not permitted for credential-bearing delivery',
+      throw ArgumentError.value(
+        baseUrl,
         'baseUrl',
+        'remote control-plane HTTP is not permitted for credential-bearing delivery',
       );
     }
     if (deliveryCredential.isEmpty ||
         deliveryCredential.contains(RegExp(r'[\r\n]'))) {
-      throw ArgumentError(
-        'must be a non-empty single-line credential',
+      throw ArgumentError.value(
+        deliveryCredential,
         'deliveryCredential',
+        'must be a non-empty single-line credential',
       );
     }
     _validateField(applicationId, 'applicationId');
@@ -73,9 +70,6 @@ final class HyfensControlPlaneConfiguration {
   final int runtimeCompatibilityVersion;
   final int patchFormatVersion;
   final Duration requestTimeout;
-  final HyfensInstallReceiptMode receiptMode;
-  final HyfensRuntimeAttestationEvidenceProducer? attestationProducer;
-  final bool Function()? productionGate;
 
   /// Reads the runtime-only delivery configuration supplied by a release
   /// build. A delivery credential is intentionally a read-only app secret: it
@@ -94,7 +88,6 @@ final class HyfensControlPlaneConfiguration {
     const applicationId = String.fromEnvironment('HYFENS_APPLICATION_ID');
     const environmentId = String.fromEnvironment('HYFENS_ENVIRONMENT_ID');
     const platformId = String.fromEnvironment('HYFENS_PLATFORM_ID');
-    const receiptMode = String.fromEnvironment('HYFENS_INSTALL_RECEIPT_MODE');
     final values = <String>[
       baseUrl,
       deliveryCredential,
@@ -102,13 +95,7 @@ final class HyfensControlPlaneConfiguration {
       environmentId,
       platformId,
     ];
-    final parsedReceiptMode = HyfensInstallReceiptMode.parse(receiptMode);
-    if (values.every((value) => value.isEmpty)) {
-      if (parsedReceiptMode == HyfensInstallReceiptMode.disabled) return null;
-      throw const FormatException(
-        'Authenticated control-plane configuration is incomplete',
-      );
-    }
+    if (values.every((value) => value.isEmpty)) return null;
     if (values.any((value) => value.isEmpty)) {
       throw const FormatException(
         'Authenticated control-plane configuration is incomplete',
@@ -120,7 +107,6 @@ final class HyfensControlPlaneConfiguration {
       applicationId: applicationId,
       environmentId: environmentId,
       platformId: platformId,
-      receiptMode: parsedReceiptMode,
     );
   }
 
@@ -162,6 +148,7 @@ final class HyfensControlPlaneConfiguration {
 enum HyfensDeliveryDecision {
   noUpdate,
   patchAvailable,
+  rollbackToBase,
   updateBlocked,
   storeReleaseRequired,
 }
@@ -173,6 +160,7 @@ final class HyfensControlPlaneDeliveryResult {
     required this.detail,
     this.sequence,
     this.artifactDigest,
+    this.requiresHealthConfirmation = false,
   });
 
   final HyfensDeliveryDecision decision;
@@ -180,23 +168,22 @@ final class HyfensControlPlaneDeliveryResult {
   final String detail;
   final int? sequence;
   final String? artifactDigest;
+  final bool requiresHealthConfirmation;
 }
 
 /// A bounded transport adapter for the authenticated product-service API.
 ///
 /// This class does not parse Patch Format v1, verify signatures, inspect
-/// capabilities, decide sequence/high-water admission, mark health, or roll
-/// back. It only authenticates lookup/fetch, checks transport metadata, and
-/// hands exact bytes to [E1PatchController].
+/// capabilities, decide sequence/high-water admission, or mark health. It
+/// authenticates lookup/fetch, checks transport metadata, and hands exact
+/// bytes or a signed rollback control to [E1PatchController].
 final class HyfensControlPlaneDelivery {
-  HyfensControlPlaneDelivery(this.configuration, {this.receipts});
+  HyfensControlPlaneDelivery(this.configuration);
 
   static const int _maxLookupBytes = 256 * 1024;
-  static const int _maxLookupRequestBytes = 16 * 1024;
   static const int _maxArtifactBytes = PatchFormatLimits.maxArtifactBytes;
 
   final HyfensControlPlaneConfiguration configuration;
-  final HyfensInstallReceipts? receipts;
 
   Future<HyfensControlPlaneDeliveryResult> deliver(
     E1PatchController controller,
@@ -249,6 +236,28 @@ final class HyfensControlPlaneDelivery {
         'Delivery response is bound to another platform',
       );
     }
+    final responseApplicationId = _optionalString(response, const <String>[
+      'applicationId',
+      'application_id',
+    ]);
+    if (responseApplicationId != null &&
+        responseApplicationId != configuration.applicationId) {
+      throw const HyfensControlPlaneDeliveryException(
+        'APPLICATION_ID_MISMATCH',
+        'Delivery response is bound to another application',
+      );
+    }
+    final responseEnvironmentId = _optionalString(response, const <String>[
+      'environmentId',
+      'environment_id',
+    ]);
+    if (responseEnvironmentId != null &&
+        responseEnvironmentId != configuration.environmentId) {
+      throw const HyfensControlPlaneDeliveryException(
+        'ENVIRONMENT_ID_MISMATCH',
+        'Delivery response is bound to another environment',
+      );
+    }
     switch (decision) {
       case HyfensDeliveryDecision.noUpdate:
         return const HyfensControlPlaneDeliveryResult(
@@ -268,6 +277,20 @@ final class HyfensControlPlaneDelivery {
           activated: false,
           detail: 'current runtime requires a store release',
         );
+      case HyfensDeliveryDecision.rollbackToBase:
+        final encodedControl = _requiredString(response, const <String>[
+          'rollbackControl',
+          'rollback_control',
+        ], 'rollback control');
+        final controlBytes = _decodeRollbackControl(encodedControl);
+        final rolledBack = await controller.applyRollbackControl(controlBytes);
+        return HyfensControlPlaneDeliveryResult(
+          decision: HyfensDeliveryDecision.rollbackToBase,
+          activated: rolledBack,
+          detail: rolledBack
+              ? 'signed Cloud rollback control applied to the base release'
+              : controller.status.detail,
+        );
       case HyfensDeliveryDecision.patchAvailable:
         break;
     }
@@ -279,7 +302,6 @@ final class HyfensControlPlaneDelivery {
       'artifactId',
       'artifact_id',
     ], 'artifact ID');
-    _validateBoundedString(artifactId, 'artifact ID');
     final expectedDigest = _digest(
       _requiredString(artifact, const <String>[
         'sha256',
@@ -303,73 +325,8 @@ final class HyfensControlPlaneDelivery {
         'Patch and artifact digests disagree',
       );
     }
-    E1InstallReceiptContext? receiptContext;
-    final patchReferenceDigest = _patchReferenceDigest(expectedDigest);
-    final currentReference = controller.durableState.current;
-    final alreadyHealthy =
-        controller.durableState.health == 'healthy' &&
-        (currentReference == 'patch-$patchReferenceDigest.v1.patch' ||
-            currentReference == 'patch-$patchReferenceDigest.e1.signed.json');
-    if (configuration.receiptMode != HyfensInstallReceiptMode.disabled &&
-        alreadyHealthy &&
-        !controller.recoveryNeeded) {
-      return HyfensControlPlaneDeliveryResult(
-        decision: HyfensDeliveryDecision.patchAvailable,
-        activated: true,
-        detail: 'exact healthy artifact already active; download skipped',
-        sequence: sequence,
-        artifactDigest: expectedDigest,
-      );
-    }
-    if (configuration.receiptMode != HyfensInstallReceiptMode.disabled &&
-        !alreadyHealthy) {
-      final client = receipts;
-      if (client == null) {
-        if (configuration.receiptMode == HyfensInstallReceiptMode.production) {
-          throw const HyfensControlPlaneDeliveryException(
-            'PRODUCTION_ATTESTATION_UNAVAILABLE',
-            'Production admission requires its attestation-enabled receipt client',
-          );
-        }
-        throw const HyfensControlPlaneDeliveryException(
-          'RECEIPT_CLIENT_UNAVAILABLE',
-          'Managed install admission requires its configured receipt client',
-        );
-      }
-      if (configuration.receiptMode == HyfensInstallReceiptMode.production &&
-          !client.isProduction) {
-        throw const HyfensControlPlaneDeliveryException(
-          'PRODUCTION_ATTESTATION_UNAVAILABLE',
-          'Production admission requires its attestation-enabled receipt client',
-        );
-      }
-      if (configuration.receiptMode != HyfensInstallReceiptMode.production &&
-          client.isProduction) {
-        throw const HyfensControlPlaneDeliveryException(
-          'RECEIPT_MODE_MISMATCH',
-          'Development admission cannot use a production receipt client',
-        );
-      }
-      receiptContext = await client.prepare(
-        runtimeApplicationId: controller.appId,
-        releaseId: controller.releaseId,
-        patchId: _requiredString(patch, const [
-          'runtimePatchId',
-          'runtime_patch_id',
-        ], 'runtime patch ID'),
-        artifactDigest: expectedDigest,
-      );
-    }
-    final downloadProof = receiptContext == null
-        ? null
-        : await receipts!.downloadProof(receiptContext, artifactId);
     final watch = Stopwatch()..start();
-    final bytes = await _downloadArtifact(
-      configuration.artifactUri(artifactId),
-      admissionId: receiptContext?.admissionId,
-      proof: downloadProof,
-      retryTransiently: receiptContext != null,
-    );
+    final bytes = await _getBytes(configuration.artifactUri(artifactId));
     watch.stop();
     if (bytes.length != expectedSize) {
       throw HyfensControlPlaneDeliveryException(
@@ -387,7 +344,6 @@ final class HyfensControlPlaneDelivery {
     final activated = await controller.activateBytes(
       bytes,
       downloadMicros: watch.elapsedMicroseconds,
-      receiptContext: receiptContext,
     );
     return HyfensControlPlaneDeliveryResult(
       decision: HyfensDeliveryDecision.patchAvailable,
@@ -397,23 +353,8 @@ final class HyfensControlPlaneDelivery {
           : controller.status.detail,
       sequence: sequence,
       artifactDigest: expectedDigest,
+      requiresHealthConfirmation: true,
     );
-  }
-
-  Future<List<int>> _downloadArtifact(
-    Uri uri, {
-    required String? admissionId,
-    required String? proof,
-    required bool retryTransiently,
-  }) async {
-    try {
-      return await _getBytes(uri, admissionId: admissionId, proof: proof);
-    } on HyfensControlPlaneDeliveryException catch (error) {
-      if (!retryTransiently || !_retryableArtifactError(error)) rethrow;
-      // Reuse the exact admission and proof for the bounded retry. A retry
-      // must not create a second server admission or sign a different scope.
-      return _getBytes(uri, admissionId: admissionId, proof: proof);
-    }
   }
 
   Future<Map<String, Object?>> _postJson(
@@ -422,12 +363,6 @@ final class HyfensControlPlaneDelivery {
     required int maxBytes,
   }) async {
     final encoded = utf8.encode(jsonEncode(body));
-    if (encoded.length > _maxLookupRequestBytes) {
-      throw const HyfensControlPlaneDeliveryException(
-        'REQUEST_TOO_LARGE',
-        'Update lookup request exceeds the runtime transport bound',
-      );
-    }
     final client = HttpClient()
       ..connectionTimeout = configuration.requestTimeout;
     try {
@@ -440,10 +375,7 @@ final class HyfensControlPlaneDelivery {
       final response = await request.close().timeout(
         configuration.requestTimeout,
       );
-      final bytes = await _readResponse(
-        response,
-        maxBytes: maxBytes,
-      ).timeout(configuration.requestTimeout);
+      final bytes = await _readResponse(response, maxBytes: maxBytes);
       if (response.statusCode != HttpStatus.ok) {
         throw HyfensControlPlaneDeliveryException(
           'LOOKUP_HTTP_${response.statusCode}',
@@ -470,38 +402,18 @@ final class HyfensControlPlaneDelivery {
     }
   }
 
-  Future<List<int>> _getBytes(
-    Uri uri, {
-    String? admissionId,
-    String? proof,
-  }) async {
-    if (!_sameOrigin(configuration.baseUrl, uri)) {
-      throw const HyfensControlPlaneDeliveryException(
-        'ARTIFACT_ORIGIN_MISMATCH',
-        'Artifact fetch must remain same-origin with the control plane',
-      );
-    }
-    if ((admissionId == null) != (proof == null)) {
-      throw const HyfensControlPlaneDeliveryException(
-        'ARTIFACT_PROOF_INVALID',
-        'Artifact admission and proof headers must be supplied together',
-      );
-    }
+  Future<List<int>> _getBytes(Uri uri) async {
     final client = HttpClient()
       ..connectionTimeout = configuration.requestTimeout;
     try {
       final request =
           await client.getUrl(uri).timeout(configuration.requestTimeout)
             ..followRedirects = false;
-      _headers(request, installAdmission: admissionId, installProof: proof);
-      request.contentLength = 0;
+      _headers(request);
       final response = await request.close().timeout(
         configuration.requestTimeout,
       );
-      final bytes = await _readResponse(
-        response,
-        maxBytes: _maxArtifactBytes,
-      ).timeout(configuration.requestTimeout);
+      final bytes = await _readResponse(response, maxBytes: _maxArtifactBytes);
       if (response.statusCode != HttpStatus.ok) {
         throw HyfensControlPlaneDeliveryException(
           'ARTIFACT_HTTP_${response.statusCode}',
@@ -554,12 +466,7 @@ final class HyfensControlPlaneDelivery {
     }
   }
 
-  void _headers(
-    HttpClientRequest request, {
-    bool json = false,
-    String? installAdmission,
-    String? installProof,
-  }) {
+  void _headers(HttpClientRequest request, {bool json = false}) {
     request.headers
       ..set(
         HttpHeaders.authorizationHeader,
@@ -567,12 +474,6 @@ final class HyfensControlPlaneDelivery {
       )
       ..set(HttpHeaders.acceptHeader, json ? 'application/json' : '*/*')
       ..set('X-Hyfens-Client', 'flutter-runtime-v1');
-    if (installAdmission != null) {
-      request.headers.set('X-Hyfens-Install-Admission', installAdmission);
-    }
-    if (installProof != null) {
-      request.headers.set('X-Hyfens-Install-Proof', installProof);
-    }
     if (json) request.headers.contentType = ContentType.json;
   }
 
@@ -588,13 +489,13 @@ final class HyfensControlPlaneDelivery {
     }
     final builder = BytesBuilder(copy: false);
     await for (final chunk in response) {
-      if (chunk.length > maxBytes - builder.length) {
+      builder.add(chunk);
+      if (builder.length > maxBytes) {
         throw const HyfensControlPlaneDeliveryException(
           'RESPONSE_TOO_LARGE',
           'Delivery response exceeds the runtime transport bound',
         );
       }
-      builder.add(chunk);
     }
     return builder.takeBytes();
   }
@@ -602,6 +503,7 @@ final class HyfensControlPlaneDelivery {
   HyfensDeliveryDecision _decision(String value) => switch (value) {
     'NO_UPDATE' => HyfensDeliveryDecision.noUpdate,
     'PATCH_AVAILABLE' => HyfensDeliveryDecision.patchAvailable,
+    'ROLLBACK_TO_BASE' => HyfensDeliveryDecision.rollbackToBase,
     'UPDATE_BLOCKED' => HyfensDeliveryDecision.updateBlocked,
     'STORE_RELEASE_REQUIRED' => HyfensDeliveryDecision.storeReleaseRequired,
     _ => throw HyfensControlPlaneDeliveryException(
@@ -609,6 +511,30 @@ final class HyfensControlPlaneDelivery {
       'Control plane returned an unsupported delivery decision',
     ),
   };
+
+  static List<int> _decodeRollbackControl(String value) {
+    try {
+      if (value.isEmpty ||
+          value.length > 32768 ||
+          value.contains(RegExp(r'[\r\n\s]'))) {
+        throw const FormatException('invalid rollback control encoding');
+      }
+      final bytes = base64.decode(value);
+      if (base64.encode(bytes) != value ||
+          bytes.length > RollbackControlCommand.maxBytes) {
+        throw const FormatException('invalid rollback control encoding');
+      }
+      // Decode at the transport boundary as well as in the controller so a
+      // malformed directive cannot reach lifecycle code as opaque bytes.
+      RollbackControlCommand.decode(bytes);
+      return bytes;
+    } on Object {
+      throw const HyfensControlPlaneDeliveryException(
+        'MALFORMED_ROLLBACK_CONTROL',
+        'Control plane returned an invalid rollback directive',
+      );
+    }
+  }
 
   static Map<String, Object?> _object(Map<String, Object?> value, String key) =>
       _objectValue(value[key], key);
@@ -691,40 +617,6 @@ final class HyfensControlPlaneDelivery {
       );
     }
     return 'sha256:$normalized';
-  }
-
-  static String _patchReferenceDigest(String digest) =>
-      digest.startsWith('sha256:')
-      ? digest.substring('sha256:'.length)
-      : digest;
-
-  static void _validateBoundedString(String value, String name) {
-    if (value.length > 256 || value.contains(RegExp(r'[\x00-\x1f\x7f]'))) {
-      throw HyfensControlPlaneDeliveryException(
-        'MALFORMED_RESPONSE',
-        'Delivery response field $name is invalid',
-      );
-    }
-  }
-
-  static bool _sameOrigin(Uri left, Uri right) =>
-      left.scheme.toLowerCase() == right.scheme.toLowerCase() &&
-      left.host.toLowerCase() == right.host.toLowerCase() &&
-      left.port == right.port;
-
-  static bool _retryableArtifactError(
-    HyfensControlPlaneDeliveryException error,
-  ) {
-    if (error.code == 'DELIVERY_TIMEOUT' ||
-        error.code == 'DELIVERY_UNAVAILABLE') {
-      return true;
-    }
-    const prefix = 'ARTIFACT_HTTP_';
-    if (!error.code.startsWith(prefix)) return false;
-    final statusCode = int.tryParse(error.code.substring(prefix.length));
-    return statusCode == HttpStatus.requestTimeout ||
-        statusCode == HttpStatus.tooManyRequests ||
-        statusCode != null && statusCode >= 500;
   }
 
   static String _digestBytes(List<int> bytes) =>

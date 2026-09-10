@@ -133,6 +133,28 @@ final class DiscoveryDocument {
     if (deviceTokenEndpoint != null)
       'device_token_endpoint': deviceTokenEndpoint.toString(),
   };
+
+  /// Public projection for diagnostics and agent-facing responses.
+  ///
+  /// Managed Cloud authorization routes are implementation details and are
+  /// omitted from output. Self-hosted routes remain available so operators can
+  /// inspect their selected control plane.
+  Map<String, Object?> toPublicJson({
+    bool redactEndpoints = false,
+  }) => <String, Object?>{
+    'product': product,
+    'api_version': apiVersion,
+    'auth_methods': authMethods,
+    'capabilities': capabilities,
+    if (!redactEndpoints && authorizationEndpoint != null)
+      'authorization_endpoint': authorizationEndpoint.toString(),
+    if (!redactEndpoints && tokenEndpoint != null)
+      'token_endpoint': tokenEndpoint.toString(),
+    if (!redactEndpoints && deviceAuthorizationEndpoint != null)
+      'device_authorization_endpoint': deviceAuthorizationEndpoint.toString(),
+    if (!redactEndpoints && deviceTokenEndpoint != null)
+      'device_token_endpoint': deviceTokenEndpoint.toString(),
+  };
 }
 
 /// Performs unauthenticated compatibility discovery for one API base.
@@ -189,7 +211,8 @@ final class DiscoveryClient {
           exitCode: ToolExitCode.compatibility,
           code: 'D1002',
           summary: 'Control-plane discovery response is not valid JSON',
-          detail: 'GET ${_discoveryUri(normalized, path)}',
+          detail:
+              'GET ${displayControlPlaneUri(_discoveryUri(normalized, path))}',
           action: 'Upgrade the control plane or expose a versioned /.well-known/hyfens response.',
         );
       }
@@ -287,7 +310,7 @@ Uri? _optionalUri(Map<String, Object?> json, List<String> keys) {
 }
 
 bool _supportedDiscoveryVersion(String value) =>
-    value == '1' || value == 'v1' || value.startsWith('1.');
+    value == '1' || value == 'v1' || value == 'p2' || value.startsWith('1.');
 
 Map<String, Object?> _mapStringKeys(Map value) => <String, Object?>{
   for (final entry in value.entries)

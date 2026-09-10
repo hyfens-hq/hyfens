@@ -179,9 +179,7 @@ int calculate(int left, int right) {
         await serviceRoot.delete(recursive: true);
       }
     },
-    // Multiple real CLI processes compile before the authenticated runtime
-    // lifecycle can be asserted on a cold SDK cache.
-    timeout: const Timeout(Duration(minutes: 6)),
+    timeout: const Timeout(Duration(minutes: 2)),
   );
 }
 
@@ -264,8 +262,7 @@ Future<Map<String, String>> _readBootstrap(Process process) async {
         }
       });
   try {
-    // Process.start also includes cold Dart compilation of the control plane.
-    return await done.future.timeout(const Duration(seconds: 90));
+    return await done.future.timeout(const Duration(seconds: 15));
   } finally {
     await subscription.cancel();
   }

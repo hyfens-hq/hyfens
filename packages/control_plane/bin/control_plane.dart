@@ -22,6 +22,14 @@ Future<void> main(List<String> arguments) async {
     final value = options[entry.key];
     if (value != null) values[entry.value] = value;
   }
+  final previewKey = options['preview-notification'];
+  if (previewKey != null) {
+    final rendered = NotificationPreview.render(key: previewKey);
+    stdout.writeln(rendered.html);
+    stdout.writeln('\n--- PLAIN TEXT ---\n');
+    stdout.writeln(rendered.text);
+    return;
+  }
   final config = ControlPlaneConfig.fromEnvironment(values);
   final taskRoleCredentials = config.artifactUseTaskRole
       ? EcsTaskRoleCredentialsProvider.fromEnvironment(environment: values)
@@ -38,43 +46,107 @@ Future<void> main(List<String> arguments) async {
           keyPrefix: config.artifactKeyPrefix,
           region: config.artifactRegion,
         );
-  final artifactDeliveryAdmission = config.artifactAdmissionUrl == null
-      ? null
-      : RemoteArtifactDeliveryAdmission(
-          endpoint: config.artifactAdmissionUrl!,
-          serviceToken: config.artifactAdmissionServiceToken!,
-        );
+  final legacyEmailDelivery = KeplarsHumanMessageDelivery.fromEnvironment(
+    values,
+  );
   final store = config.databaseUrl == null
       ? FileControlPlaneStore(config.fileRoot)
       : PostgresControlPlaneStore(
           config.databaseUrl!,
           artifacts: artifactStore,
         );
+  final notifications = NotificationService.fromEnvironment(
+    store: store,
+    values: values,
+  );
+  final queuedEmailDelivery = notifications?.canQueueSensitiveMessages == true
+      ? notifications!.authMessageDelivery()
+      : null;
+  final HumanAuthMessageDelivery? authEmailDelivery =
+      queuedEmailDelivery ?? legacyEmailDelivery;
+  final HumanDeletionMessageDelivery? deletionEmailDelivery =
+      queuedEmailDelivery ?? legacyEmailDelivery;
   final auth = config.auth == null
       ? null
-      : HumanAuthService(store: store, config: config.auth!);
+      : HumanAuthService(
+          store: store,
+          config: config.auth!,
+          messageDelivery: authEmailDelivery,
+          deletionMessageDelivery: deletionEmailDelivery,
+        );
   final configuredService = ControlPlaneService(
     store: store,
     humanAuth: auth,
-    artifactDeliveryAdmission: artifactDeliveryAdmission,
-    artifactDeliveryAdmissionRequired: config.artifactAdmissionRequired,
+    deploymentModel: config.deploymentModel,
+    razorpayBilling: config.razorpayBilling,
+    billingProvider: config.billingProvider,
+    notifications: notifications,
+    deletionPolicy: config.deletionPolicy,
   );
-  final runtimeReceiptSettlement =
-      config.runtimeAcceptanceEnvironmentIds.isEmpty
-      ? null
-      : RuntimeReceiptSettlement(
-          store: store as RuntimeReceiptStore,
-          policy: DevelopmentRuntimeReceiptPolicy(
-            environmentIds: config.runtimeAcceptanceEnvironmentIds,
-          ),
-        );
-  final cloudSignupDelivery = config.cloudOnboarding.deliveryEndpoint == null
-      ? const UnavailableCloudSignupVerificationDelivery()
-      : HttpCloudSignupVerificationDelivery(
-          endpoint: config.cloudOnboarding.deliveryEndpoint!,
-          serviceToken: config.cloudOnboarding.deliveryToken!,
-        );
   await configuredService.initialize();
+  if (options.containsKey('process-deletions')) {
+    if (options.containsKey('bootstrap') ||
+        options.containsKey('bootstrap-admin') ||
+        options.containsKey('bootstrap-owner') ||
+        options.containsKey('seed-demo')) {
+      throw ArgumentError(
+        '--process-deletions cannot be combined with a bootstrap mode',
+      );
+    }
+    final deletion = configuredService.deletion;
+    if (deletion == null) {
+      throw StateError(
+        '--process-deletions requires human authentication and deletion '
+        'configuration',
+      );
+    }
+    try {
+      final processed = await deletion.processPendingDeletions();
+      final counts = <String, int>{};
+      for (final request in processed) {
+        final status = request['status'];
+        if (status is String) {
+          counts[status] = (counts[status] ?? 0) + 1;
+        }
+      }
+      stdout.write('deletion_worker_processed=${processed.length}');
+      final entries = counts.entries.toList()
+        ..sort((left, right) => left.key.compareTo(right.key));
+      for (final entry in entries) {
+        stdout.write(' ${entry.key}=${entry.value}');
+      }
+      stdout.writeln();
+    } finally {
+      await store.close();
+      taskRoleCredentials?.close();
+    }
+    return;
+  }
+  if (options.containsKey('process-notifications')) {
+    if (options.containsKey('bootstrap') ||
+        options.containsKey('bootstrap-admin') ||
+        options.containsKey('bootstrap-owner') ||
+        options.containsKey('seed-demo') ||
+        options.containsKey('process-deletions')) {
+      throw ArgumentError(
+        '--process-notifications cannot be combined with another worker or bootstrap mode',
+      );
+    }
+    final configuredNotifications = configuredService.notifications;
+    if (configuredNotifications == null) {
+      throw StateError(
+        '--process-notifications requires a configured notification provider',
+      );
+    }
+    try {
+      final processed = await configuredNotifications.dispatchPending();
+      stdout.writeln('notification_worker_processed=$processed');
+    } finally {
+      await store.close();
+      taskRoleCredentials?.close();
+    }
+    return;
+  }
   if (options.containsKey('seed-demo')) {
     if (options.containsKey('bootstrap') ||
         options.containsKey('bootstrap-admin') ||
@@ -101,6 +173,7 @@ Future<void> main(List<String> arguments) async {
     final result = await DemoAccountSeeder(
       store: store,
       auth: configuredAuth,
+      billingService: configuredService.billing,
     ).seed(password: password);
     stdout.writeln('seed=local-demo');
     stdout.writeln('organization_id=${result.organization.id}');
@@ -197,6 +270,21 @@ Future<void> main(List<String> arguments) async {
   final server = ControlPlaneHttpServer(
     configuredService,
     discovery: config.discovery,
+    enterpriseInquiryNotifier: config.auth?.platformAdminEmails.isEmpty != false
+        ? null
+        : notifications != null
+        ? (inquiry) => notifications
+              .enqueueEnterpriseInquiry(
+                recipients: config.auth!.platformAdminEmails,
+                inquiry: inquiry,
+              )
+              .then((_) {})
+        : legacyEmailDelivery == null
+        ? null
+        : (inquiry) => legacyEmailDelivery.sendEnterpriseInquiryNotification(
+            recipients: config.auth!.platformAdminEmails,
+            inquiry: inquiry,
+          ),
     limits: ControlPlaneHttpLimits(
       maxJsonBodyBytes: config.maxJsonBodyBytes,
       maxArtifactBytes: config.maxArtifactBytes,
@@ -204,9 +292,7 @@ Future<void> main(List<String> arguments) async {
     ),
     auditRetentionDays: config.auditRetentionDays,
     allowInsecureAuth: config.allowInsecureAuth,
-    runtimeReceiptSettlement: runtimeReceiptSettlement,
-    cloudOnboarding: config.cloudOnboarding,
-    cloudSignupDelivery: cloudSignupDelivery,
+    notificationProviderWebhookSecret: values['KEPLARS_WEBHOOK_SECRET'],
   );
   final bound = await server.bind(host: config.host, port: config.port);
   stdout.writeln(
@@ -236,7 +322,9 @@ Map<String, String> _options(List<String> arguments) {
       if (argument == '--bootstrap-only') result['bootstrap-only'] = 'true';
       continue;
     }
-    if (argument == '--seed-demo' ||
+    if (argument == '--process-deletions' ||
+        argument == '--process-notifications' ||
+        argument == '--seed-demo' ||
         argument == '--bootstrap-admin' ||
         argument == '--bootstrap-owner' ||
         argument == '--password-stdin') {
