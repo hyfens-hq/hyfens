@@ -246,8 +246,10 @@
     loginView: document.querySelector('#login-view'),
     appView: document.querySelector('#app-view'),
     authModeTabs: [...document.querySelectorAll('[data-auth-mode]')],
+    authModeSwitcher: document.querySelector('.auth-mode-switcher'),
     loginForm: document.querySelector('#login-form'),
     registerForm: document.querySelector('#register-form'),
+    invitationForm: document.querySelector('#invitation-form'),
     apiBase: document.querySelector('#api-base'),
     email: document.querySelector('#email'),
     password: document.querySelector('#password'),
@@ -274,6 +276,12 @@
     recoveryBack: document.querySelector('#recovery-back'),
     recoveryMessage: document.querySelector('#recovery-message'),
     forgotPassword: document.querySelector('#forgot-password'),
+    invitationSummary: document.querySelector('#invitation-summary'),
+    invitationEmail: document.querySelector('#invitation-email'),
+    invitationPassword: document.querySelector('#invitation-password'),
+    invitationPasswordConfirm: document.querySelector('#invitation-password-confirm'),
+    invitationSubmit: document.querySelector('#invitation-submit'),
+    invitationMessage: document.querySelector('#invitation-message'),
     intakeModeTabs: [...document.querySelectorAll('[data-intake-kind][role="tab"]')],
     intakeForm: document.querySelector('#public-intake-form'),
     intakeEmail: document.querySelector('#intake-email'),
@@ -284,9 +292,6 @@
     intakeSubmit: document.querySelector('#intake-submit'),
     intakeMessage: document.querySelector('#intake-message'),
     intakeSection: document.querySelector('#onboarding-intake'),
-    discoveryCallout: document.querySelector('.discovery-callout'),
-    discoveryStatus: document.querySelector('#discovery-status'),
-    discoveryDetail: document.querySelector('#discovery-detail'),
     sidebar: document.querySelector('#sidebar'),
     platformSidebar: document.querySelector('#platform-sidebar'),
     sidebarBrand: document.querySelector('#sidebar-brand'),
@@ -397,7 +402,23 @@
     };
   }
 
+  function readInvitationToken() {
+    const pathSegments = window.location.pathname
+      .replace(/^\/+|\/+$/g, '')
+      .split('/')
+      .filter(Boolean);
+    if (pathSegments[0] === 'invite' && pathSegments[1]) {
+      try {
+        return decodeURIComponent(pathSegments[1]);
+      } catch (error) {
+        return null;
+      }
+    }
+    return new URLSearchParams(window.location.search).get('invitation')?.trim() || null;
+  }
+
   const initialRoute = readRoute();
+  const initialInvitationToken = readInvitationToken();
   const state = {
     api: null,
     endpoint: '',
@@ -789,6 +810,24 @@
         await this.request(
           `v1/organizations/${encodeURIComponent(organizationId)}/members`,
           { requiresAuth: true, signal },
+        ),
+      );
+    }
+
+    async previewOrganizationInvitation(token) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organization-invitations/${encodeURIComponent(token)}`,
+          { retry: false },
+        ),
+      );
+    }
+
+    async acceptOrganizationInvitation(token, body) {
+      return unwrapPayload(
+        await this.request(
+          `v1/organization-invitations/${encodeURIComponent(token)}`,
+          { method: 'POST', body, retry: false },
         ),
       );
     }
@@ -3746,40 +3785,16 @@
       : 'Waiting for first request';
   }
 
-  function renderDiscoveryStatus() {
-    const discovery = state.discovery;
-    nodes.discoveryCallout.dataset.state = discovery.status === 'available' ? 'success' : discovery.status === 'error' ? 'error' : 'warning';
-    if (discovery.status === 'available') {
-      nodes.discoveryStatus.textContent = 'Instance discovered';
-      nodes.discoveryDetail.textContent = 'Compatibility metadata is available for the configured control plane.';
-      return;
-    }
-    if (discovery.status === 'checking') {
-      nodes.discoveryStatus.textContent = 'Checking instance discovery';
-      nodes.discoveryDetail.textContent = 'The dashboard checks the configured control plane before sign-in.';
-      return;
-    }
-    if (discovery.status === 'unavailable') {
-      nodes.discoveryStatus.textContent = 'Discovery unavailable';
-      nodes.discoveryDetail.textContent = 'This instance does not expose /.well-known/hyfens. Sign-in uses only the known auth contract; unadvertised capabilities stay unavailable.';
-      return;
-    }
-    nodes.discoveryStatus.textContent = 'Discovery could not be checked';
-    nodes.discoveryDetail.textContent = 'Check the endpoint and network before relying on capability state.';
-  }
-
   async function probeDiscovery(endpoint = null) {
     let base;
     try {
       base = normalizeEndpoint(endpoint ?? nodes.apiBase.value);
     } catch (error) {
       state.discovery = { status: 'error', endpoint: '' };
-      renderDiscoveryStatus();
       return state.discovery;
     }
     if (state.discovery.endpoint === base && state.discovery.status !== 'checking') return state.discovery;
     state.discovery = { status: 'checking', endpoint: base };
-    renderDiscoveryStatus();
     const probe = new DashboardApi(base);
     try {
       const payload = await probe.discover();
@@ -3792,7 +3807,6 @@
         error,
       };
     }
-    renderDiscoveryStatus();
     return state.discovery;
   }
 
@@ -3817,12 +3831,14 @@
   function hideAuxiliaryAuthForms() {
     setAuxiliaryAuthForm(nodes.verificationForm, false);
     setAuxiliaryAuthForm(nodes.recoveryForm, false);
+    setAuxiliaryAuthForm(nodes.invitationForm, false);
   }
 
   function showAuthMode(mode, { focus = true, focusTarget = 'form' } = {}) {
     const nextMode = mode === 'register' ? 'register' : 'login';
     const register = nextMode === 'register';
     hideAuxiliaryAuthForms();
+    if (nodes.authModeSwitcher) nodes.authModeSwitcher.hidden = false;
     setAuthFormState(nodes.loginForm, register);
     setAuthFormState(nodes.registerForm, !register);
     nodes.authModeTabs.forEach((tab) => {
@@ -3859,6 +3875,22 @@
     setAuxiliaryAuthForm(nodes.recoveryForm, true);
     setRecoveryMessage('', '');
     nodes.recoveryEmail?.focus({ preventScroll: true });
+  }
+
+  function showInvitationMode({ focus = false } = {}) {
+    if (nodes.authModeSwitcher) nodes.authModeSwitcher.hidden = true;
+    nodes.authModeTabs.forEach((tab) => {
+      tab.setAttribute('aria-selected', 'false');
+      tab.tabIndex = -1;
+    });
+    setAuthFormState(nodes.loginForm, true);
+    setAuthFormState(nodes.registerForm, true);
+    setAuxiliaryAuthForm(nodes.verificationForm, false);
+    setAuxiliaryAuthForm(nodes.recoveryForm, false);
+    setAuxiliaryAuthForm(nodes.invitationForm, true);
+    setLoginMessage('', '');
+    setRegisterMessage('', '');
+    if (focus) nodes.invitationEmail?.focus({ preventScroll: true });
   }
 
   function handleAuthModeKeydown(event) {
@@ -3917,7 +3949,7 @@
   async function handleLogin(event) {
     event.preventDefault();
     invalidateOverviewRequest();
-    setLoginMessage('Connecting to the control plane...', 'pending');
+    setLoginMessage('Signing you in...', 'pending');
     nodes.loginSubmit.disabled = true;
     const password = nodes.password.value;
     nodes.password.value = '';
@@ -3988,6 +4020,85 @@
       nodes.registerPassword.value = '';
       nodes.registerPasswordConfirm.value = '';
     }
+  }
+
+  async function bootstrapInvitation() {
+    if (!initialInvitationToken || !nodes.invitationForm) return;
+    showInvitationMode();
+    setInvitationMessage('Checking invitation…', 'pending');
+    nodes.invitationSubmit.disabled = true;
+    try {
+      const endpoint = configuredEndpoint();
+      await probeDiscovery(endpoint);
+      const api = new DashboardApi(endpoint);
+      const preview = await api.previewOrganizationInvitation(initialInvitationToken);
+      const organization = stringValue(pick(preview, 'organization')) ?? 'your organization';
+      const role = stringValue(pick(preview, 'role')) ?? 'member';
+      const email = stringValue(pick(preview, 'email')) ?? '';
+      const active = pick(preview, 'active') === true;
+      nodes.invitationSummary.textContent = active
+        ? 'You have been invited to ' + organization + ' as ' + role + '. Use the invited email to create your account and join the organization.'
+        : 'This invitation is no longer available.';
+      nodes.invitationEmail.value = email;
+      nodes.invitationEmail.readOnly = Boolean(email);
+      nodes.invitationSubmit.disabled = !active;
+      setInvitationMessage(
+        active
+          ? 'Confirm your invited email and create a password to continue.'
+          : 'Request a new invitation from an organization administrator.',
+        active ? '' : 'error',
+      );
+    } catch (error) {
+      nodes.invitationSummary.textContent = 'This invitation could not be loaded.';
+      nodes.invitationSubmit.disabled = true;
+      setInvitationMessage(invitationErrorMessage(error), 'error');
+    }
+  }
+
+  async function handleInvitationAcceptance(event) {
+    event.preventDefault();
+    if (!initialInvitationToken || nodes.invitationSubmit.disabled) return;
+    setInvitationMessage('Accepting invitation…', 'pending');
+    nodes.invitationSubmit.disabled = true;
+    const email = nodes.invitationEmail.value.trim();
+    const password = nodes.invitationPassword.value;
+    const confirmation = nodes.invitationPasswordConfirm.value;
+    let api = null;
+    try {
+      if (!email || !password || !confirmation) throw new Error('Email and password are required.');
+      if (password !== confirmation) throw new Error('Passwords do not match.');
+      const endpoint = configuredEndpoint();
+      await probeDiscovery(endpoint);
+      api = new DashboardApi(endpoint);
+      const response = await api.acceptOrganizationInvitation(initialInvitationToken, { email, password });
+      const login = objectValue(pick(response, 'login'));
+      clearInvitationRoute();
+      if (login) {
+        await establishAuthenticatedSession(api, endpoint, login);
+        return;
+      }
+      setInvitationMessage('Invitation already accepted. Sign in to continue.', 'success');
+      showAuthMode('login', { focus: true });
+      nodes.email.value = email;
+    } catch (error) {
+      api?.clear();
+      setInvitationMessage(invitationErrorMessage(error), 'error');
+      nodes.invitationSubmit.disabled = false;
+    } finally {
+      nodes.invitationPassword.value = '';
+      nodes.invitationPasswordConfirm.value = '';
+    }
+  }
+
+  function clearInvitationRoute() {
+    const url = new URL(window.location.href);
+    const segments = url.pathname.split('/').filter(Boolean);
+    if (segments[0] === 'invite') {
+      const remaining = segments.slice(2);
+      url.pathname = remaining.length ? '/' + remaining.join('/') : '/';
+    }
+    url.searchParams.delete('invitation');
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash);
   }
 
   async function handleVerification(event) {
@@ -4273,7 +4384,7 @@
       nodes.loginView.hidden = false;
       showAuthMode('login', { focus: false });
       clearStoredSession();
-      setLoginMessage(loginErrorMessage(error), 'error');
+      setLoginMessage(loginErrorMessage(error, { restoring: true }), 'error');
       return false;
     }
   }
@@ -4305,14 +4416,23 @@
     };
   }
 
-  function loginErrorMessage(error) {
+  function loginErrorMessage(error, { restoring = false } = {}) {
+    if (error instanceof SessionExpiredError) return 'Your session expired. Sign in again.';
     if (error instanceof ApiError && error.code === 'EMAIL_VERIFICATION_REQUIRED') return 'Verify your email before signing in.';
+    if (error instanceof ApiError && error.status === 401 && error.path === 'auth/login') {
+      return 'Email or password is incorrect.';
+    }
     if (error instanceof ApiError && error.status === 401) return 'Email or password is invalid, or the session could not be established.';
-    if (error instanceof ApiError && error.status === 404) return 'The configured control plane does not expose the shared auth route.';
-    if (error instanceof ApiError && error.status === 503) return 'Human authentication is not configured on this control plane.';
+    if (error instanceof ApiError && error.status === 404) {
+      return 'Sign-in is not available on this control plane.';
+    }
+    if (error instanceof ApiError && error.status === 503) {
+      return 'Sign-in is temporarily unavailable. Try again later.';
+    }
     if (error instanceof Error && error.message.includes('endpoint')) return error.message;
-    if (error instanceof Error && error.message.includes('membership')) return error.message;
-    return 'Sign-in could not be completed. Check the endpoint and try again.';
+    if (error instanceof Error && error.message.includes('membership')) return 'Your account is not connected to a workspace.';
+    if (restoring) return 'Your saved session could not be restored. Sign in again.';
+    return 'Sign-in could not be completed. Check your details and try again.';
   }
 
   function registrationErrorMessage(error) {
@@ -4321,7 +4441,7 @@
     if (error instanceof ApiError && error.status === 404) return 'Account creation is not available on this control plane.';
     if (error instanceof ApiError && error.status === 503) return 'Account creation is not currently available. Try again later.';
     if (error instanceof Error && error.message.includes('endpoint')) return error.message;
-    if (error instanceof Error && error.message.includes('membership')) return error.message;
+    if (error instanceof Error && error.message.includes('membership')) return 'Your account could not be connected to a workspace.';
     return 'Account creation could not be completed. Check your details and try again.';
   }
 
@@ -5624,6 +5744,7 @@
   });
   nodes.loginForm.addEventListener('submit', handleLogin);
   nodes.registerForm.addEventListener('submit', handleRegistration);
+  nodes.invitationForm?.addEventListener('submit', handleInvitationAcceptance);
   nodes.verificationForm?.addEventListener('submit', handleVerification);
   nodes.verificationResend?.addEventListener('click', handleVerificationResend);
   nodes.recoveryForm?.addEventListener('submit', handleRecovery);
@@ -5724,7 +5845,6 @@
   setTheme('dark');
   handleAccountMenuToggle();
   syncSidebarAccessibility();
-  renderDiscoveryStatus();
 
   async function bootstrapSession() {
     try {
@@ -5751,5 +5871,6 @@
     }
   }
 
-  bootstrapSession();
+  if (initialInvitationToken) bootstrapInvitation();
+  else bootstrapSession();
 })();
