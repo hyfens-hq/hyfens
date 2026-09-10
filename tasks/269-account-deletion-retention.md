@@ -143,3 +143,183 @@ acceptance and final policy/operational decisions remain external.
   typecheck/lint/build passed. The broader package test command still reports
   unrelated pre-existing observation/reconciliation/credential failures, so
   no broader-suite success is claimed.
+
+## Follow-up correction — 2026-09-10
+
+Status remains `CODE_VERIFIED`. The launch policy is now explicit: a verified
+request is scheduled for seven working days, not seven elapsed calendar days.
+The verification business date is day 1 when it is a configured Monday-Friday
+business date; otherwise the next business date is day 1. Day 5 and day 7
+reminders are durable notification events, and the existing bounded worker may
+begin staged processing at the start of day 8. `processingAt` is persisted and
+is the shared authority for the worker, UI, and notifications.
+
+The grace state is recoverable but restricted server-side. Product mutations,
+new credentials, checkout, plan changes, deployment operations, and ordinary
+tenant reads are rejected with a deletion-pending domain error. Deletion
+status, privacy/policy, safe billing status, ownership-resolution data, and
+cancellation remain available. Authenticated and no-login cancellation use the
+existing strong confirmation or a purpose-bound hashed cancellation token;
+opening a link does not mutate state. The worker and cancellation use the
+existing durable compare-and-set seam, so cancellation exactly before a worker
+claim wins deterministically and stale reminders become no-ops.
+
+The customer API now returns a bounded status projection rather than worker
+credential references. Verification and acknowledgement copy include the
+server-owned processing date, restriction, billing/refund separation, and a
+secure cancellation action. The final completion notification remains after
+the existing staged taxonomy/object/tombstone processing, not when processing
+merely starts.
+
+Configuration is explicit through `HYFENS_DELETION_GRACE_PERIOD=7d`,
+`HYFENS_DELETION_BUSINESS_TIMEZONE` (UTC default; `Asia/Kolkata` and fixed
+offsets supported), and optional `HYFENS_DELETION_HOLIDAYS`. The implementation
+does not invent jurisdiction-specific holidays or statutory retention periods;
+calendar/legal wording, backup rotation, and financial/security/Enterprise
+evidence durations remain Task 259 decisions. Backup copies are temporary
+retain until normal rotation and are not represented as instantly erased.
+
+Organization deletion cancellation remains available until the worker claims
+irreversible processing. If provider renewal cancellation has already been
+scheduled, cancellation restores local organization access but retains and
+surfaces the provider billing state rather than silently reactivating renewal.
+The public cancellation response uses the bounded customer projection and does
+not expose credential references or worker internals.
+
+Focused validation on this correction passed: control-plane analyzer,
+deletion tests including weekend/holiday scheduling, day-5 reminder
+idempotency, cancellation stale-job no-op behavior, staged deletion, and
+shared-object safety. Cloud validation remains required after the final UI
+projection changes.
+
+## Policy resolution and final affected-scope validation — 2026-09-10
+
+The earlier `POLICY_DECISION_REQUIRED: deletion_grace_period` blocker is
+superseded by the approved managed-Cloud policy: deletion uses a seven
+working-day grace period, with staged processing eligible at the start of
+working day 8. The business calendar remains explicitly configured: Monday
+through Friday, a configured business timezone, and only explicitly supplied
+holiday dates. No jurisdiction-specific holidays or statutory retention
+durations are inferred.
+
+Final affected-scope validation passed on the working-day correction:
+
+- `dart test test/deletion_test.dart test/human_auth_test.dart test/human_auth_http_test.dart test/customer_onboarding_test.dart test/customer_billing_test.dart test/notifications_test.dart` — 52 tests passed.
+- `dart analyze .` in `packages/control_plane` — no issues found.
+- `dart format --output=none --set-exit-if-changed` for all changed Dart files — passed with no changes.
+- Cloud `npm run typecheck:web` — passed.
+- Cloud `npm run lint:web` — passed.
+- Cloud `npm run build:web` — passed, including the account-deletion and privacy routes.
+- `git diff --check` — passed on both task branches.
+
+Managed mailbox, provider, backup/restore, and production-policy acceptance
+remain operational Task 259 gates; this correction does not claim those as
+completed.
+
+## Review correction — 2026-09-10
+
+The final spec review identified and closed several concrete gaps. Cloud
+organization-scoped credentials are revoked at the start of the grace state;
+pending personal deletion blocks new organization creation; public deletion
+routes are explicitly Cloud-only; failed requests remain eligible for bounded
+worker retry; reminder processing re-reads durable state and is serialized with
+local cancellation; and cancellation tokens bind to a persisted request
+generation so a token from an earlier cancelled request cannot cancel a later
+request for the same organization. Staged organization cleanup now deletes
+credential records by their token-hash storage key, preserving the existing
+retention/evidence model. The Cloud privacy surface shows retained provider
+cancellation state without exposing internal references.
+
+Review findings that were refactoring-level smells only (module divergence and
+small duplicated UI/auth checks) were intentionally left unchanged to avoid
+scope expansion. The repository-required signed-off commit trailer is present
+on the final control-plane commit.
+
+## Re-request correction — 2026-09-10
+
+An additional focused audit found that a cancelled request could otherwise
+reuse its old processing schedule and notification identity. Resubmitted
+requests now increment the persisted generation, recalculate the working-day
+schedule from the new verification time, and use generation-scoped
+acknowledgement/reminder/cancellation/completion notification identities.
+This preserves idempotency without suppressing communication for a new
+request. Organization credentials revoked by a pending deletion are restored
+only when that request is cancelled, while independently revoked credentials
+remain revoked. The regression is covered by the deletion test suite.
+
+## Managed deployment and deletion acceptance evidence — 2026-09-10
+
+The root-authorized current control-plane image was deployed through the
+corrected protected wrapper. The image contains the working-day deletion
+implementation and the current notification-copy correction; the deployed
+`deletion.dart`, `http.dart`, and notification regression-test hashes match the
+checked-out control-plane sources. The deletion and notification systemd
+timers are enabled and active, and manual worker runs complete successfully.
+
+The managed business calendar is configured as Monday-Friday in UTC with no
+implicit holidays. For the completed disposable organization request,
+verification occurred on 2026-09-10; the server persisted working day 5 as
+2026-09-16, working day 7 as 2026-09-18, and processing eligibility as
+2026-09-21 (the start of working day 8). The dates were read from the durable
+request projection; no database timestamps or host clock were edited.
+
+### Acceptance A — cancellation during grace
+
+- A disposable customer was created through the public signup and verification
+  flow. The sole-owner personal deletion path correctly required ownership
+  resolution instead of orphaning the organization.
+- Organization deletion was then requested through the authenticated privacy
+  surface. The account entered the persisted pending/grace state, retained
+  its data, and exposed the deletion-only status/cancellation surface.
+- Normal tenant mutations were restricted server-side. Billing status and the
+  deletion status/cancellation operation remained available.
+- Day-5 and day-7 reminder jobs each produced exactly one notification in the
+  managed run. Cancellation was completed through the password-confirmed
+  deletion flow, and the cancellation acknowledgement reached the owned test
+  mailbox.
+- A current-image day-8 replay after cancellation processed zero requests.
+  This verifies stale processing/reminder work is a no-op after the durable
+  cancellation compare-and-set. No refund record or provider refund was
+  created, and provider billing was not falsely reported as restored.
+
+### Acceptance B — staged organization deletion
+
+- A second disposable organization was verified for deletion and allowed to
+  reach day 5, day 7, and day 8 through the supported test-clock seam.
+- The managed deletion worker processed one due request and reported one
+  completed request. The notification worker processed the completion event.
+  The owned mailbox contained one deletion-verification, one immediate
+  acknowledgement, one day-5 reminder, one day-7 reminder, and one completion
+  message for this request. Provider state was recorded as accepted; the
+  mailbox receipt is the delivery evidence, and no unsupported provider
+  callback correlation is claimed here.
+- The organization record reached the explicit deleted state used as the
+  Cloud tombstone, with a completion timestamp and no automatic refund. The
+  retained billing projection resolved to the internal Free assignment rather
+  than leaving a paid entitlement active.
+- The worker completed through the existing bounded staged taxonomy and did
+  not execute a synchronous database cascade. The completion notification was
+  emitted only after the request reached its completed/tombstoned state.
+
+### Acceptance boundaries
+
+The following remain unclaimed as managed evidence: a final personal-account
+deletion after ownership resolution, managed shared-object physical-retention
+acceptance, backup restore, and deletion-tombstone reconciliation after
+restoring an old backup. Shared content-addressed object safety and staged
+retry behavior remain covered by the focused control-plane tests. Backup
+infrastructure is not proven on the managed host, so backup copies remain a
+`TEMPORARY_RETAIN`/operations-policy boundary rather than an assertion of
+immediate erasure.
+
+The mailbox run predates the final lifecycle copy correction in one captured
+completion message. Current source-level notification tests pass, and the
+deployed image hashes match the corrected sources; a fresh mailbox capture of
+the corrected completion body is still a follow-up acceptance item. The
+correction removes repeated product-name copy while retaining the shared
+Hyfens shell branding.
+
+The overall task remains `CODE_VERIFIED`: application behavior is locally
+verified and organization deletion has partial managed evidence, but this
+task does not claim complete managed deletion, backup/restore, or legal
+retention acceptance.

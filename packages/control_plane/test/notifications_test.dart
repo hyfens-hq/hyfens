@@ -95,6 +95,88 @@ void main() {
     expect(rendered.html, isNot(contains('undefined')));
   });
 
+  test('customer emails show the Hyfens mark once in each body format', () {
+    final brand = RegExp(r'\bhyfens\b', caseSensitive: false);
+    final url = RegExp(r'https?://[^\s"<>]+');
+    final tags = RegExp(r'<[^>]*>');
+
+    String visibleHtml(String value) =>
+        value.replaceAll(url, '').replaceAll(tags, ' ');
+    String visibleText(String value) => value.replaceAll(url, ' ');
+
+    for (final definition in NotificationCatalog.definitions) {
+      final rendered = NotificationPreview.render(key: definition.key);
+      expect(
+        brand.allMatches(visibleHtml(rendered.html)).length,
+        1,
+        reason: '${definition.key} HTML',
+      );
+      expect(
+        brand.allMatches(visibleText(rendered.text)).length,
+        1,
+        reason: '${definition.key} text',
+      );
+    }
+  });
+
+  test('customer lifecycle copy does not repeat the product name', () {
+    final brand = RegExp(r'\bhyfens\b', caseSensitive: false);
+    final url = RegExp(r'https?://[^\s"<>]+');
+    final tags = RegExp(r'<[^>]*>');
+    final cases = <(String, String)>[
+      (
+        'billing.checkout.initiated',
+        'Your secure checkout is ready to continue.',
+      ),
+      (
+        'billing.refund.failed',
+        'The payment provider could not complete the approved refund. We will retry or reconcile it.',
+      ),
+      (
+        'account.deletion.cancelled',
+        'Your account deletion request was cancelled.',
+      ),
+      ('account.deleted', 'Your account deletion is complete.'),
+      (
+        'organization.deleted',
+        'Deletion of your organization and its customer-owned data is complete. Required evidence remains according to policy.',
+      ),
+    ];
+
+    for (final (key, message) in cases) {
+      final rendered = notifications.renderer.render(
+        NotificationEvent(
+          key: key,
+          stableKey: 'copy:$key',
+          recipientEmails: const <String>['preview@example.invalid'],
+          variables: <String, Object?>{
+            'message': message,
+            'organization': 'Example workspace',
+            'plan': 'Team',
+            'amount': 'USD 199.00',
+            'effective_at': '2026-09-30',
+            'payment_id': 'payment_preview',
+            'status': 'Failed',
+          },
+          occurredAt: DateTime.utc(2026, 9, 9, 12),
+          source: 'preview',
+        ),
+      );
+      expect(
+        brand
+            .allMatches(rendered.html.replaceAll(url, '').replaceAll(tags, ' '))
+            .length,
+        1,
+        reason: '$key HTML',
+      );
+      expect(
+        brand.allMatches(rendered.text.replaceAll(url, '')).length,
+        1,
+        reason: '$key text',
+      );
+    }
+  });
+
   test('Keplars adapter records the current top-level provider id', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     try {
@@ -231,10 +313,7 @@ void main() {
     expect(await notifications.dispatchPending(), 1);
     expect(await notifications.dispatchPending(), 0);
     expect(provider.messages, hasLength(1));
-    expect(
-      provider.messages.single.subject,
-      'Payment received for Hyfens Cloud',
-    );
+    expect(provider.messages.single.subject, 'Payment received');
     expect(provider.messages.single.text, contains('USD 199.00'));
     expect(
       (await store.listJson(notificationDeliveryCollection)).single['state'],
@@ -611,7 +690,7 @@ void main() {
           'event_type': 'email.delivered',
           'email_id': 'provider-id-for-another-message',
           'recipient': 'owner@example.com',
-          'subject': 'Payment received for Hyfens Cloud',
+          'subject': 'Payment received',
         }),
       );
       final digest = Hmac(
@@ -641,7 +720,7 @@ void main() {
       final auditJson = jsonEncode(unmatchedAudit.single);
       expect(auditJson, isNot(contains('provider-id-for-another-message')));
       expect(auditJson, isNot(contains('owner@example.com')));
-      expect(auditJson, isNot(contains('Payment received for Hyfens Cloud')));
+      expect(auditJson, isNot(contains('Payment received')));
     },
   );
 

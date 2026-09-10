@@ -297,3 +297,135 @@ and retention decisions are approved.
   untouched `app.hyfens.com` onboarding surface remains stale; backup/restore,
   Enterprise payment, deletion completion, mailbox ownership, role ownership,
   and legal/tax retention gates remain open. Verdict remains `NOT_READY`.
+
+## Deletion lifecycle policy correction — 2026-09-10
+
+Task 269 follow-up now records the approved managed-Cloud grace policy as
+seven **working** days. The verification business date is day 1 when it is a
+Monday-Friday date not listed in the explicit holiday configuration; day 5 and
+day 7 reminders are persisted notification jobs; staged processing becomes
+eligible at the start of day 8. The server persists `processingAt` and exposes
+the same date to the UI and email. It is not derived from `7 * 24 hours`.
+
+During grace, the existing control-plane authorization boundary rejects normal
+tenant mutations and ordinary reads with deletion-pending errors while keeping
+status, safe billing status, ownership resolution, privacy/policy, and
+cancellation available. Cancellation and worker claiming use compare-and-set;
+stale reminders are no-ops. Organization billing remains separate: deletion
+stops future renewal through Task 270, creates no refund, and does not silently
+reverse an irreversible provider cancellation.
+
+The correction is locally code-verified. It does not close Task 259 managed
+acceptance: real mailbox cadence, managed time-seam acceptance, final staged
+deletion, backup/restore/tombstone rehearsal, operational ownership, and legal
+holiday/backup/financial/security/Enterprise retention decisions remain
+external gates. No statutory duration was invented.
+
+The subsequent review correction also verified that pending personal deletion
+cannot create a new Cloud organization, self-hosted deployments do not expose
+Cloud deletion routes, organization credentials are revoked before staged
+cleanup, failed requests remain retryable, and cancellation links are bound to
+request generations. These are application-level closures only; they do not
+advance the managed acceptance verdict or resolve the external backup, email,
+tax, legal, and retention gates.
+
+## Task 269 working-day correction validation — 2026-09-10
+
+The approved deletion grace policy is seven working days, not seven elapsed
+calendar days. The implementation persists the server-owned business-calendar
+schedule, day-5/day-7 reminder milestones, and day-8 processing timestamp;
+server authorization restricts pending accounts and organizations while the
+request remains recoverable. Cancellation and worker claim use durable
+compare-and-set state transitions, and provider billing cancellation is not
+silently reversed.
+
+The affected control-plane tests, analyzer, formatting check, Cloud web
+typecheck/lint/build, and `git diff --check` passed. This is code-level
+validation only. Task 259 remains `NOT_READY` for managed mailbox cadence,
+managed deletion completion, backup/restore/tombstone evidence, operational
+ownership, and unresolved legal/tax/evidence-retention decisions.
+
+## Managed deletion and deployment follow-up — 2026-09-10
+
+Root-authorized deployment is now operational for the current composition:
+
+- the corrected control-plane wrapper built and deployed the current source
+  layout; `/healthz` and `/readyz` remain 200;
+- the corrected public-edge configuration was installed and the exact pricing
+  upstream was repaired without changing the `app.hyfens.com` target;
+- the protected environments remain root-owned with mode 0600, and status-only
+  checks confirm the TEST Razorpay, billing bridge, Keplars, notification,
+  SMTP, and `HYFENS_DELETION_GRACE_PERIOD=7d` settings are present;
+- the deletion and notification timers are enabled and active, with successful
+  manual runs and zero due work after the cancelled-request replay.
+
+The live route smoke after deployment returned 200 for `/`, `/pricing`,
+`/pricing.md`, `/terms`, `/privacy`, `/refund-policy`, `/account-deletion`,
+and `/api/pricing`. The webhook endpoint returned the expected 405 to GET.
+`api.hyfens.com/healthz` and `/readyz` returned 200. `app.hyfens.com` was not
+cut over or otherwise intentionally modified.
+
+### Managed deletion evidence
+
+The working-day managed run used the explicit UTC Monday-Friday calendar with
+no implicit holiday list. A disposable organization verified on 2026-09-10
+persisted day 5 as 2026-09-16, day 7 as 2026-09-18, and day 8 processing as
+2026-09-21. No database timestamps or host clock were edited.
+
+Acceptance A completed the cancellation path: pending organization deletion
+remained restricted and recoverable, day-5/day-7 notifications were each
+generated once, password-confirmed cancellation restored normal local access,
+and the current-image day-8 replay processed zero requests. It created no
+refund and did not pretend an irreversible provider cancellation had been
+reversed.
+
+Acceptance B completed the managed organization-deletion path for a separate
+disposable organization. The worker processed one due request and completed
+it through the staged deletion/tombstone state; the notification worker then
+processed the completion event. The owned mailbox contained one verification,
+one immediate acknowledgement, one day-5 reminder, one day-7 reminder, and
+one completion message. Provider notification records are `accepted`; mailbox
+receipt is the delivery evidence, and no unverified provider callback delivery
+state is claimed. The completed organization has the explicit deleted state
+used as the Cloud tombstone and no refund record.
+
+These runs do not close managed personal-account deletion after ownership
+resolution, managed shared-object physical-retention acceptance, or backup
+restore/tombstone reconciliation. The shared-object and retry invariants
+remain code-tested. The current lifecycle email source and deployed image
+contain the final reduced-brand-copy correction; one earlier captured
+completion email predates that correction and is not used as visual evidence
+for the corrected body.
+
+### Current launch blockers
+
+Task 259 remains `NOT_READY` because the managed host still has no proven
+Hyfens database backup/off-host encrypted rotation or isolated restore
+rehearsal, and deletion resurrection protection after restoring an old backup
+has not been evidenced. Role-based operational ownership is not recorded.
+Tax handling and legally approved financial, security/audit, Enterprise
+commercial, and backup wording/retention decisions remain open. The live
+policy pages require legal/maintainer approval, and `/api/pricing` currently
+exposes the public free catalog as `developer` while the approved customer
+language calls it `Free`; this naming/content discrepancy remains a policy
+review item rather than an unapproved silent rewrite.
+
+The managed acceptance matrix is therefore updated as follows: organization
+deletion is partially managed-verified, account deletion remains partial,
+backup retention remains unverified, and the deployed/test billing and route
+evidence do not constitute LIVE or public-cutover approval. Task 256B remains
+`DO_NOT_CUT_OVER`.
+
+### Managed acceptance delta matrix
+
+This append-only delta supersedes the older pre-deployment rows above without
+rewriting their historical evidence:
+
+| Workflow | Current managed state | Current operational state |
+| --- | --- | --- |
+| Organization deletion | Partial: cancellation and staged completion runs passed | No backup/resurrection proof; no public launch |
+| Account deletion | Partial: no-login/ownership gates covered; final personal deletion not run | Email/cadence and ownership operations still incomplete |
+| Deletion worker | Verified for bounded managed cancellation replay and completion | Timer active; retry/failure ownership not assigned |
+| Deletion notifications | Mailbox receipt observed once for verification, acknowledgement, day 5, day 7, and completion | Provider delivery telemetry remains subject to the external Keplars correlation blocker |
+| Backup/restore | Not verified | No proven managed backup, off-host rotation, isolated restore, or resurrection rehearsal |
+| Policy/catalog | Routes deployed and reachable | Legal approval pending; public free-plan naming is `developer` in `/api/pricing` vs approved `Free` copy |

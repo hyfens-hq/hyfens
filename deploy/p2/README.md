@@ -95,6 +95,13 @@ lock. It drains durable notification deliveries asynchronously using the
 protected control-plane environment; it does not run from HTTP or provider
 webhook requests.
 
+For managed TEST acceptance only, the deletion worker exposes a guarded clock
+seam. Run the worker with `--process-deletions-at <UTC-ISO-8601>` while the
+process environment contains `HYFENS_DELETION_TEST_CLOCK=1` and
+`RAZORPAY_MODE=test`. The command rejects the override in any other mode, and
+the normal systemd timer never supplies it. This advances the service's
+persisted business-calendar evaluation without mutating deletion timestamps.
+
 The control plane is deliberately configured with customer/local signing
 authority. PostgreSQL and object storage persist and deliver bytes; they never
 verify or authorize runtime patches.
@@ -114,6 +121,8 @@ HYFENS_RAZORPAY_CURRENCY=USD
 HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR=4900
 HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR=19900
 HYFENS_DELETION_GRACE_PERIOD=7d
+HYFENS_DELETION_BUSINESS_TIMEZONE=UTC
+HYFENS_DELETION_HOLIDAYS=
 ```
 
 `HYFENS_BILLING_PROVIDER_TOKEN_HASH` is the lowercase SHA-256 digest of the
@@ -133,11 +142,29 @@ report only mode, presence, validated plan metadata, route reachability, and
 bridge scope. A default self-hosted operator must not set these values or
 expect Cloud billing routes to work.
 
-`HYFENS_DELETION_GRACE_PERIOD` is the reviewed managed-Cloud launch policy
-setting. The current launch default is seven days; it must be installed in the
-protected Cloud deployment only after the applicable legal/privacy review. An
-empty value remains valid for the default self-hosted development stack, where
-Cloud deletion is not exposed.
+`HYFENS_DELETION_GRACE_PERIOD` is the managed-Cloud launch policy setting and
+must use working-day syntax; the approved launch value is `7d`. The verified
+business date is working day 1 when it is Monday-Friday and not a configured
+holiday. Day 5 sends a reminder, day 7 sends the final reminder, and the
+bounded worker becomes eligible at the start of working day 8. The persisted
+`processingAt` value is authoritative; it is not calculated as seven times 24
+hours. `HYFENS_DELETION_BUSINESS_TIMEZONE` accepts `UTC`, `Asia/Kolkata`, or a
+fixed offset such as `+05:30`. `HYFENS_DELETION_HOLIDAYS` is an optional
+comma-separated `YYYY-MM-DD` list. No jurisdiction-specific holidays are
+assumed when the list is empty, so the deployment owner/legal reviewer must
+approve the calendar used for customer-facing dates. An empty grace value
+remains valid for the default self-hosted development stack, where Cloud
+deletion is not exposed.
+
+During grace, deletion is recoverable but product mutations are rejected
+server-side. Deletion status, privacy/policy information, safe billing status,
+ownership resolution, and cancellation remain available. Cancellation is
+allowed until the worker atomically claims `processing`; after that point the
+request is irreversible. Completion is not recorded until staged active-system
+erase/anonymization, retained-evidence writes, credential revocation, object
+cleanup, and the organization tombstone are complete. Encrypted backups may
+retain data until their normal rotation; the product must not promise instant
+erasure from historical backups.
 
 ## Human CLI authentication
 

@@ -15,41 +15,194 @@ const String accountDeletionRequestCollection = 'account_deletion_requests';
 const String organizationDeletionRequestCollection =
     'organization_deletion_requests';
 
-/// The product deliberately does not invent legal retention durations. A
-/// deployment supplies a reviewed grace period through configuration before
-/// deletion workers may process verified requests.
+/// A small deterministic business calendar for privacy deadlines.
+///
+/// The control plane intentionally supports UTC, Asia/Kolkata, and explicit
+/// fixed offsets without pretending to have an IANA timezone database. A
+/// deployment that needs a DST-observing timezone must supply a timezone-aware
+/// calendar at its integration boundary rather than silently using server
+/// local time.
+final class BusinessCalendar {
+  BusinessCalendar({
+    required this.businessTimeZone,
+    Iterable<String> holidays = const <String>[],
+  }) : _offset = _parseOffset(businessTimeZone),
+       holidays = Set.unmodifiable(_validateHolidays(holidays));
+
+  final String businessTimeZone;
+  final Duration _offset;
+  final Set<String> holidays;
+
+  DateTime scheduleAt({
+    required DateTime verifiedAt,
+    required int workingDaysAfter,
+  }) {
+    if (workingDaysAfter <= 0) {
+      throw ArgumentError.value(
+        workingDaysAfter,
+        'workingDaysAfter',
+        'must be positive',
+      );
+    }
+    var date = _localDate(verifiedAt);
+    var remaining = workingDaysAfter;
+    while (remaining > 0) {
+      date = date.add(const Duration(days: 1));
+      if (isBusinessDate(date)) remaining--;
+    }
+    return _startOfLocalDate(date);
+  }
+
+  /// Returns the start of a numbered working day, counting the verification
+  /// date as day 1 when it is a business date. Weekend/holiday verification
+  /// starts on the next configured business date. This keeps day 5, day 7,
+  /// and day 8 deadlines distinct and deterministic.
+  DateTime workingDayAt({
+    required DateTime verifiedAt,
+    required int workingDay,
+  }) {
+    if (workingDay <= 0) {
+      throw ArgumentError.value(workingDay, 'workingDay', 'must be positive');
+    }
+    var date = _localDate(verifiedAt);
+    var remaining = workingDay;
+    while (remaining > 0) {
+      if (isBusinessDate(date)) remaining--;
+      if (remaining > 0) date = date.add(const Duration(days: 1));
+    }
+    return _startOfLocalDate(date);
+  }
+
+  bool isBusinessDate(DateTime date) {
+    final local = DateTime.utc(date.year, date.month, date.day);
+    final key = _dateKey(local);
+    return local.weekday <= DateTime.friday && !holidays.contains(key);
+  }
+
+  String dateKeyAt(DateTime utc) => _dateKey(_localDate(utc));
+
+  DateTime _localDate(DateTime value) {
+    final shifted = value.toUtc().add(_offset);
+    return DateTime.utc(shifted.year, shifted.month, shifted.day);
+  }
+
+  DateTime _startOfLocalDate(DateTime date) {
+    return DateTime.utc(date.year, date.month, date.day).subtract(_offset);
+  }
+
+  static Duration _parseOffset(String value) {
+    final normalized = value.trim();
+    if (normalized == 'UTC' || normalized == 'Etc/UTC') {
+      return Duration.zero;
+    }
+    if (normalized == 'Asia/Kolkata' || normalized == 'Asia/Calcutta') {
+      return const Duration(hours: 5, minutes: 30);
+    }
+    final match = RegExp(r'^([+-])(\d{2}):(\d{2})$').firstMatch(normalized);
+    if (match == null) {
+      throw ArgumentError(
+        'HYFENS_DELETION_BUSINESS_TIMEZONE must be UTC, Asia/Kolkata, or a fixed offset such as +05:30',
+      );
+    }
+    final hours = int.parse(match.group(2)!);
+    final minutes = int.parse(match.group(3)!);
+    if (hours > 23 || minutes > 59) {
+      throw ArgumentError.value(
+        value,
+        'businessTimeZone',
+        'has an invalid offset',
+      );
+    }
+    final offset = Duration(hours: hours, minutes: minutes);
+    return match.group(1) == '-' ? -offset : offset;
+  }
+
+  static Set<String> _validateHolidays(Iterable<String> values) {
+    final result = <String>{};
+    for (final value in values) {
+      final normalized = value.trim();
+      if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(normalized)) {
+        throw ArgumentError.value(value, 'holidays', 'must use YYYY-MM-DD');
+      }
+      final parsed = DateTime.tryParse('${normalized}T00:00:00Z');
+      if (parsed == null || _dateKey(parsed) != normalized) {
+        throw ArgumentError.value(
+          value,
+          'holidays',
+          'contains an invalid date',
+        );
+      }
+      result.add(normalized);
+    }
+    return result;
+  }
+
+  static String _dateKey(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
+}
+
 final class DeletionPolicy {
-  const DeletionPolicy({this.gracePeriod});
+  const DeletionPolicy({
+    this.graceWorkingDays,
+    this.businessTimeZone = 'UTC',
+    this.holidayDates = const <String>[],
+  });
 
-  final Duration? gracePeriod;
+  final int? graceWorkingDays;
+  final String businessTimeZone;
+  final List<String> holidayDates;
 
-  bool get isConfigured => gracePeriod != null;
+  bool get isConfigured => graceWorkingDays != null;
+
+  BusinessCalendar get calendar => BusinessCalendar(
+    businessTimeZone: businessTimeZone,
+    holidays: holidayDates,
+  );
 
   static DeletionPolicy fromEnvironment(Map<String, String> values) {
     final raw = values['HYFENS_DELETION_GRACE_PERIOD']?.trim();
-    if (raw == null || raw.isEmpty) return const DeletionPolicy();
-    final match = RegExp(r'^([1-9][0-9]*)(s|m|h|d)$').firstMatch(raw);
+    final timezone = values['HYFENS_DELETION_BUSINESS_TIMEZONE']?.trim();
+    final holidays = values['HYFENS_DELETION_HOLIDAYS']
+        ?.split(',')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toList(growable: false);
+    if (raw == null || raw.isEmpty) {
+      if (timezone != null && timezone.isNotEmpty) {
+        BusinessCalendar(
+          businessTimeZone: timezone,
+          holidays: holidays ?? const <String>[],
+        );
+      }
+      if (holidays != null && holidays.isNotEmpty) {
+        BusinessCalendar(
+          businessTimeZone: timezone ?? 'UTC',
+          holidays: holidays,
+        );
+      }
+      return const DeletionPolicy();
+    }
+    final match = RegExp(r'^([1-9][0-9]*)d$').firstMatch(raw);
     if (match == null) {
       throw ArgumentError(
-        'HYFENS_DELETION_GRACE_PERIOD must use a duration such as 30d',
+        'HYFENS_DELETION_GRACE_PERIOD must use working days such as 7d',
       );
     }
     final amount = int.parse(match.group(1)!);
-    final duration = switch (match.group(2)) {
-      's' => Duration(seconds: amount),
-      'm' => Duration(minutes: amount),
-      'h' => Duration(hours: amount),
-      'd' => Duration(days: amount),
-      _ => throw ArgumentError(
-        'HYFENS_DELETION_GRACE_PERIOD has an unsupported unit',
-      ),
-    };
-    if (duration > const Duration(days: 365)) {
+    if (amount > 365) {
       throw ArgumentError(
-        'HYFENS_DELETION_GRACE_PERIOD must not exceed 365 days',
+        'HYFENS_DELETION_GRACE_PERIOD must not exceed 365 working days',
       );
     }
-    return DeletionPolicy(gracePeriod: duration);
+    final policy = DeletionPolicy(
+      graceWorkingDays: amount,
+      businessTimeZone: timezone == null || timezone.isEmpty ? 'UTC' : timezone,
+      holidayDates: List.unmodifiable(holidays ?? const <String>[]),
+    );
+    policy.calendar;
+    return policy;
   }
 }
 
@@ -106,6 +259,47 @@ const List<String> _organizationOwnedCollections = <String>[
   'credentials',
 ];
 
+/// Returns the bounded deletion projection exposed to a customer. Durable
+/// request records also contain worker state, credential references, and
+/// ownership internals that must never cross the customer API boundary.
+Map<String, Object?> deletionStatusForCustomer(Map<String, Object?> request) {
+  final result = <String, Object?>{
+    for (final key in const <String>[
+      'scope',
+      'status',
+      'stage',
+      'requestedAt',
+      'verifiedAt',
+      'processingAt',
+      'processingDate',
+      'workingDay5Date',
+      'workingDay7Date',
+      'businessTimeZone',
+      'businessDayPolicy',
+      'cancellationAllowed',
+      'billingCancellationRetained',
+      'restriction',
+      'cancelledAt',
+      'completedAt',
+      'blocker',
+    ])
+      if (request.containsKey(key) && request[key] != null) key: request[key],
+  };
+  final ownership = request['ownershipRequiredOrganizations'];
+  if (ownership is List && ownership.isNotEmpty) {
+    result['ownershipResolutionRequired'] = true;
+    result['ownershipResolutionCount'] = ownership.length;
+  }
+  final billingStop = request['billingStop'];
+  if (billingStop is Map) {
+    final status = billingStop['status'];
+    final plan = billingStop['effectivePlan'];
+    if (status is String) result['billingStopStatus'] = status;
+    if (plan is String) result['billingEffectivePlan'] = plan;
+  }
+  return result;
+}
+
 /// Account and organization privacy transitions share a durable request record
 /// and a bounded worker, but deliberately have different ownership effects.
 final class AccountDeletionService {
@@ -118,14 +312,14 @@ final class AccountDeletionService {
     this.policy = const DeletionPolicy(),
     DateTime Function()? clock,
   }) : _clock = clock ?? (() => DateTime.now().toUtc()) {
-    final gracePeriod = policy.gracePeriod;
-    if (gracePeriod != null &&
-        (gracePeriod <= Duration.zero ||
-            gracePeriod > const Duration(days: 365))) {
+    final graceWorkingDays = policy.graceWorkingDays;
+    if (graceWorkingDays != null &&
+        (graceWorkingDays <= 0 || graceWorkingDays > 365)) {
       throw ArgumentError(
-        'Deletion grace period must be greater than zero and no more than 365 days',
+        'Deletion grace period must be between 1 and 365 working days',
       );
     }
+    policy.calendar;
   }
 
   final ControlPlaneStore store;
@@ -143,10 +337,19 @@ final class AccountDeletionService {
     required String requestId,
     String source = 'authenticated',
   }) => _serialized(() async {
+    if (deploymentModel != DeploymentModel.cloud) {
+      throw const ControlPlaneException(
+        'CLOUD_DELETION_UNAVAILABLE',
+        'Account deletion is only available for Cloud accounts',
+        statusCode: 404,
+      );
+    }
     final id = _accountRequestId(userId);
     final existing = await store.readJson(accountDeletionRequestCollection, id);
     if (existing != null &&
-        (_terminalDeletionStatuses.contains(existing['status']) ||
+        (existing['status'] == 'completed' ||
+            existing['status'] == 'ownership_resolution_required' ||
+            existing['status'] == 'policy_decision_required' ||
             existing['status'] == 'grace_period' ||
             existing['status'] == 'processing' ||
             existing['status'] == 'failed')) {
@@ -162,6 +365,7 @@ final class AccountDeletionService {
       'scope': 'account',
       'userId': user.id,
       'requestedBy': actorId,
+      'requestGeneration': _requestGeneration(existing),
       'source': source,
       'status': requiredOwnership.isNotEmpty
           ? 'ownership_resolution_required'
@@ -169,10 +373,18 @@ final class AccountDeletionService {
       'stage': requiredOwnership.isNotEmpty ? 'ownership' : 'grace_period',
       'requestedAt': existing?['requestedAt'] ?? now.toIso8601String(),
       'verifiedAt': existing?['verifiedAt'] ?? now.toIso8601String(),
-      'gracePeriodEndsAt': existing?['gracePeriodEndsAt'] ?? _graceEndsAt(now),
+      ..._scheduleFields(
+        existing ?? const <String, Object?>{},
+        now,
+        enabled: requiredOwnership.isEmpty,
+        allowCancellation: true,
+      ),
       'ownershipRequiredOrganizations': requiredOwnership,
       'updatedAt': now.toIso8601String(),
       'attempt': existing?['attempt'] ?? 0,
+      'blockedCredentialIds':
+          existing?['blockedCredentialIds'] ??
+          await _credentialIdsForUser(user.id),
       if (existing?['createdAt'] != null) 'createdAt': existing!['createdAt'],
       if (existing?['createdAt'] == null) 'createdAt': now.toIso8601String(),
     };
@@ -213,8 +425,8 @@ final class AccountDeletionService {
       },
     );
     await _notify(
-      key: 'account.deletion.requested',
-      stableKey: accountRequestId,
+      key: 'account.deletion.verified',
+      stableKey: _deletionNotificationStableKey(request, 'verified'),
       recipient: user.email,
       organizationId: auditOrganizationId == 'system'
           ? null
@@ -222,12 +434,13 @@ final class AccountDeletionService {
       entityType: 'account_deletion_request',
       entityId: accountRequestId,
       correlationId: requestId,
-      variables: <String, Object?>{
-        'message': requiredOwnership.isNotEmpty
+      variables: await _deletionNotificationVariables(
+        request: request,
+        message: requiredOwnership.isNotEmpty
             ? 'Your account deletion request needs ownership resolution before it can proceed.'
-            : 'Your account deletion request is scheduled. You can cancel it during the grace period.',
-        'effective_at': request['gracePeriodEndsAt'],
-      },
+            : 'Your account deletion is scheduled for the end of the grace period. Your account is restricted to deletion status and cancellation until then.',
+        includeCancelLink: true,
+      ),
     );
     return request;
   });
@@ -320,11 +533,12 @@ final class AccountDeletionService {
       'organizationId': organizationId,
       'requestedBy': userId,
       'source': 'authenticated',
+      'requestGeneration': _requestGeneration(existing),
       'status': 'billing_pending',
       'stage': 'billing',
       'requestedAt': existing?['requestedAt'] ?? now.toIso8601String(),
       'verifiedAt': now.toIso8601String(),
-      'gracePeriodEndsAt': _graceEndsAt(now),
+      ..._scheduleFields(existing ?? const <String, Object?>{}, now),
       'updatedAt': now.toIso8601String(),
       'attempt': existing?['attempt'] ?? 0,
       if (existing?['createdAt'] != null) 'createdAt': existing!['createdAt'],
@@ -341,7 +555,11 @@ final class AccountDeletionService {
         organizationId: organizationId,
         actorId: userId,
       );
-      await _revokeOrganizationCredentials(organizationId);
+      final revokedCredentialIds = await _revokeOrganizationCredentials(
+        organizationId,
+        now,
+        id,
+      );
       final marked = OrganizationRecord(
         id: organization.id,
         name: organization.name,
@@ -360,6 +578,8 @@ final class AccountDeletionService {
           'effectivePlan': billingStop['effectivePlan'],
         },
         'billingStoppedAt': now.toIso8601String(),
+        'organizationCredentialsRevoked': revokedCredentialIds.length,
+        'organizationCredentialRevocationIds': revokedCredentialIds,
         'updatedAt': now.toIso8601String(),
       };
       await store.replaceJson(
@@ -396,6 +616,17 @@ final class AccountDeletionService {
       requestId: requestId,
       organizationId: organizationId,
       actorId: userId,
+      action: 'organization.deletion.credentials_revoked',
+      resourceType: 'organization_deletion_request',
+      resourceId: id,
+      metadata: <String, Object?>{
+        'credential_count': request['organizationCredentialsRevoked'],
+      },
+    );
+    await _audit(
+      requestId: requestId,
+      organizationId: organizationId,
+      actorId: userId,
       action: 'organization.deletion.verified',
       resourceType: 'organization_deletion_request',
       resourceId: id,
@@ -414,23 +645,31 @@ final class AccountDeletionService {
       },
     );
     await _notify(
-      key: 'organization.deletion.requested',
-      stableKey: id,
+      key: 'organization.deletion.verified',
+      stableKey: _deletionNotificationStableKey(request, 'verified'),
       recipient: user.email,
       organizationId: organizationId,
       entityType: 'organization_deletion_request',
       entityId: id,
       correlationId: requestId,
-      variables: <String, Object?>{
-        'organization': organization.name,
-        'message': 'Deletion of this Cloud organization is scheduled. Customer data remains available during the grace period.',
-        'effective_at': request['gracePeriodEndsAt'],
-      },
+      variables: await _deletionNotificationVariables(
+        request: request,
+        organization: organization.name,
+        message: 'Deletion of this Cloud organization is scheduled. Access is restricted to deletion status and cancellation during the grace period; customer data is preserved until staged processing begins.',
+        includeCancelLink: true,
+      ),
     );
     return request;
   });
 
   Future<Map<String, Object?>> accountStatus({required String userId}) async {
+    if (deploymentModel != DeploymentModel.cloud) {
+      throw const ControlPlaneException(
+        'CLOUD_DELETION_UNAVAILABLE',
+        'Account deletion is only available for Cloud accounts',
+        statusCode: 404,
+      );
+    }
     final request = await store.readJson(
       accountDeletionRequestCollection,
       _accountRequestId(userId),
@@ -441,6 +680,27 @@ final class AccountDeletionService {
           'status': 'not_requested',
           'userId': userId,
         };
+  }
+
+  /// Blocks new Cloud product mutations while a personal deletion request is
+  /// unresolved. Ownership-resolution and cancellation remain separate
+  /// privacy actions and are handled by their dedicated endpoints.
+  Future<void> ensureAccountMutationAllowed({required String userId}) async {
+    final request = await store.readJson(
+      accountDeletionRequestCollection,
+      _accountRequestId(userId),
+    );
+    final status = request?['status'];
+    if (!_isAccountDeletionRestrictedStatus(status)) return;
+    throw const ControlPlaneException(
+      'ACCOUNT_DELETION_PENDING',
+      'This account is restricted while deletion is pending',
+      statusCode: 409,
+      details: <String, Object?>{
+        'scope': 'account',
+        'status': 'deletion_pending',
+      },
+    );
   }
 
   Future<Map<String, Object?>> organizationStatus({
@@ -465,12 +725,36 @@ final class AccountDeletionService {
     required String userId,
     required String actorId,
     required String requestId,
+    String? expectedDeletionRequestId,
+    int? expectedDeletionRequestGeneration,
   }) => _serialized(() async {
+    if (deploymentModel != DeploymentModel.cloud) {
+      throw const ControlPlaneException(
+        'CLOUD_DELETION_UNAVAILABLE',
+        'Account deletion is only available for Cloud accounts',
+        statusCode: 404,
+      );
+    }
     final id = _accountRequestId(userId);
     final current = await store.readJson(accountDeletionRequestCollection, id);
-    if (current == null ||
-        !_openDeletionStatuses.contains(current['status']) ||
-        current['status'] == 'processing') {
+    if (expectedDeletionRequestId != null && expectedDeletionRequestId != id) {
+      throw const ControlPlaneException(
+        'DELETION_REQUEST_MISMATCH',
+        'The deletion cancellation link does not match the current request',
+        statusCode: 409,
+      );
+    }
+    if (expectedDeletionRequestGeneration != null &&
+        (current == null ||
+            current['requestGeneration'] !=
+                expectedDeletionRequestGeneration)) {
+      throw const ControlPlaneException(
+        'DELETION_CANCELLATION_TOKEN_INVALID',
+        'The deletion cancellation link is invalid or expired',
+        statusCode: 400,
+      );
+    }
+    if (current == null || !_isCancellableStatus(current['status'])) {
       return current ??
           <String, Object?>{'scope': 'account', 'status': 'not_requested'};
     }
@@ -481,7 +765,15 @@ final class AccountDeletionService {
       'cancelledAt': _now().toIso8601String(),
       'updatedAt': _now().toIso8601String(),
     };
-    await store.replaceJson(accountDeletionRequestCollection, id, updated);
+    if (!await _replaceRequestIfStatus(
+      accountDeletionRequestCollection,
+      id,
+      current['status']! as String,
+      updated,
+    )) {
+      return await store.readJson(accountDeletionRequestCollection, id) ??
+          current;
+    }
     await _audit(
       requestId: requestId,
       organizationId: await _auditOrganizationForUser(userId),
@@ -495,29 +787,31 @@ final class AccountDeletionService {
     if (user?['email'] is String) {
       await _notify(
         key: 'account.deletion.cancelled',
-        stableKey: id,
+        stableKey: _deletionNotificationStableKey(updated, 'cancelled'),
         recipient: user!['email']! as String,
         organizationId: await _auditOrganizationForUser(userId),
         entityType: 'account_deletion_request',
         entityId: id,
         correlationId: requestId,
         variables: const <String, Object?>{
-          'message': 'Your Hyfens account deletion request was cancelled.',
+          'message': 'Your account deletion request was cancelled.',
         },
       );
     }
     return updated;
   });
 
-  /// Organization deletion cancellation is fail-closed after a paid provider
-  /// cancellation has been scheduled. Reversing that provider action is a
-  /// separate provider-first operation and cannot be faked by changing local
-  /// deletion state.
+  /// Organization deletion cancellation remains available until the deletion
+  /// worker claims irreversible processing. If the provider cancellation has
+  /// already been scheduled, local access is restored but the provider billing
+  /// state is reported honestly and is not silently reactivated.
   Future<Map<String, Object?>> cancelOrganizationDeletion({
     required String userId,
     required String organizationId,
     required String actorId,
     required String requestId,
+    String? expectedDeletionRequestId,
+    int? expectedDeletionRequestGeneration,
   }) => _serialized(() async {
     final user = await _activeCustomer(userId);
     await _requireOwner(user, organizationId);
@@ -526,21 +820,52 @@ final class AccountDeletionService {
       organizationDeletionRequestCollection,
       id,
     );
-    if (current == null ||
-        !_openDeletionStatuses.contains(current['status']) ||
-        current['status'] == 'processing') {
+    if (expectedDeletionRequestId != null && expectedDeletionRequestId != id) {
+      throw const ControlPlaneException(
+        'DELETION_REQUEST_MISMATCH',
+        'The deletion cancellation link does not match the current request',
+        statusCode: 409,
+      );
+    }
+    if (expectedDeletionRequestGeneration != null &&
+        (current == null ||
+            current['requestGeneration'] !=
+                expectedDeletionRequestGeneration)) {
+      throw const ControlPlaneException(
+        'DELETION_CANCELLATION_TOKEN_INVALID',
+        'The deletion cancellation link is invalid or expired',
+        statusCode: 400,
+      );
+    }
+    if (current == null || !_isCancellableStatus(current['status'])) {
       return current ??
           <String, Object?>{'scope': 'organization', 'status': 'not_requested'};
     }
     final stop = current['billingStop'];
     final stopMap = stop is Map<String, Object?> ? stop : null;
-    if (stopMap?['status'] != 'not_active') {
-      throw const ControlPlaneException(
-        'DELETION_CANCEL_REQUIRES_BILLING_RECONCILIATION',
-        'This deletion request cannot be cancelled after provider renewal was stopped',
-        statusCode: 409,
-      );
+    final updated = <String, Object?>{
+      ...current,
+      'status': 'cancelled',
+      'stage': 'cancelled',
+      'cancelledAt': _now().toIso8601String(),
+      'updatedAt': _now().toIso8601String(),
+      if (stopMap?['status'] != 'not_active')
+        'billingCancellationRetained': true,
+    };
+    if (!await _replaceRequestIfStatus(
+      organizationDeletionRequestCollection,
+      id,
+      current['status']! as String,
+      updated,
+    )) {
+      return await store.readJson(organizationDeletionRequestCollection, id) ??
+          current;
     }
+    final restoredCredentialCount = await _restoreOrganizationCredentials(
+      organizationId,
+      id,
+      _now(),
+    );
     final organizationValue = await store.readJson(
       'organizations',
       organizationId,
@@ -557,14 +882,6 @@ final class AccountDeletionService {
         ).toJson(),
       );
     }
-    final updated = <String, Object?>{
-      ...current,
-      'status': 'cancelled',
-      'stage': 'cancelled',
-      'cancelledAt': _now().toIso8601String(),
-      'updatedAt': _now().toIso8601String(),
-    };
-    await store.replaceJson(organizationDeletionRequestCollection, id, updated);
     await _audit(
       requestId: requestId,
       organizationId: organizationId,
@@ -572,12 +889,16 @@ final class AccountDeletionService {
       action: 'organization.deletion.cancelled',
       resourceType: 'organization_deletion_request',
       resourceId: id,
-      metadata: const <String, Object?>{},
+      metadata: <String, Object?>{
+        'credentials_restored': restoredCredentialCount,
+        'billing_cancellation_retained':
+            updated['billingCancellationRetained'] == true,
+      },
     );
     if (user.email.isNotEmpty) {
       await _notify(
         key: 'organization.deletion.cancelled',
-        stableKey: id,
+        stableKey: _deletionNotificationStableKey(updated, 'cancelled'),
         recipient: user.email,
         organizationId: organizationId,
         entityType: 'organization_deletion_request',
@@ -585,7 +906,9 @@ final class AccountDeletionService {
         correlationId: requestId,
         variables: <String, Object?>{
           'organization': organizationId,
-          'message': 'Your Cloud organization deletion request was cancelled.',
+          'message': stopMap?['status'] == 'not_active'
+              ? 'Your Cloud organization deletion request was cancelled.'
+              : 'Your Cloud organization deletion request was cancelled. Provider renewal remains in its current scheduled state; it was not silently reactivated.',
         },
       );
     }
@@ -651,10 +974,15 @@ final class AccountDeletionService {
       if (ready['status'] == 'policy_decision_required') return ready;
     }
     final readyStatus = ready['status'];
-    final graceEndsAt = _parseTime(ready['gracePeriodEndsAt']);
+    // The persisted processing boundary is the authority. The grace-period
+    // field remains a compatibility fallback for records created before the
+    // working-day schedule was added.
+    final processingAt = _parseTime(
+      ready['processingAt'] ?? ready['gracePeriodEndsAt'],
+    );
     if (readyStatus == 'grace_period' &&
-        graceEndsAt != null &&
-        graceEndsAt.isAfter(normalizedNow)) {
+        processingAt != null &&
+        processingAt.isAfter(normalizedNow)) {
       return ready;
     }
     final processing = <String, Object?>{
@@ -664,7 +992,14 @@ final class AccountDeletionService {
       'attempt': (ready['attempt'] is int ? ready['attempt']! as int : 0) + 1,
       'updatedAt': normalizedNow.toIso8601String(),
     };
-    await store.replaceJson(collection, requestId, processing);
+    if (!await _replaceRequestIfStatus(
+      collection,
+      requestId,
+      readyStatus as String,
+      processing,
+    )) {
+      return await store.readJson(collection, requestId) ?? ready;
+    }
     try {
       final organizationValue = processing['organizationId'];
       final processingOrganizationId =
@@ -737,6 +1072,12 @@ final class AccountDeletionService {
       ...await store.listJson(accountDeletionRequestCollection),
       ...await store.listJson(organizationDeletionRequestCollection),
     ];
+    final normalizedNow = (now ?? _now()).toUtc();
+    for (final request in requests) {
+      await _serialized(
+        () => _processScheduledReminders(request, normalizedNow),
+      );
+    }
     final due = requests
         .where((request) {
           final status = request['status'];
@@ -745,9 +1086,12 @@ final class AccountDeletionService {
               status != 'processing') {
             return false;
           }
-          final at = _parseTime(request['gracePeriodEndsAt']);
-          return status == 'processing' ||
-              (at != null && !at.isAfter((now ?? _now()).toUtc()));
+          final at = _parseTime(
+            request['processingAt'] ?? request['gracePeriodEndsAt'],
+          );
+          return status == 'failed' ||
+              status == 'processing' ||
+              (at != null && !at.isAfter(normalizedNow));
         })
         .take(maxRequests)
         .toList(growable: false);
@@ -765,6 +1109,117 @@ final class AccountDeletionService {
       }
     }
     return List.unmodifiable(result);
+  }
+
+  Future<void> _processScheduledReminders(
+    Map<String, Object?> request,
+    DateTime now,
+  ) async {
+    if (request['status'] != 'grace_period' ||
+        request['ownershipRequiredOrganizations'] is List &&
+            (request['ownershipRequiredOrganizations']! as List).isNotEmpty) {
+      return;
+    }
+    final processingAt = _parseTime(request['processingAt']);
+    if (processingAt != null && !processingAt.isAfter(now)) return;
+    final id = request['id'];
+    final scope = request['scope'];
+    if (id is! String || (scope != 'account' && scope != 'organization')) {
+      return;
+    }
+    final collection = scope == 'account'
+        ? accountDeletionRequestCollection
+        : organizationDeletionRequestCollection;
+    final userId = scope == 'account'
+        ? request['userId']
+        : request['requestedBy'];
+    if (userId is! String) return;
+    final user = await store.readJson('users', userId);
+    final recipient = user?['email'];
+    if (recipient is! String || recipient.isEmpty) return;
+    final organization = request['organizationId'] is String
+        ? await store.readJson(
+            'organizations',
+            request['organizationId']! as String,
+          )
+        : null;
+    final organizationName = organization?['name'] as String?;
+    final milestones = <String, DateTime?>{
+      'day5': _parseTime(request['workingDay5At']),
+      'day7': _parseTime(request['workingDay7At']),
+    };
+    for (final entry in milestones.entries) {
+      final milestone = entry.key;
+      final due = entry.value;
+      if (due == null || due.isAfter(now)) continue;
+      final notifiedKey = milestone == 'day5'
+          ? 'workingDay5NotifiedAt'
+          : 'workingDay7NotifiedAt';
+      if (request[notifiedKey] != null) continue;
+      final latest = await store.readJson(collection, id);
+      if (latest == null ||
+          latest['status'] != 'grace_period' ||
+          latest[notifiedKey] != null) {
+        return;
+      }
+      request = latest;
+      final key = scope == 'account'
+          ? 'account.deletion.reminder_$milestone'
+          : 'organization.deletion.reminder_$milestone';
+      final workingDay = milestone == 'day5'
+          ? 'Day 5 of ${policy.graceWorkingDays} working days; ${policy.graceWorkingDays! - 5} working days remain'
+          : 'Day 7 of ${policy.graceWorkingDays} working days; staged processing begins next working day';
+      final variables = await _deletionNotificationVariables(
+        request: request,
+        organization: organizationName,
+        workingDay: workingDay,
+        message: milestone == 'day5'
+            ? 'Your deletion request is still pending. Your account remains restricted but recoverable during the grace period.'
+            : 'This is the final reminder. Staged deletion begins after the grace period unless you cancel the request securely.',
+        includeCancelLink: true,
+      );
+      final queued = await _notify(
+        key: key,
+        stableKey: _deletionNotificationStableKey(
+          request,
+          'reminder:$milestone',
+        ),
+        recipient: recipient,
+        organizationId: request['organizationId'] as String?,
+        entityType: '${scope}_deletion_request',
+        entityId: id,
+        correlationId: id,
+        variables: variables,
+      );
+      if (!queued) continue;
+      final updated = <String, Object?>{
+        ...request,
+        notifiedKey: now.toIso8601String(),
+        'updatedAt': now.toIso8601String(),
+      };
+      if (await _replaceRequestIfStatus(
+        collection,
+        id,
+        'grace_period',
+        updated,
+      )) {
+        request = updated;
+        await _audit(
+          requestId: id,
+          organizationId:
+              request['organizationId'] as String? ??
+              await _auditOrganizationForUser(userId),
+          actorId: 'hyfens:deletion-worker',
+          action: key,
+          resourceType: '${scope}_deletion_request',
+          resourceId: '$id:reminder:$milestone',
+          metadata: <String, Object?>{
+            'working_day': workingDay,
+            'notification_key': key,
+          },
+        );
+      }
+    }
   }
 
   Future<Map<String, Object?>> _retryOrganizationBilling(
@@ -791,7 +1246,6 @@ final class AccountDeletionService {
       organizationId: organizationId,
       actorId: 'hyfens:deletion-worker',
     );
-    await _revokeOrganizationCredentials(organizationId);
     final requestId = request['id'];
     if (requestId is! String)
       throw const FormatException('Deletion ID is invalid');
@@ -866,6 +1320,7 @@ final class AccountDeletionService {
         );
         return blocked;
       }
+      await _revokeAccountCredentials(request, now);
       // Deactivation is the final identity mutation. If the worker crashes
       // after it succeeds, a retry must be able to finish the request instead
       // of treating the already-deactivated account as an auth failure.
@@ -894,7 +1349,7 @@ final class AccountDeletionService {
     );
     await _notify(
       key: 'account.deleted',
-      stableKey: requestId,
+      stableKey: _deletionNotificationStableKey(request, 'completed'),
       recipient: user.email,
       organizationId: _auditOrganization(user) == 'system'
           ? null
@@ -903,7 +1358,7 @@ final class AccountDeletionService {
       entityId: requestId,
       correlationId: requestId,
       variables: const <String, Object?>{
-        'message': 'Your Hyfens account deletion is complete.',
+        'message': 'Your account deletion is complete.',
       },
     );
     return completed;
@@ -973,7 +1428,11 @@ final class AccountDeletionService {
           requestId: requestId,
           createdAt: now,
         );
-        await deletion.deleteJson(collection, id);
+        final storageId = collection == 'credentials' ? value['tokenHash'] : id;
+        if (storageId is! String) {
+          throw const FormatException('Credential storage ID is invalid');
+        }
+        await deletion.deleteJson(collection, storageId);
         processed++;
       }
     }
@@ -1084,7 +1543,7 @@ final class AccountDeletionService {
     if (owner?['email'] is String) {
       await _notify(
         key: 'organization.deleted',
-        stableKey: requestId,
+        stableKey: _deletionNotificationStableKey(request, 'completed'),
         recipient: owner!['email']! as String,
         organizationId: organizationId,
         entityType: 'organization_deletion_request',
@@ -1092,14 +1551,14 @@ final class AccountDeletionService {
         correlationId: requestId,
         variables: <String, Object?>{
           'organization': 'Deleted organization',
-          'message': 'Deletion of the Hyfens Cloud organization and its customer-owned data is complete. Required evidence remains according to policy.',
+          'message': 'Deletion of your organization and its customer-owned data is complete. Required evidence remains according to policy.',
         },
       );
     }
     return completed;
   }
 
-  Future<void> _notify({
+  Future<bool> _notify({
     required String key,
     required String stableKey,
     required String recipient,
@@ -1108,9 +1567,10 @@ final class AccountDeletionService {
     required String entityId,
     required String correlationId,
     required Map<String, Object?> variables,
+    bool sensitive = true,
   }) async {
     final service = notifications;
-    if (service == null) return;
+    if (service == null) return false;
     try {
       await service.enqueue(
         NotificationEvent(
@@ -1124,8 +1584,10 @@ final class AccountDeletionService {
           entityId: entityId,
           source: 'deletion',
           correlationId: correlationId,
+          sensitive: sensitive,
         ),
       );
+      return true;
     } on Object catch (error) {
       await _audit(
         requestId: correlationId,
@@ -1136,6 +1598,7 @@ final class AccountDeletionService {
         resourceId: entityId,
         metadata: <String, Object?>{'error': error.runtimeType.toString()},
       );
+      return false;
     }
   }
 
@@ -1261,24 +1724,6 @@ final class AccountDeletionService {
     final existing = await store.readJson('deletion_evidence', evidenceId);
     if (existing == null) {
       await store.createJson('deletion_evidence', evidenceId, evidence);
-    }
-  }
-
-  Future<void> _revokeOrganizationCredentials(String organizationId) async {
-    final now = _now();
-    for (final value in await store.listJson('credentials')) {
-      if (value['organizationId'] != organizationId ||
-          value['revoked'] == true) {
-        continue;
-      }
-      final id = value['tokenHash'] ?? value['id'];
-      if (id is String) {
-        await store.replaceJson('credentials', id, <String, Object?>{
-          ...value,
-          'revoked': true,
-          'revokedAt': now.toIso8601String(),
-        });
-      }
     }
   }
 
@@ -1415,6 +1860,27 @@ final class AccountDeletionService {
     await store.replaceJson(collection, id, value);
   }
 
+  Future<bool> _replaceRequestIfStatus(
+    String collection,
+    String id,
+    String expectedStatus,
+    Map<String, Object?> value,
+  ) async {
+    final atomic = store;
+    if (atomic case final DeletionRequestStateStore stateStore) {
+      return stateStore.compareAndSetDeletionRequestStatus(
+        collection: collection,
+        id: id,
+        expectedStatus: expectedStatus,
+        value: value,
+      );
+    }
+    final current = await store.readJson(collection, id);
+    if (current == null || current['status'] != expectedStatus) return false;
+    await store.replaceJson(collection, id, value);
+    return true;
+  }
+
   Future<void> _audit({
     required String requestId,
     required String organizationId,
@@ -1448,12 +1914,250 @@ final class AccountDeletionService {
   }
 
   String _verifiedStatus() =>
-      policy.gracePeriod == null ? 'policy_decision_required' : 'grace_period';
+      policy.isConfigured ? 'grace_period' : 'policy_decision_required';
 
-  String? _graceEndsAt(DateTime now) {
-    final duration = policy.gracePeriod;
-    return duration == null ? null : now.add(duration).toIso8601String();
+  bool _isCancellableStatus(Object? status) =>
+      status == 'ownership_resolution_required' ||
+      status == 'policy_decision_required' ||
+      status == 'grace_period';
+
+  Map<String, Object?> _scheduleFields(
+    Map<String, Object?> existing,
+    DateTime verifiedAt, {
+    bool enabled = true,
+    bool allowCancellation = true,
+  }) {
+    final priorProcessing = existing['status'] == 'cancelled'
+        ? null
+        : existing['processingAt'];
+    if (priorProcessing is String) {
+      return <String, Object?>{
+        'gracePeriodEndsAt': existing['gracePeriodEndsAt'] ?? priorProcessing,
+        'workingDay5At': existing['workingDay5At'],
+        'workingDay7At': existing['workingDay7At'],
+        'workingDay5Date': existing['workingDay5Date'],
+        'workingDay7Date': existing['workingDay7Date'],
+        'processingAt': priorProcessing,
+        'processingDate': existing['processingDate'],
+        'businessTimeZone':
+            existing['businessTimeZone'] ?? policy.businessTimeZone,
+        'businessDayPolicy': existing['businessDayPolicy'] ?? 'monday_friday',
+        'businessHolidays': existing['businessHolidays'] ?? policy.holidayDates,
+        'cancellationAllowed':
+            existing['cancellationAllowed'] ?? allowCancellation,
+        'restriction': existing['restriction'] ?? 'Only deletion status, privacy information, billing status, and cancellation remain available during the grace period.',
+      };
+    }
+    final workingDays = policy.graceWorkingDays;
+    if (!enabled || workingDays == null) {
+      return <String, Object?>{
+        'gracePeriodEndsAt': null,
+        'workingDay5At': null,
+        'workingDay7At': null,
+        'workingDay5Date': null,
+        'workingDay7Date': null,
+        'processingAt': null,
+        'processingDate': null,
+        'businessTimeZone': policy.businessTimeZone,
+        'businessDayPolicy': 'monday_friday',
+        'businessHolidays': policy.holidayDates,
+        'cancellationAllowed': allowCancellation,
+        'restriction': null,
+      };
+    }
+    final calendar = policy.calendar;
+    final processingAt = calendar.workingDayAt(
+      verifiedAt: verifiedAt,
+      workingDay: workingDays + 1,
+    );
+    final day5 = workingDays >= 5
+        ? calendar.workingDayAt(verifiedAt: verifiedAt, workingDay: 5)
+        : null;
+    final day7 = workingDays >= 7
+        ? calendar.workingDayAt(verifiedAt: verifiedAt, workingDay: 7)
+        : null;
+    return <String, Object?>{
+      'gracePeriodEndsAt': processingAt.toIso8601String(),
+      'workingDay5At': day5?.toIso8601String(),
+      'workingDay7At': day7?.toIso8601String(),
+      'processingAt': processingAt.toIso8601String(),
+      'workingDay5Date': day5 == null ? null : calendar.dateKeyAt(day5),
+      'workingDay7Date': day7 == null ? null : calendar.dateKeyAt(day7),
+      'processingDate': calendar.dateKeyAt(processingAt),
+      'businessTimeZone': policy.businessTimeZone,
+      'businessDayPolicy': 'monday_friday',
+      'businessHolidays': policy.holidayDates,
+      'cancellationAllowed': true,
+      'restriction': 'Only deletion status, privacy information, billing status, and cancellation remain available during the grace period.',
+    };
   }
+
+  Future<Map<String, Object?>> _deletionNotificationVariables({
+    required Map<String, Object?> request,
+    required String message,
+    String? organization,
+    String? workingDay,
+    required bool includeCancelLink,
+  }) async {
+    final variables = <String, Object?>{
+      if (organization != null) 'organization': organization,
+      'message': message,
+      'effective_at':
+          request['processingDate'] ??
+          request['processingAt'] ??
+          request['gracePeriodEndsAt'],
+      'processing_at':
+          request['processingDate'] ??
+          request['processingAt'] ??
+          request['gracePeriodEndsAt'],
+      if (workingDay != null) 'working_day': workingDay,
+      'business_timezone':
+          request['businessTimeZone'] ?? policy.businessTimeZone,
+      'restriction': 'Only deletion status, privacy information, billing status, and cancellation remain available during the grace period.',
+      'billing_message': 'No automatic refund is created by account or organization deletion. Future renewal is stopped through the billing lifecycle; current paid access follows that state.',
+    };
+    final auth = humanAuth;
+    final renderer = notifications?.renderer;
+    final requestId = request['id'];
+    final scope = request['scope'];
+    if (includeCancelLink &&
+        auth != null &&
+        renderer != null &&
+        requestId is String &&
+        (scope == 'account' || scope == 'organization')) {
+      final issued = await auth.issueDeletionCancellationToken(
+        userId: scope == 'account'
+            ? request['userId']! as String
+            : request['requestedBy']! as String,
+        deletionRequestId: requestId,
+        deletionRequestGeneration: request['requestGeneration'] as int?,
+        scope: scope! as String,
+        organizationId: request['organizationId'] as String?,
+        expiresAt: _parseTime(request['processingAt']),
+      );
+      variables['action_url'] = renderer.marketingOrigin
+          .replace(
+            path: '/account-deletion',
+            queryParameters: <String, String>{
+              'cancel_token': issued['token']! as String,
+            },
+          )
+          .toString();
+      variables['action_label'] = 'Cancel deletion';
+    }
+    return variables;
+  }
+
+  String _deletionNotificationStableKey(
+    Map<String, Object?> request,
+    String event,
+  ) {
+    final id = request['id'];
+    if (id is! String || id.isEmpty) {
+      throw const FormatException('Deletion request ID is invalid');
+    }
+    final generation = request['requestGeneration'];
+    final normalizedGeneration = generation is int && generation > 0
+        ? generation
+        : 1;
+    return '$id:g$normalizedGeneration:$event';
+  }
+
+  Future<List<String>> _credentialIdsForUser(String userId) async {
+    final issued = <String>{};
+    for (final value in await store.listJson('audit')) {
+      if (value['action'] != 'credential.issue' || value['actorId'] != userId) {
+        continue;
+      }
+      final resourceId = value['resourceId'];
+      if (resourceId is String) issued.add(resourceId);
+    }
+    return issued.toList(growable: false);
+  }
+
+  Future<void> _revokeAccountCredentials(
+    Map<String, Object?> request,
+    DateTime now,
+  ) async {
+    final rawIds = request['blockedCredentialIds'];
+    if (rawIds is! List) return;
+    final ids = rawIds.whereType<String>().toSet();
+    if (ids.isEmpty) return;
+    for (final value in await store.listJson('credentials')) {
+      if (!ids.contains(value['id']) || value['revoked'] == true) continue;
+      final storageId = value['tokenHash'];
+      if (storageId is! String) continue;
+      await store.replaceJson('credentials', storageId, <String, Object?>{
+        ...value,
+        'revoked': true,
+        'revokedAt': now.toIso8601String(),
+      });
+    }
+  }
+
+  Future<List<String>> _revokeOrganizationCredentials(
+    String organizationId,
+    DateTime now,
+    String deletionRequestId,
+  ) async {
+    final revoked = <String>[];
+    for (final value in await store.listJson('credentials')) {
+      if (value['organizationId'] != organizationId ||
+          value['revoked'] == true) {
+        continue;
+      }
+      final storageId = value['tokenHash'];
+      if (storageId is! String) continue;
+      await store.replaceJson('credentials', storageId, <String, Object?>{
+        ...value,
+        'revoked': true,
+        'revokedAt': now.toIso8601String(),
+        'deletionRevocationRequestId': deletionRequestId,
+      });
+      final credentialId = value['id'];
+      if (credentialId is String) revoked.add(credentialId);
+    }
+    return List.unmodifiable(revoked);
+  }
+
+  Future<int> _restoreOrganizationCredentials(
+    String organizationId,
+    String deletionRequestId,
+    DateTime now,
+  ) async {
+    var restored = 0;
+    for (final value in await store.listJson('credentials')) {
+      if (value['organizationId'] != organizationId ||
+          value['revoked'] != true ||
+          value['deletionRevocationRequestId'] != deletionRequestId) {
+        continue;
+      }
+      final storageId = value['tokenHash'];
+      if (storageId is! String) continue;
+      await store.replaceJson('credentials', storageId, <String, Object?>{
+        ...value,
+        'revoked': false,
+        'revokedAt': null,
+        'deletionRevocationRequestId': null,
+        'updatedAt': now.toIso8601String(),
+      });
+      restored++;
+    }
+    return restored;
+  }
+
+  int _requestGeneration(Map<String, Object?>? existing) {
+    final prior = existing?['requestGeneration'];
+    final generation = prior is int && prior > 0 ? prior : 1;
+    return existing?['status'] == 'cancelled' ? generation + 1 : generation;
+  }
+
+  bool _isAccountDeletionRestrictedStatus(Object? status) =>
+      status == 'ownership_resolution_required' ||
+      status == 'policy_decision_required' ||
+      status == 'grace_period' ||
+      status == 'processing' ||
+      status == 'failed';
 
   DateTime _now() => _clock().toUtc();
 

@@ -101,7 +101,9 @@ Future<void> main(List<String> arguments) async {
       );
     }
     try {
-      final processed = await deletion.processPendingDeletions();
+      final processed = await deletion.processPendingDeletions(
+        now: _deletionWorkerNow(options, values),
+      );
       final counts = <String, int>{};
       for (final request in processed) {
         final status = request['status'];
@@ -311,6 +313,28 @@ Future<void> main(List<String> arguments) async {
   await server.close(force: true);
   await store.close();
   taskRoleCredentials?.close();
+}
+
+DateTime? _deletionWorkerNow(
+  Map<String, String> options,
+  Map<String, String> values,
+) {
+  final raw = options['process-deletions-at'];
+  if (raw == null) return null;
+  if (values['HYFENS_DELETION_TEST_CLOCK'] != '1' ||
+      values['RAZORPAY_MODE'] != 'test') {
+    throw StateError(
+      '--process-deletions-at is available only with '
+      'HYFENS_DELETION_TEST_CLOCK=1 and RAZORPAY_MODE=test',
+    );
+  }
+  final parsed = DateTime.tryParse(raw);
+  if (parsed == null || !parsed.isUtc) {
+    throw ArgumentError(
+      '--process-deletions-at must be an ISO-8601 UTC timestamp ending in Z',
+    );
+  }
+  return parsed;
 }
 
 Map<String, String> _options(List<String> arguments) {
