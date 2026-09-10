@@ -3089,7 +3089,7 @@ final class ControlPlaneHttpServer {
           'amount':
               '${checkout['currency']} ${((checkout['amountMinor'] as int) / 100).toStringAsFixed(2)}',
           'currency': checkout['currency'],
-          'message': 'Your secure Hyfens checkout is ready to continue.',
+          'message': 'Your secure checkout is ready to continue.',
           'action_url': 'https://app.hyfens.com/dashboard/billing',
           'action_label': 'Open billing',
         },
@@ -3832,7 +3832,7 @@ final class ControlPlaneHttpServer {
             'billing.refund.initiated' => 'The approved refund has been sent to the payment provider for processing.',
             'billing.refund.completed' =>
               'The approved refund was processed by the payment provider.',
-            _ => 'The payment provider could not complete the approved refund. Hyfens will retry or reconcile it.',
+            _ => 'The payment provider could not complete the approved refund. We will retry or reconcile it.',
           },
         },
       );

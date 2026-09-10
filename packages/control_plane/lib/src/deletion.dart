@@ -794,7 +794,7 @@ final class AccountDeletionService {
         entityId: id,
         correlationId: requestId,
         variables: const <String, Object?>{
-          'message': 'Your Hyfens account deletion request was cancelled.',
+          'message': 'Your account deletion request was cancelled.',
         },
       );
     }
@@ -1358,7 +1358,7 @@ final class AccountDeletionService {
       entityId: requestId,
       correlationId: requestId,
       variables: const <String, Object?>{
-        'message': 'Your Hyfens account deletion is complete.',
+        'message': 'Your account deletion is complete.',
       },
     );
     return completed;
@@ -1551,7 +1551,7 @@ final class AccountDeletionService {
         correlationId: requestId,
         variables: <String, Object?>{
           'organization': 'Deleted organization',
-          'message': 'Deletion of the Hyfens Cloud organization and its customer-owned data is complete. Required evidence remains according to policy.',
+          'message': 'Deletion of your organization and its customer-owned data is complete. Required evidence remains according to policy.',
         },
       );
     }

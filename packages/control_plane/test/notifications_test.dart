@@ -119,6 +119,64 @@ void main() {
     }
   });
 
+  test('customer lifecycle copy does not repeat the product name', () {
+    final brand = RegExp(r'\bhyfens\b', caseSensitive: false);
+    final url = RegExp(r'https?://[^\s"<>]+');
+    final tags = RegExp(r'<[^>]*>');
+    final cases = <(String, String)>[
+      (
+        'billing.checkout.initiated',
+        'Your secure checkout is ready to continue.',
+      ),
+      (
+        'billing.refund.failed',
+        'The payment provider could not complete the approved refund. We will retry or reconcile it.',
+      ),
+      (
+        'account.deletion.cancelled',
+        'Your account deletion request was cancelled.',
+      ),
+      ('account.deleted', 'Your account deletion is complete.'),
+      (
+        'organization.deleted',
+        'Deletion of your organization and its customer-owned data is complete. Required evidence remains according to policy.',
+      ),
+    ];
+
+    for (final (key, message) in cases) {
+      final rendered = notifications.renderer.render(
+        NotificationEvent(
+          key: key,
+          stableKey: 'copy:$key',
+          recipientEmails: const <String>['preview@example.invalid'],
+          variables: <String, Object?>{
+            'message': message,
+            'organization': 'Example workspace',
+            'plan': 'Team',
+            'amount': 'USD 199.00',
+            'effective_at': '2026-09-30',
+            'payment_id': 'payment_preview',
+            'status': 'Failed',
+          },
+          occurredAt: DateTime.utc(2026, 9, 9, 12),
+          source: 'preview',
+        ),
+      );
+      expect(
+        brand
+            .allMatches(rendered.html.replaceAll(url, '').replaceAll(tags, ' '))
+            .length,
+        1,
+        reason: '$key HTML',
+      );
+      expect(
+        brand.allMatches(rendered.text.replaceAll(url, '')).length,
+        1,
+        reason: '$key text',
+      );
+    }
+  });
+
   test('Keplars adapter records the current top-level provider id', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     try {
