@@ -18,6 +18,9 @@ not select a version or publish software.
   application and environment and connecting the public CLI. Managed Cloud
   deployments must enable the verification delivery configuration; signup is
   fail-closed when it is unavailable.
+- Simplified the managed dashboard authentication surface by removing
+  non-action session/status copy and focusing the entry screen on sign-in,
+  account creation, and invitation access.
 
 ## [0.1.10] - 2026-09-08
 

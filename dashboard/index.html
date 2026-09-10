@@ -13,8 +13,8 @@
       content="The Hyfens developer control plane for exact release, patch, deployment, and audit records."
     >
     <title>Hyfens | Developer control plane</title>
-    <link rel="stylesheet" href="tokens.css?v=222">
-    <link rel="stylesheet" href="styles.css?v=236">
+    <link rel="stylesheet" href="tokens.css?v=223">
+    <link rel="stylesheet" href="styles.css?v=237">
   </head>
   <body class="session-pending">
     <div id="session-boot" class="session-boot" role="status" aria-live="polite">
@@ -31,19 +31,11 @@
             <span class="brand-name">hyfens</span>
             <span class="brand-product">developer platform</span>
           </a>
-          <span class="auth-session">
-            <span class="status-marker status-marker-muted" aria-hidden="true"></span>
-            Human session
-          </span>
         </div>
 
         <div class="auth-copy">
-          <p class="eyebrow">Hyfens / developer platform</p>
-          <h1 id="login-heading">Ship with a complete record.</h1>
-          <p>
-            Sign in to inspect the exact releases, patches, and deployment
-            records your membership can see.
-          </p>
+          <h1 id="login-heading">Welcome back.</h1>
+          <p>Sign in to your Hyfens workspace.</p>
         </div>
 
         <div class="auth-mode-switcher" role="tablist" aria-label="Account access">
@@ -82,11 +74,7 @@
           >
           <input id="api-base" type="hidden" value="">
           <div class="auth-form-heading">
-            <div>
-              <span class="form-kicker">Access</span>
-              <h2 id="login-form-heading">Sign in</h2>
-            </div>
-            <span class="form-badge">Live session</span>
+            <h2 id="login-form-heading">Sign in</h2>
           </div>
 
           <label for="email">Email</label>
@@ -106,11 +94,6 @@
             autocomplete="current-password"
             required
           >
-          <p class="field-help">
-            Session material stays in this browser tab and is cleared when you
-            sign out or close the tab.
-          </p>
-
           <button id="login-submit" class="button button-primary" type="submit">
             <span>Sign in</span>
             <span class="button-arrow" aria-hidden="true">
@@ -129,15 +112,11 @@
             inert
           >
           <div class="auth-form-heading">
-            <div>
-              <span class="form-kicker">New membership</span>
-              <h2 id="register-form-heading">Create an account</h2>
-            </div>
-            <span class="form-badge">Client access</span>
+            <h2 id="register-form-heading">Create an account</h2>
           </div>
 
           <p class="auth-form-lede">
-            Create a client account to open the dashboard immediately.
+            Set up your Hyfens workspace.
           </p>
 
           <label for="register-email">Email</label>
@@ -164,13 +143,9 @@
             name="password-confirm"
             type="password"
             autocomplete="new-password"
-            aria-describedby="register-password-help"
             required
           >
           <p id="register-password-error" class="field-error" role="alert"></p>
-          <p id="register-password-help" class="field-help">
-            Your password is used only to create this session and is never saved by the dashboard.
-          </p>
 
           <button id="register-submit" class="button button-primary" type="submit">
             <span>Create account</span>
@@ -190,11 +165,7 @@
             inert
           >
           <div class="auth-form-heading">
-            <div>
-              <span id="invitation-form-kicker" class="form-kicker">Organization invitation</span>
-              <h2 id="invitation-form-heading">Join your team</h2>
-            </div>
-            <span class="form-badge">Secure invite</span>
+            <h2 id="invitation-form-heading">Join your team</h2>
           </div>
 
           <p id="invitation-summary" class="auth-form-lede">
@@ -237,63 +208,7 @@
           </button>
           </form>
         </div>
-
-        <div class="discovery-callout" aria-live="polite">
-          <span class="status-marker" aria-hidden="true"></span>
-          <div>
-            <strong id="discovery-status">Checking instance discovery</strong>
-            <p id="discovery-detail">
-              The dashboard checks the configured control plane before sign-in.
-            </p>
-          </div>
-        </div>
-
-        <p class="auth-footnote">
-          The browser uses the configured control plane. Unsupported product
-          capabilities remain visible as unavailable.
-        </p>
       </section>
-
-      <aside class="auth-rail" aria-label="Dashboard boundaries">
-        <div class="rail-intro">
-          <p class="eyebrow">Traceable by design</p>
-          <h2>One place for identity, artifacts, and evidence.</h2>
-          <p class="rail-copy">
-            The dashboard renders authoritative control-plane records without
-            inventing runtime health or fleet activity.
-          </p>
-        </div>
-        <ol class="rail-list">
-          <li>
-            <span class="rail-index">Identity</span>
-            <div>
-              <strong>Shared membership</strong>
-              <small>The same human authority used by the CLI</small>
-            </div>
-          </li>
-          <li>
-            <span class="rail-index">Artifacts</span>
-            <div>
-              <strong>Exact release history</strong>
-              <small>Immutable release, patch, and rollout references</small>
-            </div>
-          </li>
-          <li>
-            <span class="rail-index">Evidence</span>
-            <div>
-              <strong>Bounded audit context</strong>
-              <small>Redacted records with no client-side assumptions</small>
-            </div>
-          </li>
-        </ol>
-        <div class="rail-boundary">
-          <span class="metadata-label">Boundary</span>
-          <strong>Authority stays with the control plane.</strong>
-          <p>
-            If a safe browser endpoint is not available, the surface says so.
-          </p>
-        </div>
-      </aside>
     </div>
 
     <div id="app-view" class="app-view" data-shell="customer" hidden>
@@ -649,6 +564,6 @@
     </div>
 
     <script src="runtime-config.js" defer></script>
-    <script src="app.js?v=231" defer></script>
+    <script src="app.js?v=233" defer></script>
   </body>
 </html>

@@ -40,7 +40,6 @@
   --hyfens-surface-raised: rgba(var(--hyfens-white-rgb), 0.08);
   --hyfens-surface-soft: rgba(var(--hyfens-white-rgb), 0.025);
   --hyfens-sidebar-surface: rgba(var(--hyfens-white-rgb), 0.02);
-  --hyfens-rail-surface: rgba(var(--hyfens-white-rgb), 0.025);
   --hyfens-code-surface: rgba(var(--hyfens-white-rgb), 0.025);
   --hyfens-line: rgba(var(--hyfens-white-rgb), 0.14);
   --hyfens-line-strong: rgba(var(--hyfens-white-rgb), 0.28);
@@ -72,7 +71,6 @@ html[data-theme="light"] {
   --hyfens-surface-raised: var(--hyfens-gray-100);
   --hyfens-surface-soft: rgba(var(--hyfens-white-rgb), 0.72);
   --hyfens-sidebar-surface: var(--hyfens-gray-100);
-  --hyfens-rail-surface: var(--hyfens-white);
   --hyfens-code-surface: var(--hyfens-gray-100);
   --hyfens-line: var(--hyfens-gray-100);
   --hyfens-line-strong: var(--hyfens-gray-400);

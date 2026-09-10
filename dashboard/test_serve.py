@@ -391,45 +391,43 @@ class DashboardContractTest(unittest.TestCase):
         self.assertIn("inert", markup)
         self.assertIn(".auth-form-stage {", styles)
         stage_rule = styles.split(".auth-form-stage {", 1)[1].split("}", 1)[0]
-        self.assertIn("display: grid;", stage_rule)
+        self.assertIn("display: block;", stage_rule)
+        self.assertIn("position: relative;", stage_rule)
         self.assertIn(".auth-form-stage > .auth-form {", styles)
         transition_rule = styles.split(
             ".auth-form-stage > .auth-form {", 1
         )[1].split("}", 1)[0]
+        self.assertIn("position: relative;", transition_rule)
         self.assertIn("transition: opacity", transition_rule)
         self.assertIn("transform", transition_rule)
         self.assertIn("visibility", transition_rule)
         self.assertIn(".auth-form-stage > .auth-form[aria-hidden=\"true\"]", styles)
+        self.assertIn("position: absolute;", styles)
         self.assertIn("opacity: 0;", styles)
         self.assertIn("transform: translateY(8px);", styles)
         self.assertIn("prefers-reduced-motion: reduce", styles)
         self.assertIn("setAttribute('aria-hidden'", app_source)
         self.assertIn("form.inert", app_source)
 
-    def test_auth_shell_uses_one_document_scroll_context_and_keeps_onboarding_out(self):
+    def test_auth_shell_is_focused_single_panel_and_keeps_onboarding_out(self):
         root = Path(__file__).resolve().parent
         markup = (root / "index.html").read_text(encoding="utf-8")
         styles = (root / "styles.css").read_text(encoding="utf-8")
         app_source = (root / "app.js").read_text(encoding="utf-8")
         auth_layout_rule = styles.split(".auth-layout {", 1)[1].split("}", 1)[0]
         auth_panel_rule = styles.split(".auth-panel {", 1)[1].split("}", 1)[0]
-        auth_rail_rule = styles.split(".auth-rail {", 1)[1].split("}", 1)[0]
         auth_focus_marker = ".auth-form input:focus,\n.auth-form input:focus-visible {"
 
-        self.assertIn('href="styles.css?v=236"', markup)
-        self.assertIn('src="app.js?v=231"', markup)
+        self.assertIn('href="styles.css?v=237"', markup)
+        self.assertIn('src="app.js?v=233"', markup)
         self.assertIn("min-height: 100dvh;", auth_layout_rule)
-        self.assertIn("overflow: visible;", auth_layout_rule)
-        self.assertNotIn("\n  height: 100dvh;", auth_layout_rule)
-        self.assertIn("width: 100%;", auth_panel_rule)
+        self.assertIn("place-items: center;", auth_layout_rule)
+        self.assertIn("padding:", auth_layout_rule)
+        self.assertIn("width: min(100%, 540px);", auth_panel_rule)
         self.assertIn("height: auto;", auth_panel_rule)
-        self.assertIn("min-height: 100dvh;", auth_panel_rule)
+        self.assertIn("border: 1px solid var(--line);", auth_panel_rule)
+        self.assertIn("border-radius: var(--radius-panel);", auth_panel_rule)
         self.assertIn("overflow: clip;", auth_panel_rule)
-        self.assertNotIn("overflow-y: auto;", auth_panel_rule)
-        self.assertIn("height: auto;", auth_rail_rule)
-        self.assertIn("min-height: 100dvh;", auth_rail_rule)
-        self.assertIn("overflow: clip;", auth_rail_rule)
-        self.assertNotIn("overflow-y: auto;", auth_rail_rule)
         self.assertIn(auth_focus_marker, styles)
         auth_focus_rule = styles.split(auth_focus_marker, 1)[1].split("}", 1)[0]
         self.assertNotIn("onboarding-intake", markup)
@@ -437,6 +435,25 @@ class DashboardContractTest(unittest.TestCase):
         self.assertNotIn("Join the waitlist", markup)
         self.assertNotIn("Get product updates", markup)
         self.assertNotIn("app.hyfens.com", markup)
+        self.assertNotIn("auth-rail", markup)
+        self.assertNotIn("Human session", markup)
+        self.assertNotIn("Live session", markup)
+        self.assertNotIn("Session material", markup)
+        self.assertNotIn("Traceable by design", markup)
+        self.assertNotIn("discovery-callout", markup)
+        self.assertNotIn("auth-footnote", markup)
+        self.assertNotIn("form-kicker", markup)
+        self.assertNotIn("form-badge", markup)
+        self.assertNotIn("field-help", markup)
+        self.assertIn("Welcome back.", markup)
+        self.assertIn("Sign in to your Hyfens workspace.", markup)
+        self.assertIn('id="invitation-form"', markup)
+        self.assertIn("error.status === 401 && error.path === 'auth/login'", app_source)
+        self.assertIn("return 'Your session expired. Sign in again.';", app_source)
+        self.assertIn("return 'Sign-in is not available on this control plane.';", app_source)
+        self.assertIn("return 'Account creation is not available on this control plane.';", app_source)
+        self.assertIn("function loginErrorMessage(error, { restoring = false } = {})", app_source)
+        self.assertIn("if (restoring) return 'Your saved session could not be restored. Sign in again.';", app_source)
         self.assertIn("nodes.intakeForm?.addEventListener", app_source)
         self.assertIn("if (nodes.intakeForm) showIntakeMode", app_source)
         self.assertNotIn("box-shadow", auth_focus_rule)
@@ -458,9 +475,9 @@ class DashboardContractTest(unittest.TestCase):
             "--hyfens-font-primary: var(--hyfens-font-ui);",
             tokens,
         )
-        self.assertIn('href="tokens.css?v=222"', markup)
-        self.assertIn('href="styles.css?v=236"', markup)
-        self.assertIn('src="app.js?v=231"', markup)
+        self.assertIn('href="tokens.css?v=223"', markup)
+        self.assertIn('href="styles.css?v=237"', markup)
+        self.assertIn('src="app.js?v=233"', markup)
         self.assertGreaterEqual(
             styles.count("font-family: var(--hyfens-font-display);"),
             2,
