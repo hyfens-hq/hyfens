@@ -499,14 +499,16 @@ final class ControlPlaneHttpServer {
         return;
       }
       if (request.method == 'POST' &&
-          _matches(path, const ['v1', 'public', 'cloud', 'register'])) {
+          (_matches(path, const ['v1', 'public', 'cloud', 'register']) ||
+              _matches(path, const ['v1', 'cloud', 'signup']))) {
         _enforceAuthRateLimit(request);
         _rejectPublicQuery(request);
         await _publicCloudRegister(request, requestId);
         return;
       }
       if (request.method == 'POST' &&
-          _matches(path, const ['v1', 'public', 'cloud', 'verify'])) {
+          (_matches(path, const ['v1', 'public', 'cloud', 'verify']) ||
+              _matches(path, const ['v1', 'cloud', 'verify']))) {
         _enforceAuthRateLimit(request);
         _rejectPublicQuery(request);
         await _publicCloudVerify(request, requestId);
@@ -4887,13 +4889,18 @@ final class ControlPlaneHttpServer {
     );
     await _json(request.response, 202, <String, Object?>{
       ...result.toJson(),
+      'email': _string(body, 'email'),
       'request_id': requestId,
     });
   }
 
   Future<void> _publicCloudVerify(HttpRequest request, String requestId) async {
     final body = await _publicJsonBody(request);
-    const allowed = <String>{'token', 'organization_name'};
+    // The current Cloud web verification form includes the email as a
+    // display/context field. The token remains the sole authority for the
+    // account being verified; accepting the optional email preserves that
+    // public contract without trusting client-supplied identity data.
+    const allowed = <String>{'token', 'email', 'organization_name'};
     if (!body.containsKey('token') ||
         body.keys.any((key) => !allowed.contains(key))) {
       throw const ControlPlaneException(

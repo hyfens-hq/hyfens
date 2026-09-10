@@ -194,6 +194,46 @@ void main() {
     }
   });
 
+  test(
+    'legacy Cloud onboarding paths remain compatible with the public flow',
+    () async {
+      final client = HttpClient();
+      try {
+        final registration = await _request(
+          client,
+          server,
+          method: 'POST',
+          path: '/v1/cloud/signup',
+          body: <String, Object?>{
+            'email': 'legacy-cloud@example.com',
+            'password': 'correct horse battery staple',
+            'organization_name': 'Legacy Cloud workspace',
+          },
+        );
+        expect(
+          registration.statusCode,
+          202,
+          reason: jsonEncode(registration.body),
+        );
+        expect(registration.body['email'], 'legacy-cloud@example.com');
+        final verified = await _request(
+          client,
+          server,
+          method: 'POST',
+          path: '/v1/cloud/verify',
+          body: <String, Object?>{
+            'email': 'legacy-cloud@example.com',
+            'token': delivery.verificationTokens.single,
+          },
+        );
+        expect(verified.statusCode, 200, reason: jsonEncode(verified.body));
+        expect(verified.body['access_token'], isA<String>());
+      } finally {
+        client.close(force: true);
+      }
+    },
+  );
+
   test('recovery keeps the same customer organization and verification is one-time', () async {
     final registration = await service.registerCloudCustomer(
       email: 'recover@example.com',

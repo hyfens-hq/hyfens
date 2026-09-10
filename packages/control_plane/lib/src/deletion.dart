@@ -974,10 +974,15 @@ final class AccountDeletionService {
       if (ready['status'] == 'policy_decision_required') return ready;
     }
     final readyStatus = ready['status'];
-    final graceEndsAt = _parseTime(ready['gracePeriodEndsAt']);
+    // The persisted processing boundary is the authority. The grace-period
+    // field remains a compatibility fallback for records created before the
+    // working-day schedule was added.
+    final processingAt = _parseTime(
+      ready['processingAt'] ?? ready['gracePeriodEndsAt'],
+    );
     if (readyStatus == 'grace_period' &&
-        graceEndsAt != null &&
-        graceEndsAt.isAfter(normalizedNow)) {
+        processingAt != null &&
+        processingAt.isAfter(normalizedNow)) {
       return ready;
     }
     final processing = <String, Object?>{

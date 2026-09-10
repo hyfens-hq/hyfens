@@ -95,6 +95,13 @@ lock. It drains durable notification deliveries asynchronously using the
 protected control-plane environment; it does not run from HTTP or provider
 webhook requests.
 
+For managed TEST acceptance only, the deletion worker exposes a guarded clock
+seam. Run the worker with `--process-deletions-at <UTC-ISO-8601>` while the
+process environment contains `HYFENS_DELETION_TEST_CLOCK=1` and
+`RAZORPAY_MODE=test`. The command rejects the override in any other mode, and
+the normal systemd timer never supplies it. This advances the service's
+persisted business-calendar evaluation without mutating deletion timestamps.
+
 The control plane is deliberately configured with customer/local signing
 authority. PostgreSQL and object storage persist and deliver bytes; they never
 verify or authorize runtime patches.
