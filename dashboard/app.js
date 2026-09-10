@@ -222,7 +222,6 @@
     registerSubmit: document.querySelector('#register-submit'),
     registerMessage: document.querySelector('#register-message'),
     invitationSummary: document.querySelector('#invitation-summary'),
-    invitationFormKicker: document.querySelector('#invitation-form-kicker'),
     invitationEmail: document.querySelector('#invitation-email'),
     invitationPassword: document.querySelector('#invitation-password'),
     invitationPasswordConfirm: document.querySelector('#invitation-password-confirm'),
@@ -238,9 +237,6 @@
     intakeSubmit: document.querySelector('#intake-submit'),
     intakeMessage: document.querySelector('#intake-message'),
     intakeSection: document.querySelector('#onboarding-intake'),
-    discoveryCallout: document.querySelector('.discovery-callout'),
-    discoveryStatus: document.querySelector('#discovery-status'),
-    discoveryDetail: document.querySelector('#discovery-detail'),
     sidebar: document.querySelector('#sidebar'),
     sidebarBrand: document.querySelector('#sidebar-brand'),
     sidebarScrim: document.querySelector('#sidebar-scrim'),
@@ -3522,40 +3518,16 @@
       : 'Waiting for first request';
   }
 
-  function renderDiscoveryStatus() {
-    const discovery = state.discovery;
-    nodes.discoveryCallout.dataset.state = discovery.status === 'available' ? 'success' : discovery.status === 'error' ? 'error' : 'warning';
-    if (discovery.status === 'available') {
-      nodes.discoveryStatus.textContent = 'Instance discovered';
-      nodes.discoveryDetail.textContent = 'Compatibility metadata is available for the configured control plane.';
-      return;
-    }
-    if (discovery.status === 'checking') {
-      nodes.discoveryStatus.textContent = 'Checking instance discovery';
-      nodes.discoveryDetail.textContent = 'The dashboard checks the configured control plane before sign-in.';
-      return;
-    }
-    if (discovery.status === 'unavailable') {
-      nodes.discoveryStatus.textContent = 'Discovery unavailable';
-      nodes.discoveryDetail.textContent = 'This instance does not expose /.well-known/hyfens. Sign-in uses only the known auth contract; unadvertised capabilities stay unavailable.';
-      return;
-    }
-    nodes.discoveryStatus.textContent = 'Discovery could not be checked';
-    nodes.discoveryDetail.textContent = 'Check the endpoint and network before relying on capability state.';
-  }
-
   async function probeDiscovery(endpoint = null) {
     let base;
     try {
       base = normalizeEndpoint(endpoint ?? nodes.apiBase.value);
     } catch (error) {
       state.discovery = { status: 'error', endpoint: '' };
-      renderDiscoveryStatus();
       return state.discovery;
     }
     if (state.discovery.endpoint === base && state.discovery.status !== 'checking') return state.discovery;
     state.discovery = { status: 'checking', endpoint: base };
-    renderDiscoveryStatus();
     const probe = new DashboardApi(base);
     try {
       const payload = await probe.discover();
@@ -3568,7 +3540,6 @@
         error,
       };
     }
-    renderDiscoveryStatus();
     return state.discovery;
   }
 
@@ -3678,7 +3649,7 @@
   async function handleLogin(event) {
     event.preventDefault();
     invalidateOverviewRequest();
-    setLoginMessage('Connecting to the control plane...', 'pending');
+    setLoginMessage('Signing you in...', 'pending');
     nodes.loginSubmit.disabled = true;
     const password = nodes.password.value;
     nodes.password.value = '';
@@ -3759,7 +3730,6 @@
       const role = stringValue(pick(preview, 'role')) ?? 'member';
       const email = stringValue(pick(preview, 'email')) ?? '';
       const active = pick(preview, 'active') === true;
-      if (nodes.invitationFormKicker) nodes.invitationFormKicker.textContent = 'Organization invitation';
       nodes.invitationSummary.textContent = active
         ? 'You have been invited to ' + organization + ' as ' + role + '. Use the invited email to create your account and join the organization.'
         : 'This invitation is no longer available.';
@@ -4017,7 +3987,7 @@
       nodes.loginView.hidden = false;
       showAuthMode('login', { focus: false });
       clearStoredSession();
-      setLoginMessage(loginErrorMessage(error), 'error');
+      setLoginMessage(loginErrorMessage(error, { restoring: true }), 'error');
       return false;
     }
   }
@@ -4044,20 +4014,32 @@
     };
   }
 
-  function loginErrorMessage(error) {
-    if (error instanceof ApiError && error.status === 401) return 'Email or password is invalid, or the session could not be established.';
-    if (error instanceof ApiError && error.status === 404) return 'The configured control plane does not expose the shared auth route.';
-    if (error instanceof ApiError && error.status === 503) return 'Human authentication is not configured on this control plane.';
+  function loginErrorMessage(error, { restoring = false } = {}) {
+    if (error instanceof SessionExpiredError) return 'Your session expired. Sign in again.';
+    if (error instanceof ApiError && error.status === 401 && error.path === 'auth/login') {
+      return 'Email or password is incorrect.';
+    }
+    if (error instanceof ApiError && error.status === 404) {
+      return 'Sign-in is not available on this control plane.';
+    }
+    if (error instanceof ApiError && error.status === 503) {
+      return 'Sign-in is temporarily unavailable. Try again later.';
+    }
     if (error instanceof Error && error.message.includes('endpoint')) return error.message;
-    if (error instanceof Error && error.message.includes('membership')) return error.message;
-    return 'Sign-in could not be completed. Check the endpoint and try again.';
+    if (error instanceof Error && error.message.includes('membership')) return 'Your account is not connected to a workspace.';
+    if (restoring) return 'Your saved session could not be restored. Sign in again.';
+    return 'Sign-in could not be completed. Check your details and try again.';
   }
 
   function registrationErrorMessage(error) {
-    if (error instanceof ApiError && error.status === 404) return 'Account creation is not available on this control plane.';
-    if (error instanceof ApiError && error.status === 503) return 'Account creation is not currently available. Try again later.';
+    if (error instanceof ApiError && error.status === 404) {
+      return 'Account creation is not available on this control plane.';
+    }
+    if (error instanceof ApiError && error.status === 503) {
+      return 'Account creation is temporarily unavailable. Try again later.';
+    }
     if (error instanceof Error && error.message.includes('endpoint')) return error.message;
-    if (error instanceof Error && error.message.includes('membership')) return error.message;
+    if (error instanceof Error && error.message.includes('membership')) return 'Your account could not be connected to a workspace.';
     return 'Account creation could not be completed. Check your details and try again.';
   }
 
@@ -5459,7 +5441,6 @@
   setTheme('dark');
   handleAccountMenuToggle();
   syncSidebarAccessibility();
-  renderDiscoveryStatus();
 
   async function bootstrapSession() {
     try {
