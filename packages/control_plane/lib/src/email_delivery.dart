@@ -86,7 +86,7 @@ final class KeplarsHumanMessageDelivery
       'token': token,
       'expires_at': expiresAt.toUtc().toIso8601String(),
       'action_url': _renderer.dashboardOrigin.toString(),
-      'action_label': 'Open Hyfens Cloud',
+      'action_label': 'Open workspace',
     },
   );
 
@@ -133,7 +133,7 @@ final class KeplarsHumanMessageDelivery
           )
           .toString(),
       'action_label': 'Review deletion request',
-      'message': 'Someone requested deletion of a Hyfens Cloud account associated with this address.',
+      'message': 'Someone requested deletion of the account associated with this address.',
     },
   );
 

@@ -188,7 +188,7 @@ final class NotificationCatalog {
       category: NotificationCategory.authentication,
       purpose: 'welcome',
       template: 'welcome',
-      subject: 'Welcome to Hyfens Cloud',
+      subject: 'Welcome',
       preheader: 'Your workspace is ready for the next release.',
       priority: 'async',
       userCanDisable: false,
@@ -201,7 +201,7 @@ final class NotificationCatalog {
       category: NotificationCategory.authentication,
       purpose: 'email_verification',
       template: 'verification_code',
-      subject: 'Verify your Hyfens Cloud account',
+      subject: 'Verify your account',
       preheader: 'Use this one-time code to finish setting up your account.',
       priority: 'instant',
       userCanDisable: false,
@@ -214,7 +214,7 @@ final class NotificationCatalog {
       category: NotificationCategory.authentication,
       purpose: 'password_recovery',
       template: 'recovery_code',
-      subject: 'Reset your Hyfens Cloud password',
+      subject: 'Reset your password',
       preheader: 'Use this one-time link to choose a new password.',
       priority: 'instant',
       userCanDisable: false,
@@ -227,7 +227,7 @@ final class NotificationCatalog {
       category: NotificationCategory.security,
       purpose: 'password_change',
       template: 'security_notice',
-      subject: 'Your Hyfens password was changed',
+      subject: 'Your password was changed',
       preheader: 'A security-sensitive change was made to your account.',
       priority: 'high',
       userCanDisable: false,
@@ -240,7 +240,7 @@ final class NotificationCatalog {
       category: NotificationCategory.security,
       purpose: 'new_device',
       template: 'security_notice',
-      subject: 'New sign-in to your Hyfens account',
+      subject: 'New sign-in to your account',
       preheader: 'Review a recent sign-in to your account.',
       priority: 'high',
       userCanDisable: false,
@@ -253,7 +253,7 @@ final class NotificationCatalog {
       category: NotificationCategory.organization,
       purpose: 'member_invitation',
       template: 'invitation',
-      subject: 'You have been invited to a Hyfens workspace',
+      subject: 'You have been invited to a workspace',
       preheader: 'Join a workspace and collaborate on safer releases.',
       priority: 'high',
       userCanDisable: false,
@@ -266,7 +266,7 @@ final class NotificationCatalog {
       category: NotificationCategory.security,
       purpose: 'ownership_change',
       template: 'security_notice',
-      subject: 'Hyfens workspace ownership changed',
+      subject: 'Workspace ownership changed',
       preheader: 'A security-sensitive workspace change was completed.',
       priority: 'high',
       userCanDisable: false,
@@ -279,7 +279,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'checkout_initiated',
       template: 'billing_summary',
-      subject: 'Your Hyfens checkout is ready',
+      subject: 'Your checkout is ready',
       preheader: 'Continue securely to authorize your selected plan.',
       priority: 'async',
       userCanDisable: false,
@@ -292,7 +292,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'plan_change_requested',
       template: 'plan_change',
-      subject: 'Your Hyfens plan change was requested',
+      subject: 'Your plan change was requested',
       preheader: 'We are confirming the requested billing change.',
       priority: 'async',
       userCanDisable: false,
@@ -305,7 +305,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'plan_change_cancelled',
       template: 'plan_change',
-      subject: 'Your scheduled Hyfens plan change was cancelled',
+      subject: 'Your scheduled plan change was cancelled',
       preheader: 'Your current plan will continue unchanged.',
       priority: 'async',
       userCanDisable: false,
@@ -318,7 +318,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'refund_requested',
       template: 'refund',
-      subject: 'Your Hyfens refund request was received',
+      subject: 'Your refund request was received',
       preheader:
           'Your request will be reviewed according to the Refund Policy.',
       priority: 'async',
@@ -332,7 +332,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'subscription_activation',
       template: 'billing_summary',
-      subject: 'Your Hyfens subscription is active',
+      subject: 'Your subscription is active',
       preheader: 'Your new plan and entitlements are now available.',
       priority: 'async',
       userCanDisable: false,
@@ -345,7 +345,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'subscription_renewal',
       template: 'billing_summary',
-      subject: 'Your Hyfens subscription renewed',
+      subject: 'Your subscription renewed',
       preheader: 'Your payment was received and your plan remains active.',
       priority: 'async',
       userCanDisable: false,
@@ -358,8 +358,8 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'payment_receipt',
       template: 'billing_summary',
-      subject: 'Payment received for Hyfens Cloud',
-      preheader: 'Your Hyfens payment was captured successfully.',
+      subject: 'Payment received',
+      preheader: 'Your payment was captured successfully.',
       priority: 'async',
       userCanDisable: false,
       deduplication: 'provider_event',
@@ -371,7 +371,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'payment_failure',
       template: 'billing_warning',
-      subject: 'Action may be needed for your Hyfens payment',
+      subject: 'Action may be needed for your payment',
       preheader: 'Your plan remains protected while we reconcile the payment.',
       priority: 'high',
       userCanDisable: false,
@@ -384,7 +384,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'payment_action',
       template: 'billing_warning',
-      subject: 'Payment action required for Hyfens Cloud',
+      subject: 'Payment action required',
       preheader:
           'Complete the requested billing action to keep service active.',
       priority: 'high',
@@ -398,7 +398,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'upcoming_renewal',
       template: 'billing_summary',
-      subject: 'Your Hyfens renewal is coming up',
+      subject: 'Your renewal is coming up',
       preheader: 'Review the plan and date for your next renewal.',
       priority: 'schedule',
       userCanDisable: false,
@@ -411,7 +411,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'plan_upgrade',
       template: 'plan_change',
-      subject: 'Your Hyfens plan was upgraded',
+      subject: 'Your plan was upgraded',
       preheader: 'Your higher plan capabilities are now effective.',
       priority: 'async',
       userCanDisable: false,
@@ -424,7 +424,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'plan_downgrade_scheduled',
       template: 'plan_change',
-      subject: 'Your Hyfens downgrade is scheduled',
+      subject: 'Your downgrade is scheduled',
       preheader:
           'Your current paid plan remains active until the effective date.',
       priority: 'async',
@@ -438,7 +438,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'plan_downgrade_applied',
       template: 'plan_change',
-      subject: 'Your Hyfens plan changed',
+      subject: 'Your plan changed',
       preheader: 'Your scheduled plan change is now effective.',
       priority: 'async',
       userCanDisable: false,
@@ -451,7 +451,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'cancellation_scheduled',
       template: 'cancellation',
-      subject: 'Your Hyfens subscription cancellation is scheduled',
+      subject: 'Your subscription cancellation is scheduled',
       preheader: 'Your paid access continues through the current period.',
       priority: 'high',
       userCanDisable: false,
@@ -464,7 +464,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'subscription_cancelled',
       template: 'cancellation',
-      subject: 'Your Hyfens subscription has ended',
+      subject: 'Your subscription has ended',
       preheader: 'Your subscription is no longer renewing.',
       priority: 'async',
       userCanDisable: false,
@@ -477,7 +477,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'subscription_reactivated',
       template: 'billing_summary',
-      subject: 'Your Hyfens subscription is active again',
+      subject: 'Your subscription is active again',
       preheader: 'Your plan and paid capabilities are available again.',
       priority: 'async',
       userCanDisable: false,
@@ -490,7 +490,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'refund_initiated',
       template: 'refund',
-      subject: 'Your Hyfens refund is being processed',
+      subject: 'Your refund is being processed',
       preheader: 'We have started the reviewed refund process.',
       priority: 'high',
       userCanDisable: false,
@@ -503,7 +503,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'refund_completed',
       template: 'refund',
-      subject: 'Your Hyfens refund was processed',
+      subject: 'Your refund was processed',
       preheader:
           'The approved refund has been accepted by the payment provider.',
       priority: 'async',
@@ -517,7 +517,7 @@ final class NotificationCatalog {
       category: NotificationCategory.billing,
       purpose: 'refund_failed',
       template: 'billing_warning',
-      subject: 'Your Hyfens refund needs attention',
+      subject: 'Your refund needs attention',
       preheader: 'The approved refund could not be completed automatically.',
       priority: 'high',
       userCanDisable: false,
@@ -530,7 +530,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'account_deletion_verified',
       template: 'destructive_notice',
-      subject: 'Your Hyfens account deletion is scheduled',
+      subject: 'Your account deletion is scheduled',
       preheader: 'Your request is verified. Review the grace period and cancel if needed.',
       priority: 'high',
       userCanDisable: false,
@@ -543,7 +543,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'account_deletion_reminder',
       template: 'destructive_notice',
-      subject: 'Reminder: your Hyfens account deletion is scheduled',
+      subject: 'Reminder: your account deletion is scheduled',
       preheader: 'Your account is still recoverable during the grace period.',
       priority: 'high',
       userCanDisable: false,
@@ -556,7 +556,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'account_deletion_final_reminder',
       template: 'destructive_notice',
-      subject: 'Final reminder: your Hyfens account deletion is scheduled',
+      subject: 'Final reminder: your account deletion is scheduled',
       preheader: 'Deletion processing begins after the grace period.',
       priority: 'high',
       userCanDisable: false,
@@ -569,7 +569,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'account_deletion',
       template: 'destructive_notice',
-      subject: 'Your Hyfens account deletion is scheduled',
+      subject: 'Your account deletion is scheduled',
       preheader:
           'Review the request and cancel it during the grace period if needed.',
       priority: 'high',
@@ -583,7 +583,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'account_deletion_cancelled',
       template: 'security_notice',
-      subject: 'Your Hyfens account deletion was cancelled',
+      subject: 'Your account deletion was cancelled',
       preheader: 'Your account remains active.',
       priority: 'high',
       userCanDisable: false,
@@ -596,7 +596,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'account_deleted',
       template: 'destructive_notice',
-      subject: 'Your Hyfens account was deleted',
+      subject: 'Your account was deleted',
       preheader: 'Your account lifecycle request has completed.',
       priority: 'async',
       userCanDisable: false,
@@ -609,7 +609,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'organization_deletion_verified',
       template: 'destructive_notice',
-      subject: 'Your Hyfens organization deletion is scheduled',
+      subject: 'Your organization deletion is scheduled',
       preheader: 'Your request is verified. Review the grace period and cancel if needed.',
       priority: 'high',
       userCanDisable: false,
@@ -622,7 +622,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'organization_deletion_reminder',
       template: 'destructive_notice',
-      subject: 'Reminder: your Hyfens organization deletion is scheduled',
+      subject: 'Reminder: your organization deletion is scheduled',
       preheader:
           'Your organization remains recoverable during the grace period.',
       priority: 'high',
@@ -636,7 +636,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'organization_deletion_final_reminder',
       template: 'destructive_notice',
-      subject: 'Final reminder: your Hyfens organization deletion is scheduled',
+      subject: 'Final reminder: your organization deletion is scheduled',
       preheader: 'Staged deletion begins after the grace period.',
       priority: 'high',
       userCanDisable: false,
@@ -649,7 +649,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'organization_deletion',
       template: 'destructive_notice',
-      subject: 'Your Hyfens organization deletion is scheduled',
+      subject: 'Your organization deletion is scheduled',
       preheader: 'Customer-owned organization data remains available during the grace period.',
       priority: 'high',
       userCanDisable: false,
@@ -662,7 +662,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'organization_deletion_cancelled',
       template: 'security_notice',
-      subject: 'Your Hyfens organization deletion was cancelled',
+      subject: 'Your organization deletion was cancelled',
       preheader: 'Your organization remains available.',
       priority: 'high',
       userCanDisable: false,
@@ -675,7 +675,7 @@ final class NotificationCatalog {
       category: NotificationCategory.account,
       purpose: 'organization_deleted',
       template: 'destructive_notice',
-      subject: 'Your Hyfens organization was deleted',
+      subject: 'Your organization was deleted',
       preheader: 'The organization lifecycle request has completed.',
       priority: 'async',
       userCanDisable: false,
@@ -688,7 +688,7 @@ final class NotificationCatalog {
       category: NotificationCategory.operational,
       purpose: 'enterprise_inquiry',
       template: 'enterprise_inquiry',
-      subject: 'New Hyfens Enterprise inquiry',
+      subject: 'New Enterprise inquiry',
       preheader: 'A customer inquiry is waiting in the operator workspace.',
       priority: 'high',
       userCanDisable: false,
@@ -1038,7 +1038,7 @@ final class NotificationRenderer {
         content: htmlContent.toString(),
       ),
       text:
-          '${_title(definition, event.variables)}\n\n${textContent.toString().trim()}\n\nHyfens Cloud\n${marketingOrigin.toString()}',
+          '${_title(definition, event.variables)}\n\n${textContent.toString().trim()}\n\nHyfens\nOpen workspace: ${marketingOrigin.toString()}',
     );
   }
 
@@ -1064,7 +1064,7 @@ final class NotificationRenderer {
     Map<String, Object?> values, {
     required DateTime occurredAt,
   }) {
-    final plan = _value(values, 'plan', fallback: 'Hyfens Cloud');
+    final plan = _value(values, 'plan', fallback: 'your current plan');
     final organization = _value(
       values,
       'organization',
@@ -1083,23 +1083,22 @@ final class NotificationRenderer {
     final message = _value(
       values,
       'message',
-      fallback:
-          'This message records an important change to your Hyfens account.',
+      fallback: 'This message records an important change to your account.',
     );
     switch (definition.template) {
       case 'welcome':
         return _RenderedContent(
           html:
-              '<p>Your Hyfens Cloud workspace is ready.</p><p>Use the Cloud dashboard to review releases, environments, billing, and the service boundary for <strong>${_escape(organization)}</strong>.</p>',
+              '<p>Your workspace is ready.</p><p>Use the dashboard to review releases, environments, billing, and the service boundary for <strong>${_escape(organization)}</strong>.</p>',
           text:
-              'Your Hyfens Cloud workspace is ready.\n\nReview releases, environments, billing, and the service boundary for $organization.',
+              'Your workspace is ready.\n\nReview releases, environments, billing, and the service boundary for $organization.',
         );
       case 'verification_code':
       case 'recovery_code':
         final token = _value(values, 'token', fallback: 'Unavailable');
         final purpose = definition.template == 'verification_code'
             ? 'Finish creating your account with this one-time verification code:'
-            : 'We received a request to reset your Hyfens password.';
+            : 'We received a request to reset your password.';
         final codeInstruction = definition.template == 'verification_code'
             ? purpose
             : 'Use the Reset password button for the one-click path. If you need a manual fallback, use this one-time recovery code:';
@@ -1125,9 +1124,9 @@ final class NotificationRenderer {
       case 'billing_warning':
         return _RenderedContent(
           html:
-              '<div style="margin:20px 0;padding:16px 18px;border-left:3px solid #d85a2a;background:#fff4ed"><strong>${_escape(message)}</strong></div><p>Your current entitlement is governed by Hyfens billing state. If action is required, use the billing workspace or contact support.</p>',
+              '<div style="margin:20px 0;padding:16px 18px;border-left:3px solid #d85a2a;background:#fff4ed"><strong>${_escape(message)}</strong></div><p>Your current entitlement follows the authoritative billing state. If action is required, use the billing workspace or contact support.</p>',
           text:
-              '$message\n\nYour current entitlement is governed by Hyfens billing state. If action is required, use the billing workspace or contact support.',
+              '$message\n\nYour current entitlement follows the authoritative billing state. If action is required, use the billing workspace or contact support.',
         );
       case 'plan_change':
         final oldPlan = _value(values, 'old_plan', fallback: 'Current plan');
@@ -1148,9 +1147,9 @@ final class NotificationRenderer {
       case 'refund':
         return _RenderedContent(
           html:
-              '<p>${_escape(message)}</p>${_summaryTable(<String, String>{'Amount': amount, 'Payment': _value(values, 'payment_id', fallback: 'Hyfens payment'), 'Status': _value(values, 'status', fallback: 'Under review'), 'Workspace': organization})}<p>Refund processing is separate from subscription state. A refund does not by itself cancel a subscription.</p>',
+              '<p>${_escape(message)}</p>${_summaryTable(<String, String>{'Amount': amount, 'Payment': _value(values, 'payment_id', fallback: 'your payment'), 'Status': _value(values, 'status', fallback: 'Under review'), 'Workspace': organization})}<p>Refund processing is separate from subscription state. A refund does not by itself cancel a subscription.</p>',
           text:
-              '$message\n\nAmount: $amount\nPayment: ${_value(values, 'payment_id', fallback: 'Hyfens payment')}\nStatus: ${_value(values, 'status', fallback: 'Under review')}\nWorkspace: $organization\n\nRefund processing is separate from subscription state. A refund does not by itself cancel a subscription.',
+              '$message\n\nAmount: $amount\nPayment: ${_value(values, 'payment_id', fallback: 'your payment')}\nStatus: ${_value(values, 'status', fallback: 'Under review')}\nWorkspace: $organization\n\nRefund processing is separate from subscription state. A refund does not by itself cancel a subscription.',
         );
       case 'destructive_notice':
         final processingAt = _customerDate(
@@ -1170,9 +1169,9 @@ final class NotificationRenderer {
         );
         return _RenderedContent(
           html:
-              '<div style="margin:20px 0;padding:16px 18px;border-left:3px solid #b42318;background:#fff1f0"><strong>${_escape(message)}</strong></div>${_summaryTable(<String, String>{if (values['processing_at'] != null) 'Expected processing date': processingAt, if (values['working_day'] != null) 'Grace milestone': _value(values, 'working_day'), 'Access': restriction, 'Billing': billingMessage})}<p>Account deletion is separate from subscription cancellation. Required billing, security, and audit evidence may be retained according to Hyfens policy.</p>',
+              '<div style="margin:20px 0;padding:16px 18px;border-left:3px solid #b42318;background:#fff1f0"><strong>${_escape(message)}</strong></div>${_summaryTable(<String, String>{if (values['processing_at'] != null) 'Expected processing date': processingAt, if (values['working_day'] != null) 'Grace milestone': _value(values, 'working_day'), 'Access': restriction, 'Billing': billingMessage})}<p>Account deletion is separate from subscription cancellation. Required billing, security, and audit evidence may be retained according to the published policy.</p>',
           text:
-              '$message\n\n${values['processing_at'] != null ? 'Expected processing date: $processingAt\n' : ''}${values['working_day'] != null ? 'Grace milestone: ${_value(values, 'working_day')}\n' : ''}Access: $restriction\nBilling: $billingMessage\n\nAccount deletion is separate from subscription cancellation. Required billing, security, and audit evidence may be retained according to Hyfens policy.',
+              '$message\n\n${values['processing_at'] != null ? 'Expected processing date: $processingAt\n' : ''}${values['working_day'] != null ? 'Grace milestone: ${_value(values, 'working_day')}\n' : ''}Access: $restriction\nBilling: $billingMessage\n\nAccount deletion is separate from subscription cancellation. Required billing, security, and audit evidence may be retained according to the published policy.',
         );
       case 'invitation':
         return _RenderedContent(
@@ -1240,7 +1239,7 @@ final class NotificationRenderer {
     );
     if (!isAllowed) return null;
     return _Action(
-      label: _value(values, 'action_label', fallback: 'Open Hyfens Cloud'),
+      label: _value(values, 'action_label', fallback: 'Open workspace'),
       url: uri.toString(),
     );
   }
@@ -1250,7 +1249,7 @@ final class NotificationRenderer {
     required String preheader,
     required String content,
   }) =>
-      '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escape(title)}</title><style>body{margin:0;background:#efede8;color:#171717;font-family:Arial,Helvetica,sans-serif}a{color:#171717}p{font-size:16px;line-height:1.6;margin:0 0 16px}strong{font-weight:700}.summary-value{word-break:break-word;overflow-wrap:anywhere}@media(max-width:620px){.outer{padding:20px 12px!important}.panel{padding:28px 22px!important}.summary-row{display:block!important}.summary-label,.summary-value{display:block!important;width:100%!important;text-align:left!important}.summary-label{padding-bottom:4px!important;border-bottom:0!important}.summary-value{padding-top:0!important;padding-bottom:12px!important}}</style></head><body><div style="display:none;max-height:0;overflow:hidden;opacity:0">${_escape(preheader)}</div><table class="outer" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#efede8;padding:44px 20px"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;background:#ffffff;border:1px solid #d8d3cb"><tr><td class="panel" style="padding:38px 42px"><div style="font-size:18px;font-weight:700;letter-spacing:-.02em;margin-bottom:38px"><img src="${_escape(marketingOrigin.replace(path: '/brand-mark.png').toString())}" width="24" height="24" alt="Hyfens" style="display:inline-block;vertical-align:middle;width:24px;height:24px;margin-right:8px">hyfens</div><div style="color:#716d67;font-size:12px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px">Hyfens Cloud</div><h1 style="font-size:30px;line-height:1.12;letter-spacing:-.04em;margin:0 0 22px;color:#171717">${_escape(title)}</h1>$content</td></tr><tr><td style="padding:18px 42px;border-top:1px solid #e5e1db;color:#716d67;font-size:12px;line-height:1.5">Hyfens Cloud · Secure product communication<br><a href="${_escape(marketingOrigin.toString())}">hyfens.com</a> · <a href="mailto:support@hyfens.com">support@hyfens.com</a></td></tr></table></td></tr></table></body></html>''';
+      '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escape(title)}</title><style>body{margin:0;background:#efede8;color:#171717;font-family:Arial,Helvetica,sans-serif}a{color:#171717}p{font-size:16px;line-height:1.6;margin:0 0 16px}strong{font-weight:700}.summary-value{word-break:break-word;overflow-wrap:anywhere}@media(max-width:620px){.outer{padding:20px 12px!important}.panel{padding:28px 22px!important}.summary-row{display:block!important}.summary-label,.summary-value{display:block!important;width:100%!important;text-align:left!important}.summary-label{padding-bottom:4px!important;border-bottom:0!important}.summary-value{padding-top:0!important;padding-bottom:12px!important}}</style></head><body><div style="display:none;max-height:0;overflow:hidden;opacity:0">${_escape(preheader)}</div><table class="outer" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#efede8;padding:44px 20px"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;background:#ffffff;border:1px solid #d8d3cb"><tr><td class="panel" style="padding:38px 42px"><div style="font-size:18px;font-weight:700;letter-spacing:-.02em;margin-bottom:38px"><img src="${_escape(marketingOrigin.replace(path: '/brand-mark.png').toString())}" width="24" height="24" alt="" style="display:inline-block;vertical-align:middle;width:24px;height:24px;margin-right:8px">hyfens</div><h1 style="font-size:30px;line-height:1.12;letter-spacing:-.04em;margin:0 0 22px;color:#171717">${_escape(title)}</h1>$content</td></tr><tr><td style="padding:18px 42px;border-top:1px solid #e5e1db;color:#716d67;font-size:12px;line-height:1.5">Secure product communication<br><a href="${_escape(marketingOrigin.toString())}">Open workspace</a> · <a href="mailto:support@hyfens.com">Contact support</a></td></tr></table></td></tr></table></body></html>''';
 
   String _cta(String label, String url) =>
       '<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:26px 0"><tr><td style="background:#171717"><a href="${_escape(url)}" style="display:inline-block;padding:13px 18px;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px">${_escape(label)} ↗</a></td></tr></table><p style="font-size:12px;color:#716d67;word-break:break-word">If the button does not work, use this link:<br><a href="${_escape(url)}">${_escape(url)}</a></p>';
@@ -2023,7 +2022,7 @@ final class NotificationService implements HumanAuthNotificationSink {
       'plan':
           subscription?['planKey'] ??
           result.checkout?['planKey'] ??
-          'Hyfens Cloud',
+          'your current plan',
       'amount': _money(payment?['amountMinor'], payment?['currency']),
       'currency': payment?['currency'],
       'status': refund?['status'] ?? subscription?['status'] ?? result.status,
@@ -2097,10 +2096,10 @@ final class NotificationService implements HumanAuthNotificationSink {
         entityType: 'human_user',
         entityId: user.id,
         variables: <String, Object?>{
-          'message': 'Your Hyfens password was changed successfully.',
+          'message': 'Your password was changed successfully.',
           'occurred_at': occurredAt.toUtc().toIso8601String(),
           'action_url': renderer.dashboardOrigin.toString(),
-          'action_label': 'Open Hyfens Cloud',
+          'action_label': 'Open workspace',
         },
         occurredAt: occurredAt,
         source: 'human_auth',
@@ -2348,20 +2347,21 @@ final class NotificationService implements HumanAuthNotificationSink {
     Map<String, Object?>? refund,
   ) => switch (key) {
     'billing.subscription.activated' =>
-      'Your new Hyfens plan is active after provider confirmation.',
-    'billing.subscription.renewed' => 'Your recurring payment was captured and your Hyfens plan remains active.',
+      'Your new plan is active after provider confirmation.',
+    'billing.subscription.renewed' =>
+      'Your recurring payment was captured and your plan remains active.',
     'billing.payment.succeeded' => 'Your payment was captured successfully.',
     'billing.payment.failed' => 'A payment attempt needs attention. Your current paid state is not changed by this message alone.',
     'billing.refund.completed' =>
       'The approved refund was processed by the payment provider.',
-    'billing.refund.failed' => 'The payment provider could not complete the approved refund. Hyfens will retry or reconcile it.',
+    'billing.refund.failed' => 'The payment provider could not complete the approved refund. We will retry or reconcile it.',
     'billing.subscription.upgrade_applied' =>
-      'Your higher Hyfens plan is now effective after provider confirmation.',
+      'Your higher plan is now effective after provider confirmation.',
     'billing.subscription.downgrade_scheduled' => 'Your current paid plan remains active until the scheduled effective date.',
-    'billing.subscription.downgrade_applied' => 'Your scheduled Hyfens plan change is now effective. Existing data remains in place.',
+    'billing.subscription.downgrade_applied' => 'Your scheduled plan change is now effective. Existing data remains in place.',
     'billing.subscription.cancelled' =>
       'Your subscription has stopped renewing. Existing data is retained.',
-    _ => 'Hyfens recorded a billing update for your workspace.',
+    _ => 'A billing update was recorded for your workspace.',
   };
 
   static String? _billingNotificationKey(BillingProviderEventResult result) {
@@ -2427,7 +2427,7 @@ final class QueuedHumanMessageDelivery
             'token': token,
             'expires_at': expiresAt.toUtc().toIso8601String(),
             'action_url': notifications.renderer.dashboardOrigin.toString(),
-            'action_label': 'Open Hyfens Cloud',
+            'action_label': 'Open workspace',
           },
           occurredAt: DateTime.now().toUtc(),
           source: 'human_auth',
@@ -2488,7 +2488,7 @@ final class QueuedHumanMessageDelivery
                 )
                 .toString(),
             'action_label': 'Review deletion request',
-            'message': 'Someone requested deletion of a Hyfens Cloud account associated with this address.',
+            'message': 'Someone requested deletion of the account associated with this address.',
           },
           occurredAt: DateTime.now().toUtc(),
           source: 'human_auth',
