@@ -36,6 +36,7 @@ const String platformOrganizationsInspectCapability =
     'platform:organizations:inspect';
 const String platformAuditReadCapability = 'platform:audit:read';
 const String platformOperationsReadCapability = 'platform:operations:read';
+const String platformOperationsManageCapability = 'platform:operations:manage';
 const String platformAccountsReadCapability = 'platform:accounts:read';
 const String platformEntitlementsReadCapability = 'platform:entitlements:read';
 const String platformEnterpriseQuotesReadCapability =
@@ -53,6 +54,7 @@ const Set<String> platformCapabilities = <String>{
   platformOrganizationsInspectCapability,
   platformAuditReadCapability,
   platformOperationsReadCapability,
+  platformOperationsManageCapability,
   platformAccountsReadCapability,
   platformEntitlementsReadCapability,
   platformEnterpriseQuotesReadCapability,

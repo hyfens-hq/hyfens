@@ -28,6 +28,7 @@ import 'p3e_halt.dart';
 import 'p3e_persistence.dart';
 import 'p3e_schedule.dart';
 import 'persistence.dart';
+import 'platform_operations.dart';
 import 'reconciliation.dart';
 import 'release_bundle.dart';
 import 'rollout.dart';
@@ -107,6 +108,10 @@ final class ControlPlaneService {
             policy: deletionPolicy,
             clock: _clock,
           );
+    platformOperationsOwnership = PlatformOperationsOwnershipService(
+      store: store,
+      clock: _clock,
+    );
   }
 
   final ControlPlaneStore store;
@@ -119,6 +124,7 @@ final class ControlPlaneService {
   final BillingProviderBridgeConfig? billingProvider;
   final NotificationService? notifications;
   final DeletionPolicy deletionPolicy;
+  late final PlatformOperationsOwnershipService platformOperationsOwnership;
   final ArtifactRetentionPolicy artifactRetentionPolicy =
       const ArtifactRetentionPolicy();
   late final BillingService billing;
@@ -133,6 +139,9 @@ final class ControlPlaneService {
     await billing.initialize();
     await humanAuth?.initialize();
     await p3eStore?.initialize();
+    if (deploymentModel == DeploymentModel.cloud) {
+      await platformOperationsOwnership.ensureSeeded();
+    }
   }
 
   /// Returns the lifecycle state used to reject access after a tenant's

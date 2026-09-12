@@ -362,6 +362,38 @@ final class ControlPlaneHttpServer {
         return;
       }
       if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'operations', 'owners'])) {
+        await _readPlatformOperationsOwners(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'platform', 'operations', 'owners'])) {
+        await _addPlatformOperationsOwner(request, requestId);
+        return;
+      }
+      if (request.method == 'PATCH' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'operations',
+            'owners',
+            '*',
+          ])) {
+        await _updatePlatformOperationsOwner(request, path, requestId);
+        return;
+      }
+      if (request.method == 'DELETE' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'operations',
+            'owners',
+            '*',
+          ])) {
+        await _removePlatformOperationsOwner(request, path, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
           _matches(path, const ['v1', 'platform', 'organizations'])) {
         await _readPlatformOrganizations(request, requestId);
         return;
@@ -2296,6 +2328,148 @@ final class ControlPlaneHttpServer {
       'serviceMetrics': metrics.toJson(),
       'request_id': requestId,
     });
+  }
+
+  Future<void> _readPlatformOperationsOwners(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    _requireCloudOperationsOwnership();
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Operations owner reads support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformOperationsReadCapability,
+      profileName: query['profile'],
+    );
+    await service.platformOperationsOwnership.ensureSeeded();
+    final owners = await service.platformOperationsOwnership.list();
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'scope': 'platform',
+      'readOnly': true,
+      'owners': owners.map((owner) => owner.toJson()).toList(growable: false),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _addPlatformOperationsOwner(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    _requireCloudOperationsOwnership();
+    final identity = await _authorizePlatformOperationsOwnerMutation(request);
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'role',
+      'owner_email',
+      'reason',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Adding an operations owner requires role, owner_email, and reason',
+        statusCode: 422,
+      );
+    }
+    final owner = await service.platformOperationsOwnership.add(
+      role: _string(body, 'role'),
+      ownerEmail: _string(body, 'owner_email'),
+      reason: _string(body, 'reason'),
+      actorId: identity.user.id,
+      requestId: requestId,
+      idempotencyKey: _idempotency(request),
+    );
+    await _json(request.response, 201, <String, Object?>{
+      'owner': owner.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _updatePlatformOperationsOwner(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    _requireCloudOperationsOwnership();
+    final identity = await _authorizePlatformOperationsOwnerMutation(request);
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'owner_email',
+      'reason',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Updating an operations owner requires owner_email and reason',
+        statusCode: 422,
+      );
+    }
+    final owner = await service.platformOperationsOwnership.update(
+      role: path[4],
+      ownerEmail: _string(body, 'owner_email'),
+      reason: _string(body, 'reason'),
+      actorId: identity.user.id,
+      requestId: requestId,
+      idempotencyKey: _idempotency(request),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'owner': owner.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _removePlatformOperationsOwner(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    _requireCloudOperationsOwnership();
+    final identity = await _authorizePlatformOperationsOwnerMutation(request);
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'reason'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Removing an operations owner requires reason',
+        statusCode: 422,
+      );
+    }
+    final owner = await service.platformOperationsOwnership.remove(
+      role: path[4],
+      reason: _string(body, 'reason'),
+      actorId: identity.user.id,
+      requestId: requestId,
+      idempotencyKey: _idempotency(request),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'owner': owner.toJson(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<HumanIdentity> _authorizePlatformOperationsOwnerMutation(
+    HttpRequest request,
+  ) async {
+    final accessToken = _bearer(request);
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: accessToken,
+      capability: platformOperationsManageCapability,
+    );
+    return _humanAuth().me(accessToken: accessToken);
+  }
+
+  void _requireCloudOperationsOwnership() {
+    if (service.deploymentModel != DeploymentModel.cloud) {
+      throw const ControlPlaneException(
+        'CLOUD_OPERATIONS_UNAVAILABLE',
+        'Managed Cloud operations ownership is not available on self-hosted deployments',
+        statusCode: 404,
+      );
+    }
   }
 
   Future<void> _readPlatformOrganizations(
@@ -5565,7 +5739,10 @@ final class ControlPlaneHttpServer {
     }
     request.response.headers
       ..set('Access-Control-Allow-Origin', origin)
-      ..set('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, OPTIONS')
+      ..set(
+        'Access-Control-Allow-Methods',
+        'GET, POST, PATCH, PUT, DELETE, OPTIONS',
+      )
       ..set(
         'Access-Control-Allow-Headers',
         'Authorization, Content-Type, Idempotency-Key, X-Request-Id',
