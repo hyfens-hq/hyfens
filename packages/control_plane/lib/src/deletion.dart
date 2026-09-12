@@ -574,7 +574,7 @@ final class AccountDeletionService {
         deletionRequestId: id,
       );
       await store.replaceJson('organizations', organizationId, marked.toJson());
-      request = <String, Object?>{
+      final completedRequest = <String, Object?>{
         ...request,
         'status': _verifiedStatus(),
         'stage': 'grace_period',
@@ -587,13 +587,20 @@ final class AccountDeletionService {
         'organizationCredentialRevocationIds': revokedCredentialIds,
         'updatedAt': now.toIso8601String(),
       };
-      await store.replaceJson(
+      if (await _replaceRequestIfStatus(
         organizationDeletionRequestCollection,
         id,
-        request,
-      );
+        'billing_pending',
+        completedRequest,
+      )) {
+        request = completedRequest;
+      } else {
+        request =
+            await store.readJson(organizationDeletionRequestCollection, id) ??
+            completedRequest;
+      }
     } on ControlPlaneException catch (error) {
-      request = <String, Object?>{
+      final failedRequest = <String, Object?>{
         ...request,
         'status': 'failed',
         'stage': 'billing',
@@ -601,11 +608,18 @@ final class AccountDeletionService {
         'updatedAt': _now().toIso8601String(),
         'attempt': (request['attempt']! as int) + 1,
       };
-      await store.replaceJson(
+      if (await _replaceRequestIfStatus(
         organizationDeletionRequestCollection,
         id,
-        request,
-      );
+        'billing_pending',
+        failedRequest,
+      )) {
+        request = failedRequest;
+      } else {
+        request =
+            await store.readJson(organizationDeletionRequestCollection, id) ??
+            failedRequest;
+      }
       await _audit(
         requestId: requestId,
         organizationId: organizationId,
