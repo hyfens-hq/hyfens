@@ -261,6 +261,13 @@ const List<String> _organizationOwnedCollections = <String>[
   'credentials',
 ];
 
+const Set<String> _credentialIssuanceAuditActions = <String>{
+  'credential.issue',
+  'observation.token_issued',
+  'scheduler.credential_issued',
+  'health.auto_halt_principal_issued',
+};
+
 const Duration _deletionProcessingLease = Duration(minutes: 15);
 
 /// Returns the bounded deletion projection exposed to a customer. Durable
@@ -360,7 +367,7 @@ final class AccountDeletionService {
             existing['status'] == 'failed')) {
       return existing;
     }
-    final user = await _activeVerifiedUser(userId);
+    final user = await _activeCustomer(userId);
     final ownership = await _soleOwnedOrganizations(user);
     final accountRequestId = _accountRequestId(user.id);
     final now = _now();
@@ -1495,7 +1502,9 @@ final class AccountDeletionService {
         }
         return blocked;
       }
-      await _revokeAccountCredentials(request, now);
+    }
+    await _cleanupAccountCredentials(request, now);
+    if (user.active) {
       // Deactivation is the final identity mutation. If the worker crashes
       // after it succeeds, a retry must be able to finish the request instead
       // of treating the already-deactivated account as an auth failure.
@@ -2283,7 +2292,8 @@ final class AccountDeletionService {
   Future<List<String>> _credentialIdsForUser(String userId) async {
     final issued = <String>{};
     for (final value in await store.listJson('audit')) {
-      if (value['action'] != 'credential.issue' || value['actorId'] != userId) {
+      if (!_credentialIssuanceAuditActions.contains(value['action']) ||
+          value['actorId'] != userId) {
         continue;
       }
       final resourceId = value['resourceId'];
@@ -2292,7 +2302,7 @@ final class AccountDeletionService {
     return issued.toList(growable: false);
   }
 
-  Future<void> _revokeAccountCredentials(
+  Future<void> _cleanupAccountCredentials(
     Map<String, Object?> request,
     DateTime now,
   ) async {
@@ -2300,10 +2310,18 @@ final class AccountDeletionService {
     if (rawIds is! List) return;
     final ids = rawIds.whereType<String>().toSet();
     if (ids.isEmpty) return;
+    final deletion = store is JsonRecordDeletion
+        ? store as JsonRecordDeletion
+        : null;
     for (final value in await store.listJson('credentials')) {
-      if (!ids.contains(value['id']) || value['revoked'] == true) continue;
+      if (!ids.contains(value['id'])) continue;
       final storageId = value['tokenHash'];
       if (storageId is! String) continue;
+      if (deletion != null) {
+        await deletion.deleteJson('credentials', storageId);
+        continue;
+      }
+      if (value['revoked'] == true) continue;
       await store.replaceJson('credentials', storageId, <String, Object?>{
         ...value,
         'revoked': true,
