@@ -128,7 +128,11 @@ deletion messages additionally requires `HYFENS_NOTIFICATION_PAYLOAD_KEY`; the
 HTTP process then stores encrypted payloads and the worker decrypts them only
 in memory immediately before rendering. Provider callbacks, when enabled, are
 posted to `POST /v1/notifications/webhooks/keplars` with the raw-body HMAC in
-`X-Keplars-Signature` and `KEPLARS_WEBHOOK_SECRET`.
+`X-Webhook-Signature: sha256=<hex>` and `KEPLARS_WEBHOOK_SECRET`. Header names
+are case-insensitive; the control plane also accepts the earlier
+`X-Keplars-Signature` spelling for compatibility. Configure the Keplars
+workspace Reply-To address as `support@hyfens.com`; support-sensitive messages
+enable it with the provider's documented boolean `reply_to` field.
 
 For a local provider-free template preview, use:
 

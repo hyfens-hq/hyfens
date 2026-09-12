@@ -197,7 +197,8 @@ tokens, card data, provider API keys, or full email bodies.
 
 Keplars callbacks may be posted to the authenticated control-plane route
 `POST /v1/notifications/webhooks/keplars` with an HMAC over the raw body in
-`X-Webhook-Signature: sha256=<hex>`. The route is disabled unless
+the documented `X-Webhook-Signature: sha256=<hex>` header. The route is
+disabled unless
 `KEPLARS_WEBHOOK_SECRET` is configured. Callback states are normalized to
 `accepted`, `delivered`, `bounced`, `complained`, `hard_failed`, or
 `cancelled` and are audited without allowing out-of-order callbacks to regress
@@ -223,6 +224,12 @@ supported mapping, the delivery remains `accepted` rather than being promoted
 to `delivered`. Recipient, subject, timestamp, and message-order heuristics
 are explicitly prohibited.
 
+The current provider event vocabulary is normalized without changing the
+correlation rule: `email.rejected` becomes `hard_failed`, and
+`email.complaint`/`email.spam` become `complained`. The callback's
+`recipient_email`, `workspace_id`, `status`, and `timestamp` are provider
+context only; none is used to select a Hyfens delivery.
+
 ## Provider/configuration contract
 
 The managed process needs `KEPLARS_API_KEY`, and the protected configuration
@@ -231,6 +238,13 @@ queued auth messages additionally need a base64-encoded 32-byte
 `HYFENS_NOTIFICATION_PAYLOAD_KEY`. The callback route needs
 `KEPLARS_WEBHOOK_SECRET`. `HYFENS_WEB_ORIGINS` supplies HTTPS dashboard and
 marketing origins; missing origins fail closed to the approved Hyfens defaults.
+Support-sensitive sends use Keplars' documented boolean `reply_to` switch; the
+Keplars workspace must therefore have `support@hyfens.com` configured as its
+Reply-To address. Raw HTML bodies explicitly set the provider's documented
+`is_html` flag. The durable dispatcher uses the provider's `async`, `high`, or
+`instant` raw-send queues. A future-dated message must be scheduled by a
+Hyfens scheduler before dispatch; the provider `/schedule` endpoint is not a
+drop-in replacement for raw sends because it requires its own schedule envelope.
 
 The worker command is:
 
