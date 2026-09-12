@@ -1,6 +1,7 @@
 # Task 269 — Account deletion and retention lifecycle
 
-Status: CODE_VERIFIED
+Status: [-] Blocked — CODE_VERIFIED; managed acceptance and retention gates
+remain unresolved
 
 ## Goal
 
@@ -51,9 +52,9 @@ Codex, with maintainer/security/legal review.
 
 ## Work Items
 
-- [-] Obtain and record the approved deletion grace period and backup wording;
-  the architecture is configurable, but the approved legal/operational values
-  remain a Task 259 decision.
+- [-] Obtain approved backup wording and retention policy; the seven-working-day
+  deletion grace period is now approved and configured, while backup and legal
+  retention values remain a Task 259 decision.
 - [x] Add purpose-bound deletion request/token and authenticated confirmation.
 - [x] Add ownership-safe account/organization state transitions.
 - [x] Implement idempotent, resumable data/object deletion with shared-object
@@ -91,15 +92,14 @@ Codex, with maintainer/security/legal review.
 
 ## Next Action
 
-Task 259 must supply the approved grace-period, backup/evidence-retention, and
-production deletion-mail/policy-publication decisions. Configure
-`HYFENS_DELETION_GRACE_PERIOD` before enabling the deletion worker in a managed
-deployment. Then run a managed disposable organization deletion acceptance.
+Task 259 must supply the approved backup/evidence-retention and production
+deletion-mail/policy-publication decisions. Complete the remaining managed
+personal-deletion, shared-object, and backup/tombstone acceptance where the
+environment supports it. The configured managed grace period is
+`HYFENS_DELETION_GRACE_PERIOD=7d`.
 
 ## Blockers
 
-- `POLICY_DECISION_REQUIRED: deletion_grace_period` until the reviewed value is
-  configured.
 - Backup rotation and deletion wording are infrastructure/policy inputs; the
   current store cannot erase individual records from immutable backups.
 - Financial/billing, security/audit, and Enterprise commercial evidence
@@ -107,6 +107,11 @@ deployment. Then run a managed disposable organization deletion acceptance.
 - Production deletion-email delivery and final Privacy/Terms publication
   remain Task 259 dependencies.
 - A managed production-like deletion run was not claimed in this task.
+
+Current managed evidence remains partial: organization cancellation and staged
+completion passed, but final personal-account deletion after ownership
+resolution, managed shared-object physical-retention acceptance, backup
+restore, and deletion-tombstone reconciliation remain unclaimed.
 
 ## Outcome
 
@@ -323,3 +328,22 @@ The overall task remains `CODE_VERIFIED`: application behavior is locally
 verified and organization deletion has partial managed evidence, but this
 task does not claim complete managed deletion, backup/restore, or legal
 retention acceptance.
+
+## Post-review safety correction — 2026-09-12
+
+Commit `5d622c8` closes four implementation gaps identified during the task
+closure review without changing the deletion model: Cloud-only checks now
+cover organization status and cancellation; organization cancellation uses a
+retryable `cancellation_pending` state so restoration cannot be reported as
+complete before it finishes; `billing_pending` requests are retried by the
+durable worker and persist credential-revocation evidence; and deletion
+processing uses a durable fifteen-minute compare-and-set lease in both file
+and PostgreSQL stores. Active leases are not reclaimed, stale leases are
+recoverable, and stale workers cannot overwrite a newer claim.
+
+Added regression coverage for self-hosted rejection, billing recovery,
+interrupted cancellation recovery, and concurrent worker claims. The focused
+control-plane validation passed 89 tests; `dart analyze`, scoped formatting,
+and `git diff --check` also passed. Managed backup/restore, tombstone
+reconciliation, personal deletion after ownership resolution, and legal
+retention decisions remain Task 259 gates.
