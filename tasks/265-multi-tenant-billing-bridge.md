@@ -1,6 +1,6 @@
 # Task 265 — Multi-tenant billing bridge and Razorpay TEST environment completion
 
-Status: [-] Blocked — BRIDGE_VERIFIED; protected deployment unavailable
+Status: [x] Completed — BRIDGE_VERIFIED; managed TEST acceptance complete
 
 ## Goal
 
@@ -66,8 +66,8 @@ installation.
 - [x] Add focused cross-tenant, scope, idempotency, and self-hosted tests.
 - [x] Update billing architecture/runbook and preserve Task 262/261 status
   accurately.
-- [-] Validate protected TEST configuration and, only if ready, run Task 261B;
-  root-managed deployment configuration is not available to this user.
+- [x] Validate protected TEST configuration and run Task 261B through the
+  root-managed deployment path.
 
 ## Validation
 
@@ -84,26 +84,21 @@ Completed checks:
 
 ## Next Action
 
-Install the protected bridge bearer/hash, Razorpay TEST settings, webhook
-secret, and provider plan IDs through the root-managed deployment path; restart
-the managed Cloud web/control-plane services; then run the Task 262 preflight
-and Task 261B acceptance.
+Keep the bridge restricted to provider processing and retain TEST/LIVE
+separation. Production LIVE activation remains separately unauthorized.
 
 ## Blockers
 
-The bridge is implemented and locally verified, but protected deployment
-changes and real Razorpay TEST browser acceptance require the root-managed
-environment installation and deployed managed target. The current SSH user
-cannot update `/etc/hyfens/platform-web.env` or the managed control-plane
-secret store (`sudo -n` is unavailable), so Task 262 remains
-`EXTERNAL_CONFIGURATION_BLOCKED` and Task 261 remains
-`BILLING_STATE_VERIFIED`.
+No blocker remains for the bridge and managed TEST scope. Production LIVE
+activation and production customer-workspace cutover remain outside this task
+and require separate authorization.
 
 ## Outcome
 
-`BRIDGE_VERIFIED`. No provider plans, subscriptions, webhook events, database
-billing state, production DNS, or `app.hyfens.com` customer-workspace routing
-were changed by this task.
+`BRIDGE_VERIFIED`. The protected bearer/hash split, server-derived tenant
+mapping, signed webhook path, and real TEST customer billing acceptance are
+complete. No production DNS or `app.hyfens.com` customer-workspace routing was
+changed.
 
 ## References
 
@@ -132,3 +127,9 @@ were changed by this task.
   keep the default self-hosted Compose deployment disabled rather than making it
   fail at startup. Cloud provider configuration still fails closed unless the
   approved USD currency and `4900`/`19900` minor-unit amounts are supplied.
+- 2026-09-12 — Root-authorized protected configuration and the corrected managed
+  deployment were verified. The provider-only bridge handled real TEST
+  Free → Starter, Starter → Team, scheduled plan-change/cancellation, and
+  reviewed refund acceptance with server-derived organization mapping and
+  signed provider evidence. The managed TEST scope is complete; LIVE remains
+  unauthorized.
