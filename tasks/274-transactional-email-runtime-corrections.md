@@ -150,3 +150,21 @@ while a provider delivery remains `accepted`.
   recorded `KEPLARS_CALLBACK_CORRELATION_EXTERNAL_BLOCKER` is superseded for
   this current live contract; the status endpoint's separate 404 response is
   non-blocking for webhook correlation and is retained as provider evidence.
+
+## Post-completion status correction — 2026-09-12
+
+The managed revalidation supersedes the earlier provider-telemetry blocker for
+the current Keplars contract. Current acceptance dimensions are:
+
+- Application: `CODE_VERIFIED`.
+- Customer flow: `CUSTOMER_FLOW_VERIFIED` for the managed registration email
+  and the existing focused auth/notification paths.
+- Provider telemetry: `PROVIDER_TELEMETRY_VERIFIED`; a natural
+  `email.delivered` callback correlated to the stored provider ID by exact
+  equality and updated the Hyfens delivery to `delivered`.
+- Razorpay runtime: `RAZORPAY_TEST_ENVIRONMENT_BLOCKED` remains unchanged;
+  this revalidation did not claim a new Razorpay payment acceptance.
+
+No application workaround or heuristic correlation was added. The earlier
+`KEPLARS_CALLBACK_CORRELATION_EXTERNAL_BLOCKER` remains in the historical
+record only and is not a current Hyfens blocker.
