@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'artifact_retention.dart';
 import 'billing.dart';
@@ -236,6 +237,7 @@ const Set<String> _openDeletionStatuses = <String>{
   'ownership_resolution_required',
   'billing_pending',
   'grace_period',
+  'cancellation_pending',
   'processing',
   'failed',
 };
@@ -258,6 +260,8 @@ const List<String> _organizationOwnedCollections = <String>[
   'cloud_usage_events',
   'credentials',
 ];
+
+const Duration _deletionProcessingLease = Duration(minutes: 15);
 
 /// Returns the bounded deletion projection exposed to a customer. Durable
 /// request records also contain worker state, credential references, and
@@ -329,6 +333,7 @@ final class AccountDeletionService {
   final NotificationService? notifications;
   final DeletionPolicy policy;
   final DateTime Function() _clock;
+  final Random _random = Random.secure();
   Future<void> _writeTail = Future<void>.value();
 
   Future<Map<String, Object?>> requestAccountDeletion({
@@ -707,6 +712,13 @@ final class AccountDeletionService {
     required String userId,
     required String organizationId,
   }) async {
+    if (deploymentModel != DeploymentModel.cloud) {
+      throw const ControlPlaneException(
+        'CLOUD_DELETION_UNAVAILABLE',
+        'Organization deletion is only available for Cloud organizations',
+        statusCode: 404,
+      );
+    }
     final user = await _activeCustomer(userId);
     await _requireCustomerMembership(user, organizationId);
     final request = await store.readJson(
@@ -813,6 +825,13 @@ final class AccountDeletionService {
     String? expectedDeletionRequestId,
     int? expectedDeletionRequestGeneration,
   }) => _serialized(() async {
+    if (deploymentModel != DeploymentModel.cloud) {
+      throw const ControlPlaneException(
+        'CLOUD_DELETION_UNAVAILABLE',
+        'Organization deletion is only available for Cloud organizations',
+        statusCode: 404,
+      );
+    }
     final user = await _activeCustomer(userId);
     await _requireOwner(user, organizationId);
     final id = _organizationRequestId(organizationId);
@@ -837,50 +856,89 @@ final class AccountDeletionService {
         statusCode: 400,
       );
     }
-    if (current == null || !_isCancellableStatus(current['status'])) {
+    final currentStatus = current?['status'];
+    if (current == null || !_isCancellableStatus(currentStatus)) {
       return current ??
           <String, Object?>{'scope': 'organization', 'status': 'not_requested'};
     }
+    final cancellationStartedAt = _now();
     final stop = current['billingStop'];
     final stopMap = stop is Map<String, Object?> ? stop : null;
-    final updated = <String, Object?>{
+    final cancellationPending = <String, Object?>{
       ...current,
-      'status': 'cancelled',
-      'stage': 'cancelled',
-      'cancelledAt': _now().toIso8601String(),
-      'updatedAt': _now().toIso8601String(),
+      'status': 'cancellation_pending',
+      'stage': 'cancellation',
+      'cancellationStartedAt': cancellationStartedAt.toIso8601String(),
+      'updatedAt': cancellationStartedAt.toIso8601String(),
       if (stopMap?['status'] != 'not_active')
         'billingCancellationRetained': true,
     };
     if (!await _replaceRequestIfStatus(
       organizationDeletionRequestCollection,
       id,
-      current['status']! as String,
-      updated,
+      currentStatus as String,
+      cancellationPending,
     )) {
       return await store.readJson(organizationDeletionRequestCollection, id) ??
           current;
     }
-    final restoredCredentialCount = await _restoreOrganizationCredentials(
-      organizationId,
-      id,
-      _now(),
-    );
-    final organizationValue = await store.readJson(
-      'organizations',
-      organizationId,
-    );
-    if (organizationValue != null) {
-      final organization = OrganizationRecord.fromJson(organizationValue);
-      await store.replaceJson(
+    late final int restoredCredentialCount;
+    try {
+      restoredCredentialCount = await _restoreOrganizationCredentials(
+        organizationId,
+        id,
+        _now(),
+      );
+      final organizationValue = await store.readJson(
         'organizations',
         organizationId,
-        OrganizationRecord(
-          id: organization.id,
-          name: organization.name,
-          createdAt: organization.createdAt,
-        ).toJson(),
       );
+      if (organizationValue != null) {
+        final organization = OrganizationRecord.fromJson(organizationValue);
+        await store.replaceJson(
+          'organizations',
+          organizationId,
+          OrganizationRecord(
+            id: organization.id,
+            name: organization.name,
+            createdAt: organization.createdAt,
+          ).toJson(),
+        );
+      }
+    } on Object catch (error) {
+      final retryable = <String, Object?>{
+        ...cancellationPending,
+        'lastError': _safeError(error),
+        'attempt':
+            (cancellationPending['attempt'] is int
+                ? cancellationPending['attempt']! as int
+                : 0) +
+            1,
+        'updatedAt': _now().toIso8601String(),
+      };
+      await _replaceRequestIfStatus(
+        organizationDeletionRequestCollection,
+        id,
+        'cancellation_pending',
+        retryable,
+      );
+      rethrow;
+    }
+    final updated = <String, Object?>{
+      ...cancellationPending,
+      'status': 'cancelled',
+      'stage': 'cancelled',
+      'cancelledAt': _now().toIso8601String(),
+      'updatedAt': _now().toIso8601String(),
+    };
+    if (!await _replaceRequestIfStatus(
+      organizationDeletionRequestCollection,
+      id,
+      'cancellation_pending',
+      updated,
+    )) {
+      return await store.readJson(organizationDeletionRequestCollection, id) ??
+          cancellationPending;
     }
     await _audit(
       requestId: requestId,
@@ -942,6 +1000,7 @@ final class AccountDeletionService {
         statusCode: 422,
       );
     }
+    final normalizedNow = (now ?? _now()).toUtc();
     final collection = scope == 'account'
         ? accountDeletionRequestCollection
         : organizationDeletionRequestCollection;
@@ -956,22 +1015,63 @@ final class AccountDeletionService {
     final status = current['status'];
     if (_terminalDeletionStatuses.contains(status)) return current;
     if (status == 'ownership_resolution_required') return current;
+    if (status == 'cancellation_pending') return current;
+    if (status == 'processing') {
+      final leaseExpiresAt = _parseTime(current['processingLeaseExpiresAt']);
+      if (leaseExpiresAt != null && leaseExpiresAt.isAfter(normalizedNow)) {
+        return current;
+      }
+    }
     if (status == 'policy_decision_required') {
       return <String, Object?>{
         ...current,
         'blocker': 'POLICY_DECISION_REQUIRED: deletion_grace_period',
       };
     }
-    final normalizedNow = (now ?? _now()).toUtc();
     var ready = current;
     if (scope == 'organization' &&
-        status == 'failed' &&
-        current['stage'] == 'billing') {
-      ready = await _retryOrganizationBilling(
-        current,
-        normalizedNow: normalizedNow,
-      );
+        (status == 'billing_pending' ||
+            (status == 'failed' && current['stage'] == 'billing'))) {
+      try {
+        ready = await _retryOrganizationBilling(
+          current,
+          normalizedNow: normalizedNow,
+          expectedStatus: status as String,
+        );
+      } on Object catch (error) {
+        final failed = <String, Object?>{
+          ...current,
+          'status': 'failed',
+          'stage': 'billing',
+          'lastError': _safeError(error),
+          'attempt':
+              (current['attempt'] is int ? current['attempt']! as int : 0) + 1,
+          'updatedAt': normalizedNow.toIso8601String(),
+        };
+        if (await _replaceRequestIfStatus(
+          collection,
+          requestId,
+          status as String,
+          failed,
+        )) {
+          await _audit(
+            requestId: requestId,
+            organizationId: current['organizationId']! as String,
+            actorId: 'hyfens:deletion-worker',
+            action: 'organization.deletion.failed',
+            resourceType: 'organization_deletion_request',
+            resourceId: requestId,
+            metadata: <String, Object?>{
+              'stage': 'billing',
+              'error': _safeError(error),
+            },
+          );
+          return failed;
+        }
+        return await store.readJson(collection, requestId) ?? current;
+      }
       if (ready['status'] == 'policy_decision_required') return ready;
+      if (ready['status'] == 'billing_pending') return ready;
     }
     final readyStatus = ready['status'];
     // The persisted processing boundary is the authority. The grace-period
@@ -985,11 +1085,21 @@ final class AccountDeletionService {
         processingAt.isAfter(normalizedNow)) {
       return ready;
     }
+    final expectedProcessingLeaseId = readyStatus == 'processing'
+        ? ready['processingLeaseId'] as String?
+        : null;
+    final expectProcessingLeaseAbsent =
+        readyStatus == 'processing' && expectedProcessingLeaseId == null;
+    final processingLeaseId = _newProcessingLeaseId(requestId, normalizedNow);
     final processing = <String, Object?>{
       ...ready,
       'status': 'processing',
       'stage': 'processing',
       'attempt': (ready['attempt'] is int ? ready['attempt']! as int : 0) + 1,
+      'processingLeaseId': processingLeaseId,
+      'processingLeaseExpiresAt': normalizedNow
+          .add(_deletionProcessingLease)
+          .toIso8601String(),
       'updatedAt': normalizedNow.toIso8601String(),
     };
     if (!await _replaceRequestIfStatus(
@@ -997,6 +1107,8 @@ final class AccountDeletionService {
       requestId,
       readyStatus as String,
       processing,
+      expectedProcessingLeaseId: expectedProcessingLeaseId,
+      expectProcessingLeaseAbsent: expectProcessingLeaseAbsent,
     )) {
       return await store.readJson(collection, requestId) ?? ready;
     }
@@ -1019,12 +1131,18 @@ final class AccountDeletionService {
         },
       );
       final result = scope == 'account'
-          ? await _processAccount(processing, normalizedNow, requestId)
+          ? await _processAccount(
+              processing,
+              normalizedNow,
+              requestId,
+              processingLeaseId,
+            )
           : await _processOrganization(
               processing,
               normalizedNow,
               requestId,
               maxItems,
+              processingLeaseId,
             );
       return result;
     } on Object catch (error) {
@@ -1035,7 +1153,15 @@ final class AccountDeletionService {
         'lastError': _safeError(error),
         'updatedAt': _now().toIso8601String(),
       };
-      await store.replaceJson(collection, requestId, failed);
+      if (!await _replaceRequestIfStatus(
+        collection,
+        requestId,
+        'processing',
+        failed,
+        expectedProcessingLeaseId: processingLeaseId,
+      )) {
+        return await store.readJson(collection, requestId) ?? processing;
+      }
       final organizationValue = processing['organizationId'];
       final organizationId =
           scope == 'organization' && organizationValue is String
@@ -1083,15 +1209,19 @@ final class AccountDeletionService {
           final status = request['status'];
           if (status != 'grace_period' &&
               status != 'failed' &&
-              status != 'processing') {
+              status != 'processing' &&
+              status != 'billing_pending') {
             return false;
           }
           final at = _parseTime(
             request['processingAt'] ?? request['gracePeriodEndsAt'],
           );
-          return status == 'failed' ||
-              status == 'processing' ||
-              (at != null && !at.isAfter(normalizedNow));
+          if (status == 'failed' || status == 'billing_pending') return true;
+          if (status == 'processing') {
+            final lease = _parseTime(request['processingLeaseExpiresAt']);
+            return lease == null || !lease.isAfter(normalizedNow);
+          }
+          return at != null && !at.isAfter(normalizedNow);
         })
         .take(maxRequests)
         .toList(growable: false);
@@ -1225,6 +1355,7 @@ final class AccountDeletionService {
   Future<Map<String, Object?>> _retryOrganizationBilling(
     Map<String, Object?> request, {
     required DateTime normalizedNow,
+    required String expectedStatus,
   }) async {
     final organizationId = request['organizationId'];
     if (organizationId is! String) {
@@ -1264,6 +1395,16 @@ final class AccountDeletionService {
         ).toJson(),
       );
     }
+    final newlyRevokedCredentialIds = await _revokeOrganizationCredentials(
+      organizationId,
+      normalizedNow,
+      requestId,
+    );
+    final priorCredentialIds = request['organizationCredentialRevocationIds'];
+    final revokedCredentialIds = <String>{
+      if (priorCredentialIds is List) ...priorCredentialIds.whereType<String>(),
+      ...newlyRevokedCredentialIds,
+    };
     final updated = <String, Object?>{
       ...request,
       'status': _verifiedStatus(),
@@ -1274,15 +1415,26 @@ final class AccountDeletionService {
       },
       'billingStoppedAt':
           request['billingStoppedAt'] ?? normalizedNow.toIso8601String(),
+      'organizationCredentialsRevoked': revokedCredentialIds.length,
+      'organizationCredentialRevocationIds': revokedCredentialIds.toList(
+        growable: false,
+      ),
       'updatedAt': normalizedNow.toIso8601String(),
       'attempt':
           (request['attempt'] is int ? request['attempt']! as int : 0) + 1,
     };
-    await store.replaceJson(
+    if (!await _replaceRequestIfStatus(
       organizationDeletionRequestCollection,
       requestId,
+      expectedStatus,
       updated,
-    );
+    )) {
+      return await store.readJson(
+            organizationDeletionRequestCollection,
+            requestId,
+          ) ??
+          request;
+    }
     return updated;
   }
 
@@ -1290,6 +1442,7 @@ final class AccountDeletionService {
     Map<String, Object?> request,
     DateTime now,
     String requestId,
+    String processingLeaseId,
   ) async {
     final userId = request['userId'];
     if (userId is! String)
@@ -1313,11 +1466,19 @@ final class AccountDeletionService {
           'ownershipRequiredOrganizations': ownership.toList(growable: false),
           'updatedAt': now.toIso8601String(),
         };
-        await store.replaceJson(
+        if (!await _replaceRequestIfStatus(
           accountDeletionRequestCollection,
           requestId,
+          'processing',
           blocked,
-        );
+          expectedProcessingLeaseId: processingLeaseId,
+        )) {
+          return await store.readJson(
+                accountDeletionRequestCollection,
+                requestId,
+              ) ??
+              request;
+        }
         return blocked;
       }
       await _revokeAccountCredentials(request, now);
@@ -1332,12 +1493,22 @@ final class AccountDeletionService {
       'stage': 'completed',
       'completedAt': now.toIso8601String(),
       'updatedAt': now.toIso8601String(),
+      'processingLeaseId': null,
+      'processingLeaseExpiresAt': null,
     };
-    await store.replaceJson(
+    if (!await _replaceRequestIfStatus(
       accountDeletionRequestCollection,
       requestId,
+      'processing',
       completed,
-    );
+      expectedProcessingLeaseId: processingLeaseId,
+    )) {
+      return await store.readJson(
+            accountDeletionRequestCollection,
+            requestId,
+          ) ??
+          request;
+    }
     await _audit(
       requestId: requestId,
       organizationId: _auditOrganization(user),
@@ -1369,6 +1540,7 @@ final class AccountDeletionService {
     DateTime now,
     String requestId,
     int maxItems,
+    String processingLeaseId,
   ) async {
     if (deploymentModel != DeploymentModel.cloud) {
       throw const ControlPlaneException(
@@ -1478,12 +1650,22 @@ final class AccountDeletionService {
                 : 0) +
             processed,
         'updatedAt': now.toIso8601String(),
+        'processingLeaseId': null,
+        'processingLeaseExpiresAt': null,
       };
-      await store.replaceJson(
+      if (!await _replaceRequestIfStatus(
         organizationDeletionRequestCollection,
         requestId,
+        'processing',
         progress,
-      );
+        expectedProcessingLeaseId: processingLeaseId,
+      )) {
+        return await store.readJson(
+              organizationDeletionRequestCollection,
+              requestId,
+            ) ??
+            request;
+      }
       return progress;
     }
     final organizationValue = await store.readJson(
@@ -1518,12 +1700,22 @@ final class AccountDeletionService {
           processed,
       'completedAt': now.toIso8601String(),
       'updatedAt': now.toIso8601String(),
+      'processingLeaseId': null,
+      'processingLeaseExpiresAt': null,
     };
-    await store.replaceJson(
+    if (!await _replaceRequestIfStatus(
       organizationDeletionRequestCollection,
       requestId,
+      'processing',
       completed,
-    );
+      expectedProcessingLeaseId: processingLeaseId,
+    )) {
+      return await store.readJson(
+            organizationDeletionRequestCollection,
+            requestId,
+          ) ??
+          request;
+    }
     await _audit(
       requestId: requestId,
       organizationId: organizationId,
@@ -1864,8 +2056,10 @@ final class AccountDeletionService {
     String collection,
     String id,
     String expectedStatus,
-    Map<String, Object?> value,
-  ) async {
+    Map<String, Object?> value, {
+    String? expectedProcessingLeaseId,
+    bool expectProcessingLeaseAbsent = false,
+  }) async {
     final atomic = store;
     if (atomic case final DeletionRequestStateStore stateStore) {
       return stateStore.compareAndSetDeletionRequestStatus(
@@ -1873,10 +2067,18 @@ final class AccountDeletionService {
         id: id,
         expectedStatus: expectedStatus,
         value: value,
+        expectedProcessingLeaseId: expectedProcessingLeaseId,
+        expectProcessingLeaseAbsent: expectProcessingLeaseAbsent,
       );
     }
     final current = await store.readJson(collection, id);
     if (current == null || current['status'] != expectedStatus) return false;
+    final currentLease = current['processingLeaseId'];
+    if (expectedProcessingLeaseId != null &&
+        currentLease != expectedProcessingLeaseId) {
+      return false;
+    }
+    if (expectProcessingLeaseAbsent && currentLease != null) return false;
     await store.replaceJson(collection, id, value);
     return true;
   }
@@ -1919,7 +2121,8 @@ final class AccountDeletionService {
   bool _isCancellableStatus(Object? status) =>
       status == 'ownership_resolution_required' ||
       status == 'policy_decision_required' ||
-      status == 'grace_period';
+      status == 'grace_period' ||
+      status == 'cancellation_pending';
 
   Map<String, Object?> _scheduleFields(
     Map<String, Object?> existing,
@@ -2157,7 +2360,17 @@ final class AccountDeletionService {
       status == 'policy_decision_required' ||
       status == 'grace_period' ||
       status == 'processing' ||
-      status == 'failed';
+      status == 'failed' ||
+      status == 'cancellation_pending';
+
+  String _newProcessingLeaseId(String requestId, DateTime now) {
+    final entropy = List<int>.generate(
+      16,
+      (_) => _random.nextInt(256),
+      growable: false,
+    );
+    return 'dlease_${sha256Hex(<int>[...utf8.encode('$requestId:${now.microsecondsSinceEpoch}:'), ...entropy]).substring(0, 32)}';
+  }
 
   DateTime _now() => _clock().toUtc();
 

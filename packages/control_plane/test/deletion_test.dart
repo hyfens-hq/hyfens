@@ -205,6 +205,225 @@ void main() {
     expect(calendar.dateKeyAt(DateTime.utc(2026, 9, 21)), '2026-09-21');
   });
 
+  test(
+    'self-hosted organization deletion status and cancellation are unavailable',
+    () async {
+      final customer = await _createCustomer(
+        email: 'self-hosted-deletion@example.com',
+        password: 'correct horse battery staple',
+      );
+      final selfHosted = AccountDeletionService(
+        store: store,
+        humanAuth: auth,
+        billing: service.billing,
+        deploymentModel: DeploymentModel.selfHosted,
+        policy: const DeletionPolicy(graceWorkingDays: 7),
+      );
+
+      await expectLater(
+        selfHosted.organizationStatus(
+          userId: customer.userId,
+          organizationId: customer.organizationId,
+        ),
+        throwsA(
+          isA<ControlPlaneException>().having(
+            (error) => error.code,
+            'code',
+            'CLOUD_DELETION_UNAVAILABLE',
+          ),
+        ),
+      );
+      await expectLater(
+        selfHosted.cancelOrganizationDeletion(
+          userId: customer.userId,
+          organizationId: customer.organizationId,
+          actorId: customer.userId,
+          requestId: 'self-hosted-cancel',
+        ),
+        throwsA(
+          isA<ControlPlaneException>().having(
+            (error) => error.code,
+            'code',
+            'CLOUD_DELETION_UNAVAILABLE',
+          ),
+        ),
+      );
+    },
+  );
+
+  test('billing-pending organization deletion is retryable', () async {
+    final customer = await _createCustomer(
+      email: 'billing-pending@example.com',
+      password: 'correct horse battery staple',
+    );
+    final request = await service.deletion!.requestOrganizationDeletion(
+      userId: customer.userId,
+      organizationId: customer.organizationId,
+      requestId: 'request-billing-pending',
+    );
+    await store.replaceJson(
+      'organizations',
+      customer.organizationId,
+      OrganizationRecord(
+        id: customer.organizationId,
+        name: 'Deletion test workspace',
+        createdAt: now,
+      ).toJson(),
+    );
+    await store.replaceJson(
+      organizationDeletionRequestCollection,
+      request['id']! as String,
+      <String, Object?>{
+        ...request,
+        'status': 'billing_pending',
+        'stage': 'billing',
+        'billingStop': null,
+        'billingStoppedAt': null,
+        'organizationCredentialsRevoked': 0,
+        'organizationCredentialRevocationIds': const <String>[],
+      },
+    );
+
+    final recovered = await service.deletion!.processDeletion(
+      requestId: request['id']! as String,
+      now: now,
+    );
+
+    expect(recovered['status'], 'grace_period');
+    expect(
+      (await store.readJson(
+        'organizations',
+        customer.organizationId,
+      ))!['deletionState'],
+      'deletion_requested',
+    );
+  });
+
+  test(
+    'organization cancellation resumes from an interrupted cancellation',
+    () async {
+      final customer = await _createCustomer(
+        email: 'cancellation-retry@example.com',
+        password: 'correct horse battery staple',
+      );
+      final credential = await service.issueCredential(
+        token: customer.accessToken,
+        organizationId: customer.organizationId,
+        kind: CredentialKind.control,
+        scopes: const <String>{'application:read'},
+        name: 'cancellation-retry-credential',
+      );
+      final request = await service.deletion!.requestOrganizationDeletion(
+        userId: customer.userId,
+        organizationId: customer.organizationId,
+        requestId: 'request-cancellation-retry',
+      );
+      await store.replaceJson(
+        organizationDeletionRequestCollection,
+        request['id']! as String,
+        <String, Object?>{
+          ...request,
+          'status': 'cancellation_pending',
+          'stage': 'cancellation',
+        },
+      );
+
+      final cancelled = await service.deletion!.cancelOrganizationDeletion(
+        userId: customer.userId,
+        organizationId: customer.organizationId,
+        actorId: customer.userId,
+        requestId: 'request-cancellation-retry-resume',
+      );
+
+      expect(cancelled['status'], 'cancelled');
+      expect(
+        (await store.readJson(
+          'organizations',
+          customer.organizationId,
+        ))!['deletionState'],
+        'active',
+      );
+      final restored = await store.readJson(
+        'credentials',
+        credential.record.tokenHash,
+      );
+      expect(restored?['revoked'], isFalse);
+      expect(restored?['deletionRevocationRequestId'], isNull);
+    },
+  );
+
+  test(
+    'active deletion processing lease prevents a second worker claim',
+    () async {
+      final customer = await _createCustomer(
+        email: 'concurrent-worker@example.com',
+        password: 'correct horse battery staple',
+      );
+      final user = HumanUserRecord.fromJson(
+        (await store.readJson('users', customer.userId))!,
+      );
+      final membership = user.memberships.single;
+      await store.replaceJson(
+        'users',
+        customer.userId,
+        user
+            .copyWith(
+              memberships: <HumanMembership>[
+                HumanMembership(
+                  organizationId: membership.organizationId,
+                  role: 'member',
+                  capabilities: membership.capabilities,
+                  profileName: membership.profileName,
+                  audience: membership.audience,
+                  platformCapabilities: membership.platformCapabilities,
+                ),
+              ],
+            )
+            .toJson(),
+      );
+      final request = await service.deletion!.requestAccountDeletion(
+        userId: customer.userId,
+        actorId: customer.userId,
+        requestId: 'request-concurrent-worker',
+      );
+      final secondWorker = AccountDeletionService(
+        store: store,
+        humanAuth: auth,
+        billing: service.billing,
+        deploymentModel: DeploymentModel.cloud,
+        notifications: notifications,
+        policy: const DeletionPolicy(graceWorkingDays: 7),
+        clock: () => now,
+      );
+      final processingNow = DateTime.parse(request['processingAt']! as String)
+          .add(const Duration(minutes: 1));
+      final results = await Future.wait(<Future<Map<String, Object?>>>[
+        service.deletion!.processDeletion(
+          requestId: request['id']! as String,
+          now: processingNow,
+        ),
+        secondWorker.processDeletion(
+          requestId: request['id']! as String,
+          now: processingNow,
+        ),
+      ]);
+
+      expect(results.map((value) => value['status']), contains('completed'));
+      expect(
+        (await store.readJson(
+          accountDeletionRequestCollection,
+          request['id']! as String,
+        ))!['status'],
+        'completed',
+      );
+      expect(
+        (await store.listJson('audit'))
+            .where((value) => value['action'] == 'account.deletion.completed'),
+        hasLength(1),
+      );
+    },
+  );
+
   test('sole-owner account deletion stops at ownership resolution', () async {
     final customer = await _createCustomer(
       email: 'owner@example.com',

@@ -54,14 +54,17 @@ abstract interface class OneTimeTokenConsumption {
 ///
 /// A deletion worker and a cancellation request may run at the same time. A
 /// store implementing this seam must only write [value] when the durable
-/// request still has [expectedStatus]. Returning false means another actor
-/// won the transition and the caller must re-read the request.
+/// request still has [expectedStatus] and, when supplied, the expected
+/// processing claim. Returning false means another actor won the transition
+/// and the caller must re-read the request.
 abstract interface class DeletionRequestStateStore {
   Future<bool> compareAndSetDeletionRequestStatus({
     required String collection,
     required String id,
     required String expectedStatus,
     required Map<String, Object?> value,
+    String? expectedProcessingLeaseId,
+    bool expectProcessingLeaseAbsent = false,
   });
 }
 
@@ -333,10 +336,18 @@ final class FileControlPlaneStore
     required String id,
     required String expectedStatus,
     required Map<String, Object?> value,
+    String? expectedProcessingLeaseId,
+    bool expectProcessingLeaseAbsent = false,
   }) {
     final result = _deletionOperationTail.then((_) async {
       final current = await readJson(collection, id);
       if (current == null || current['status'] != expectedStatus) return false;
+      final currentLease = current['processingLeaseId'];
+      if (expectedProcessingLeaseId != null &&
+          currentLease != expectedProcessingLeaseId) {
+        return false;
+      }
+      if (expectProcessingLeaseAbsent && currentLease != null) return false;
       await replaceJson(collection, id, value);
       return true;
     });

@@ -347,6 +347,8 @@ final class PostgresControlPlaneStore
     required String id,
     required String expectedStatus,
     required Map<String, Object?> value,
+    String? expectedProcessingLeaseId,
+    bool expectProcessingLeaseAbsent = false,
   }) async {
     final result = await _pool.runTx((session) async {
       return session.execute(
@@ -354,12 +356,18 @@ final class PostgresControlPlaneStore
           'UPDATE control_plane_records SET organization_id = @organization:text, '
           'body = @body:jsonb, updated_at = now() '
           'WHERE collection = @collection:text AND record_id = @id:text '
-          'AND body->>\'status\' = @expected:text',
+          'AND body->>\'status\' = @expected:text '
+          'AND (@expected_claim:text IS NULL OR '
+          'body->>\'processingLeaseId\' = @expected_claim:text) '
+          'AND (@claim_absent:boolean = false OR '
+          'body->>\'processingLeaseId\' IS NULL)',
         ),
         parameters: <String, Object?>{
           'collection': collection,
           'id': id,
           'expected': expectedStatus,
+          'expected_claim': expectedProcessingLeaseId,
+          'claim_absent': expectProcessingLeaseAbsent,
           'organization': value['organizationId'],
           'body': value,
         },
