@@ -298,6 +298,39 @@ and retention decisions are approved.
   Enterprise payment, deletion completion, mailbox ownership, role ownership,
   and legal/tax retention gates remain open. Verdict remains `NOT_READY`.
 
+## Operations ownership registry correction — 2026-09-12
+
+The control plane now includes a bounded managed-Cloud operational ownership
+registry. The six current Task 259 operational concerns are initially owned by
+`admin@hyfens.com`: `email_delivery`, `payments_webhooks`, `refunds`,
+`enterprise_inquiries`, `deletion_object_cleanup`, and `backup_restore`.
+
+Platform operators can list owners with `platform:operations:read`. Add,
+update, and remove operations require the separate
+`platform:operations:manage` capability, a platform-audience session, an
+`Idempotency-Key`, and a non-empty reason. The registry is tenant-independent,
+self-hosted-safe (the managed registry endpoint is Cloud-only), and retains
+removed rows as history. Each mutation is recorded through the existing
+immutable audit chain with actor, role, old/new mailbox, reason, request and
+causation/idempotency references, revision, and timestamp. Replaying the same
+idempotent mutation does not create a second change or audit event.
+
+This closes the previously missing assignment/evidence mechanism, but it does
+not claim that `admin@hyfens.com` is monitored, replace a runbook, or prove
+backup/restore. Backup ownership still requires a real managed schedule,
+off-host encrypted copy, isolated restore rehearsal, and deletion-tombstone
+resurrection evidence. Tax treatment and legally approved financial,
+security/audit, Enterprise-commercial, and backup retention decisions remain
+open. Task 259 remains `NOT_READY` and Task 256B remains `DO_NOT_CUT_OVER`.
+
+Research used for this boundary is recorded in
+`docs/operations/managed-operations-research.md`. In particular, Keplars'
+current webhook contract documents `email_id` and optional `reference_id`,
+while AWS, Stripe, Postmark, Razorpay, and tax-authority sources reinforce
+that provider telemetry, backup/recovery ownership, merchant tax/invoice
+responsibility, and application-owned operational evidence remain distinct
+responsibilities.
+
 ## Deletion lifecycle policy correction — 2026-09-10
 
 Task 269 follow-up now records the approved managed-Cloud grace policy as

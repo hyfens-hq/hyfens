@@ -157,6 +157,63 @@ email delivery, deletion worker/object cleanup, Enterprise inquiries, and
 backup/restore. Each owner needs an observable signal and a bounded response
 path before the corresponding gate is marked operational.
 
+## Platform operations ownership registry — 2026-09-12
+
+The control plane now provides a bounded managed-Cloud registry at
+`/v1/platform/operations/owners`. It is deliberately separate from customer
+organization ownership and is unavailable on self-hosted deployments.
+
+The initial six roles are seeded to `admin@hyfens.com`:
+
+| Role | Responsibility |
+| --- | --- |
+| `email_delivery` | transactional email transport, callback and bounce signals |
+| `payments_webhooks` | Razorpay payment, subscription, and webhook failures |
+| `refunds` | reviewed refund execution and reconciliation failures |
+| `enterprise_inquiries` | incoming Enterprise leads and quote follow-up |
+| `deletion_object_cleanup` | deletion worker and artifact/object purge failures |
+| `backup_restore` | backup jobs, restore drills, and tombstone reconciliation |
+
+Platform operators with `platform:operations:read` may list the registry.
+Add, update, and remove operations require
+`platform:operations:manage`, a platform-audience session, and a non-empty
+reason. Every mutation is idempotent when the same `Idempotency-Key` is
+replayed and creates an immutable platform-audience audit record containing
+the actor, role, old/new mailbox, reason, request/correlation reference,
+causation/idempotency reference, revision, and timestamp. Removed records stay
+as `removed` history rather than being physically deleted.
+
+The new capabilities are not silently added to previously persisted human
+memberships. After rollout, the authorized platform owner must use the
+existing controlled platform-owner provisioning path (the documented
+`--bootstrap-owner --password-stdin` flow for the configured platform scope)
+so the intended operator membership explicitly receives the current platform
+capability set. Do not grant these capabilities to customer memberships or
+copy a password/session into deployment configuration.
+
+Example mutation shapes (mailbox values are examples only):
+
+```http
+GET /v1/platform/operations/owners?profile=super-admin
+
+POST /v1/platform/operations/owners
+Idempotency-Key: ops-email-delivery-2026-09-12
+{"role":"email_delivery","owner_email":"admin@hyfens.com","reason":"Assign launch mailbox"}
+
+PATCH /v1/platform/operations/owners/email_delivery
+Idempotency-Key: ops-email-delivery-2026-09-13
+{"owner_email":"oncall@hyfens.com","reason":"Move to monitored on-call mailbox"}
+
+DELETE /v1/platform/operations/owners/email_delivery
+Idempotency-Key: ops-email-delivery-2026-09-14
+{"reason":"Retire the temporary mailbox"}
+```
+
+This registry records operational responsibility; it does not by itself
+create an incident platform, establish statutory retention periods, approve
+tax treatment, or prove that the mailbox is monitored. Those decisions and
+the backup/restore acceptance gate remain external launch requirements.
+
 ## Remaining gates
 
 1. Install the staged current private-web and Cloud control-plane wrappers

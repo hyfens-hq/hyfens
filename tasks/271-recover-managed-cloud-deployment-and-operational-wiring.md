@@ -158,3 +158,14 @@ blocked on root-owned wrapper/protected configuration access.
   provider bridge, and rollback rehearsal passed. The task remains blocked only
   by the separately identified backup/restore, resurrection, ownership,
   Enterprise, and legal/policy acceptance gates.
+
+## Post-task ownership correction — 2026-09-12
+
+The former missing role-assignment mechanism is now covered by the managed
+Cloud platform operations ownership registry. Its six launch roles are seeded
+to `admin@hyfens.com`, and platform-authenticated operators can add, update,
+or remove an owner with a required reason and idempotency key. Each mutation
+is written to the existing immutable platform-audience audit chain. The
+registry closes the assignment/evidence gap only; it does not prove mailbox
+monitoring, backup durability, restore acceptance, or the remaining
+legal/tax/retention gates.
