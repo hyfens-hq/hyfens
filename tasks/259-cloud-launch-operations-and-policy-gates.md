@@ -633,3 +633,10 @@ unapproved legal auto-approval or LIVE payment activation was introduced.
 The separately authorized `app.hyfens.com` workspace cutover remains
 untouched. Task 259 therefore remains `NOT_READY`, and Task 256B remains
 `DO_NOT_CUT_OVER`.
+
+## Evidence publication — 2026-09-13
+
+The managed deletion revalidation and launch-matrix delta are published on
+commit `671ebbd` and pull request `#10`. The launch verdict remains
+`NOT_READY`; no LIVE payment activation or `app.hyfens.com` cutover was
+performed.

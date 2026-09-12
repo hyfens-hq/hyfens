@@ -430,3 +430,10 @@ temporary operator rehearsal artifacts.
 The working-day implementation remains code-verified with partial managed
 acceptance. It does not claim statutory compliance or invent financial,
 security/audit, Enterprise, or backup retention durations.
+
+## Evidence publication — 2026-09-13
+
+The revalidation evidence in this append-only update is published on commit
+`671ebbd` and pull request `#10`. The task remains blocked at
+`CODE_VERIFIED` pending the explicitly listed managed backup/object-store and
+policy gates.
