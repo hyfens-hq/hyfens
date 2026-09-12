@@ -101,6 +101,7 @@ while a provider delivery remains `accepted`.
 - [Task 273 — Transactional Email Notifications](273-transactional-email-notifications.md)
 - [Keplars webhook documentation](https://docs.keplars.com/docs/getting-started/webhooks)
 - [Keplars send-email documentation](https://docs.keplars.com/docs/getting-started/send-emails)
+- [Keplars async-send API reference](https://docs.keplars.com/api-reference/email-sending/sendEmailAsync)
 - [Keplars status documentation](https://docs.keplars.com/docs/getting-started/send-emails)
 
 ## History
@@ -110,3 +111,42 @@ while a provider delivery remains `accepted`.
 - 2026-09-09: Final Cloud merge correction committed as `b255aae`; current `apps/web` topology, provider boundary, typecheck, lint, build, and provider tests are clean. Both PRs remain open and unmerged. Natural Keplars callback correlation is still the acceptance blocker.
 - 2026-09-10: Keplars confirmed as an external investigation path. Added sanitized audit evidence for valid unmatched callbacks without changing exact-ID behavior or promoting `accepted` to `delivered`; corrected the legacy direct recovery delivery to use the dedicated reset route and hash one-time tokens in provider idempotency keys. Focused notification, onboarding/recovery, deletion, formatting, and Cloud validation remain clean. Merge recommendation is `READY_WITH_DOCUMENTED_EXTERNAL_ACCEPTANCE` while the provider correlation blocker remains open.
 - 2026-09-10: Control correction committed as `d67776f` in PR [hyfens#3](https://github.com/hyfens-hq/hyfens/pull/3); Cloud recovery/UI correction committed as `2e14e77` in PR [hyfens-cloud-web#3](https://github.com/hyfens-hq/hyfens-cloud-web/pull/3). Both PRs are open, clean, mergeable, and unmerged.
+- 2026-09-12: Rechecked the current official Keplars send, status, webhook,
+  and sandbox documentation. Send responses are shown as `data.id` (while
+  integration examples still show top-level `msg_...` IDs); callbacks expose
+  `id`, `event_type`, `email_id`, `recipient_email`, `status`, `timestamp`, and
+  `workspace_id`, with `reason` on failure/warning events. No documented
+  metadata/client-reference echo or `msg_...` to `email_id` lookup is provided.
+  The exact-ID boundary remains unchanged. Hyfens additionally aligns current
+  provider event names (`email.rejected`, `email.complaint`, `email.spam`),
+  rejects a documented `success: false` send envelope even on a successful HTTP
+  status, enables Reply-To through Keplars' documented boolean switch, and
+  explicitly marks raw bodies as HTML; it also avoids sending the raw body to
+  the provider's distinct `/schedule` endpoint.
+- 2026-09-12: Revalidated the current managed Razorpay/Keplars TEST
+  composition with a fresh public registration and an approved disposable
+  mailbox. The registration route returned HTTP 202, the active notification
+  timer processed the event, and the persisted Hyfens delivery was
+  `ndl_ac3bfa7b90cb9a77aed8173bd156081` with provider ID
+  `01a09575-a171-7c06-99f7-3d43e41f323b`, state `delivered`, provider event
+  `email.delivered`, and template
+  `auth.email.verification.requested:v1`. Its corresponding sanitized status
+  audit was recorded as
+  `ndl_ac3bfa7b90cb9a77aed8173bd156081:01a09575-a171-7c06-99f7-3d43e41f323b:email.delivered`.
+  No synthetic callback was used.
+- 2026-09-12: A separate direct TEST send through the current async endpoint
+  returned HTTP 200 with the sanitized provider response
+  `{\"id\":\"01a0957a-4659-7d7e-8342-eec274a068bd\",\"object\":\"email\",\"status\":\"queued\",\"from\":\"no-reply@hyfens.com\",\"subject\":\"Hyfens Keplars correlation TEST\",\"created_at\":\"2026-09-12T11:56:53.720Z\",\"metadata\":{\"priority\":\"normal\",\"estimated_delivery\":\"0-5 minutes\",\"recipients_count\":1}}`.
+  The natural callback then produced a sanitized
+  `notification.provider_callback_unmatched` audit with event
+  `email.delivered`; its SHA-256 of `email_id` was
+  `53affb7e16520100ae751812dcc89981994b2e183c06c7fa9503329468327`, exactly
+  matching the SHA-256 of the send-response `id`. The direct send had no
+  Hyfens delivery row, so the unmatched audit is expected and does not weaken
+  the managed result. The current provider contract therefore supplies a
+  correlatable top-level `id`, and Hyfens' existing adapter stores that exact
+  ID and maps the callback's `email_id` by exact equality only. No recipient,
+  subject, timestamp, ordering, or other heuristic was used. The previously
+  recorded `KEPLARS_CALLBACK_CORRELATION_EXTERNAL_BLOCKER` is superseded for
+  this current live contract; the status endpoint's separate 404 response is
+  non-blocking for webhook correlation and is retained as provider evidence.
