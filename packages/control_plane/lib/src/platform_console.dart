@@ -393,7 +393,27 @@ final class PlatformConsoleProjection {
       'createdAt',
     };
     if (keys.any((key) => value[key] is! String)) return null;
-    return <String, Object?>{for (final key in keys) key: value[key]};
+    final metadata = value['metadata'];
+    final safeMetadata = metadata is Map
+        ? <String, Object?>{
+            for (final key in const <String>{
+              'audience',
+              'actor_type',
+              'role',
+              'old_owner_email',
+              'new_owner_email',
+              'reason',
+              'revision',
+              'correlation_id',
+              'causation_id',
+            })
+              if (metadata[key] != null) key: metadata[key],
+          }
+        : const <String, Object?>{};
+    return <String, Object?>{
+      for (final key in keys) key: value[key],
+      if (safeMetadata.isNotEmpty) 'metadata': safeMetadata,
+    };
   }
 
   DateTime? _createdAt(Map<String, Object?> value) {
