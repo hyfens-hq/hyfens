@@ -352,3 +352,81 @@ Follow-up commit `93248b0` also compare-and-set fences the initial
 organization billing-to-grace transition, preventing a concurrent worker from
 having its recovered billing or credential evidence overwritten by the
 requesting process.
+
+## Managed working-day acceptance revalidation — 2026-09-13
+
+The merged working-day deletion implementation was revalidated against the
+managed control-plane composition using the approved Gmail workspace mailbox
+(`admin@hyfens.com`) as the owned acceptance mailbox. The business calendar was
+the persisted UTC Monday-Friday calendar with no configured holiday list. For
+the clean no-cancel run, verification occurred at
+`2026-09-12T18:58:53.581707Z`; the durable request projection persisted
+working day 5 as `2026-09-18`, working day 7 as `2026-09-22`, and day-8
+processing eligibility as `2026-09-23`. The test clock was passed to the
+worker; no host clock or database timestamp was edited.
+
+### Acceptance A — cancellation during grace
+
+- A disposable customer was created through public signup and real email
+  verification. No-login initiation returned the same neutral acknowledgement
+  for known and unknown addresses. The verification link was followed and
+  deletion was explicitly confirmed; opening the link alone did not mutate the
+  deletion state.
+- The organization entered the durable grace state. The privacy/status surface
+  remained available while ordinary tenant changes and billing mutations were
+  restricted by the server-side deletion boundary. The current billing state
+  was still independently readable for safe status purposes.
+- The current request generation produced one delivered day-5 reminder and one
+  delivered day-7 reminder. Cancellation after day 7 required password and
+  explicit `DELETE` confirmation, restored normal local access, and produced
+  one cancellation acknowledgement in the owned mailbox.
+- Replaying day-5, day-7, and day-8 worker/notifier work after cancellation
+  processed zero deletion requests and created no new reminder delivery. No
+  refund record/provider refund was created, and provider cancellation was not
+  falsely reported as reversed. Previously revoked credentials were not
+  implicitly restored.
+
+### Acceptance B — completion after day 8 eligibility
+
+- A separate disposable organization was verified for deletion and allowed to
+  pass the persisted day-5 and day-7 milestones without cancellation. The
+  mailbox contained exactly one each of the immediate scheduled
+  acknowledgement, day-5 reminder, day-7 final reminder, and completion
+  acknowledgement for that request, with the corresponding notification
+  deliveries reaching `delivered` at one attempt each.
+- At the persisted day-8 instant the managed deletion worker reported
+  `processed=1 completed=1`; the notification worker then delivered the final
+  completion message. The organization projection reached the explicit
+  `deleted` tombstone state and a fresh private Cloud login found no active
+  customer organization. This is not claimed as a direct authenticated 410
+  probe because credentials were revoked before that probe; the source/API
+  boundary still maps a valid deleted-organization request to
+  `ORGANIZATION_DELETED`/410.
+- The retained database evidence included audit, billing, notification,
+  deletion-request, idempotency, and organization tombstone records. The
+  disposable run created no application/environment/artifact rows, so it is
+  not managed evidence for exclusive or shared artifact-byte deletion.
+- Completion was emitted after the request reached its completed/tombstoned
+  state. The message described active-system completion and retained-evidence
+  caveats; it did not claim that backup copies had been erased.
+
+### Managed acceptance boundaries
+
+The worker timers are enabled and active, and the root-managed deployment
+configuration remains protected (`root:root`, mode `0600`). The six audited
+operational roles are assigned to `admin@hyfens.com`. These facts establish
+execution and assignment wiring, not backup readiness or mailbox/runbook
+monitoring.
+
+The following remain unclaimed as managed evidence: final personal-account
+deletion after ownership transfer, managed shared-object physical-retention
+acceptance, a scheduled/off-host encrypted backup, restore-time deletion
+tombstone reconciliation, and an isolated object-store purge run. The
+database-only restore rehearsal is recorded separately as
+`DATABASE_RESTORE_REHEARSAL_PASS`; it is not a managed backup policy or
+resurrection-proof result. The test restore container and root-only dumps are
+temporary operator rehearsal artifacts.
+
+The working-day implementation remains code-verified with partial managed
+acceptance. It does not claim statutory compliance or invent financial,
+security/audit, Enterprise, or backup retention durations.

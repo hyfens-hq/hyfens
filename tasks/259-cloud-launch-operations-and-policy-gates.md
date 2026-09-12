@@ -581,3 +581,55 @@ provider-ID equality only; callback context fields are not correlation keys.
 This evidence advances Keplars provider correlation for the current live
 contract. It does not close the independent Task 259 launch gates for backup
 and restore, operational ownership, tax, or legal/evidence-retention policy.
+
+## Working-day deletion managed acceptance update — 2026-09-13
+
+Task 269's merged working-day implementation was exercised against the current
+managed composition using the approved Gmail workspace mailbox
+(`admin@hyfens.com`) as the owned acceptance mailbox. The configured calendar
+is UTC, Monday-Friday, with no silently assumed holidays. A clean disposable
+request verified at `2026-09-12T18:58:53.581707Z` persisted day 5 as
+`2026-09-18`, day 7 as `2026-09-22`, and day-8 processing eligibility as
+`2026-09-23`. The supported worker test clock supplied these instants; no
+database timestamps or host clock were modified.
+
+Acceptance A passed the recoverable path: known/unknown no-login initiation was
+neutral, verification was explicit, the grace request was restricted but
+status/cancellation remained available, day-5 and day-7 messages were each
+delivered once, password-confirmed cancellation restored local access, and
+replayed stale day-5/day-7/day-8 work became no-ops. No automatic refund was
+created and no irreversible provider cancellation was represented as undone.
+
+Acceptance B passed the clean organization path: the worker processed one due
+request and completed one tombstoned organization at day 8. The owned mailbox
+contained exactly one scheduled acknowledgement, one day-5 reminder, one
+day-7 final reminder, and one completion acknowledgement. The corresponding
+notification rows were delivered with one attempt each. The final private
+Cloud login no longer found an active organization. The managed run did not
+create artifact rows, so it does not claim shared/exclusive object-store
+acceptance or a direct 410 probe after credential revocation.
+
+The managed timers are enabled/active, protected environments remain
+`root:root`/`0600`, and all six operational roles are assigned to
+`admin@hyfens.com`. The Hetzner evidence remains only
+`DATABASE_RESTORE_REHEARSAL_PASS`: no scheduled/off-host encrypted backup,
+approved rotation/RPO/RTO, object/configuration backup, or deletion-tombstone
+replay after restoring an old backup is proven. Financial/refund,
+security/audit, Enterprise-commercial, and backup retention durations remain
+`LEGAL_POLICY_REQUIRED`; tax remains `COMMERCIAL_POLICY_BLOCKER: tax`.
+
+Current managed matrix delta:
+
+| Workflow | Code | Managed | Provider | Operational |
+| --- | --- | --- | --- | --- |
+| No-login deletion | Yes | Partial: neutral initiation, real verification, grace, and mailbox evidence | N/A | Email/worker path exercised; backup caveat remains |
+| Organization deletion | Yes | Partial-to-verified for the staged disposable run | N/A | Timer, worker, tombstone, and completion email exercised; object/backup proof open |
+| Account deletion | Yes | Partial: ownership-safe personal path exercised; final post-transfer run open | N/A | Credential/session and ownership boundaries remain policy-gated |
+| Backup/restore | Yes | Database restore rehearsal only | N/A | Managed schedule, off-host copy, and resurrection protection open |
+
+The live pricing catalog remains blocked by its explicit legal reference gate
+(`/api/pricing` currently returns 503 with `pricing_unavailable`); no
+unapproved legal auto-approval or LIVE payment activation was introduced.
+The separately authorized `app.hyfens.com` workspace cutover remains
+untouched. Task 259 therefore remains `NOT_READY`, and Task 256B remains
+`DO_NOT_CUT_OVER`.
