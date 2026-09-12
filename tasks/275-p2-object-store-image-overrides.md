@@ -106,3 +106,9 @@ architecture changed.
   hard-coded MinIO defaults.
 - 2026-09-13 — Parameterized both manifests, verified default and sentinel
   image resolution with Docker Compose config, and passed `git diff --check`.
+- 2026-09-13 — Re-ran the full disposable DR rehearsal with pinned Quay
+  images and the explicit loopback-only insecure-auth test flag. PostgreSQL
+  and object backup/restore, readiness, audit verification, reconciliation,
+  and digest-verified artifact fetch passed. Managed backup scheduling,
+  off-host durability, approved rotation/RPO/RTO, and tombstone replay remain
+  outside this task.

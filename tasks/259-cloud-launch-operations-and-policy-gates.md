@@ -683,3 +683,30 @@ financial/security/Enterprise retention durations, and backup rotation still
 require maintainer/accounting/legal decisions. No statutory duration or tax
 calculation was added. Task 259 remains `NOT_READY`; Task 256B remains
 `DO_NOT_CUT_OVER`.
+
+## Disposable DR rerun and deletion hardening — 2026-09-13
+
+The corrected Compose manifests were exercised in an isolated Docker project
+with pinned official MinIO images and the explicit rehearsal-only
+`HYFENS_AUTH_ALLOW_INSECURE_HTTP=true` setting required for its loopback HTTP
+endpoint. The run completed the full directional sequence: control-plane
+startup, signed artifact registration/upload, PostgreSQL and object-store
+backup, destroy/recreate, database/object restore, readiness, audit
+verification, reconciliation, and artifact fetch. Source and restored
+artifact digests matched and the rehearsal observed no data loss in the
+quiesced disposable run. This is `DISASTER_RECOVERY_DIRECTIONAL` evidence,
+not managed backup readiness.
+
+The run does not close the managed gate: no scheduled/off-host encrypted
+backup rotation, object/configuration backup, approved RPO/RTO, or
+restore-time deletion-tombstone replay is installed on the managed host. The
+additional `hyfens-backend.service` data scope remains unresolved.
+
+The deletion hardening correction is now integrated as signed-off commit
+`34acd2f` (cherry-picked from the bounded worker change). Account deletion
+requires an active customer identity, discovers all credential issuance audit
+variants emitted by the service, and erases token-hash-keyed credential rows
+when the existing deletion seam supports it, with revocation fallback. The
+focused deletion/auth/onboarding/billing/notification suite passed 66 tests and
+`dart analyze`/format checks passed. Sole-owner transfer and atomic concurrent
+ownership resolution remain explicit blockers; no transfer API was invented.

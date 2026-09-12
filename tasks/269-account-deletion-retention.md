@@ -476,3 +476,27 @@ coordination remain product/governance gaps rather than silently passing
 acceptance. Task 269 remains `CODE_VERIFIED` with managed acceptance and
 retention gates open; no claim of statutory compliance or backup erasure is
 made.
+
+## Disposable DR and security-hardening evidence — 2026-09-13
+
+The isolated corrected-manifest recovery rehearsal completed the full
+PostgreSQL plus content-addressed object backup/restore path, including
+post-restore readiness, audit validation, artifact reconciliation, and digest
+verified fetch. It used a unique disposable Compose project, pinned MinIO
+images, and an explicit loopback-only insecure-HTTP test override; it did not
+touch managed services or customer data. The result is classified
+`DISASTER_RECOVERY_DIRECTIONAL`, not a managed backup or deletion-resurrection
+proof.
+
+The account-deletion security hardening is integrated as signed-off commit
+`34acd2f`. It rejects platform-only identities for personal deletion, covers
+all four credential issuance audit actions currently emitted by the service,
+and deletes credential records by their existing token-hash storage key when
+supported, retaining the safe revocation fallback otherwise. Focused
+deletion/auth/onboarding/billing/notification validation passed 66 tests with
+analysis and formatting clean.
+
+Managed backup scheduling/off-host encryption, object purge/reconciliation,
+restore-time tombstone replay, sole-owner transfer completion, and concurrent
+ownership coordination remain open. These are not silently reclassified as
+passed by the local directional rehearsal.

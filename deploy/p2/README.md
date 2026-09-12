@@ -357,6 +357,20 @@ Use `scripts/p2-postgres-backup.sh` and
 metadata row without matching bytes must remain unavailable or quarantined;
 the service never regenerates signed artifacts.
 
+For the complete disposable DR script, use the pinned official MinIO images
+when the host does not mirror the Docker Hub `latest` tags. The fixture uses
+loopback HTTP, so the insecure-auth flag is permitted only for this explicitly
+disposable run and must never be copied into a managed or production
+environment:
+
+```sh
+HYFENS_AUTH_ALLOW_INSECURE_HTTP=true \
+HYFENS_OBJECT_STORE_IMAGE=quay.io/minio/minio:latest \
+HYFENS_MC_IMAGE=quay.io/minio/mc:latest \
+HYFENS_ALLOW_RESTORE=1 \
+scripts/p2-dr-rehearsal.sh
+```
+
 ## Disposable two-instance rehearsal
 
 For provider-neutral local evidence only, the repository-controlled HA fixture
