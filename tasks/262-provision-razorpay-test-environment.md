@@ -1,6 +1,6 @@
 # Task 262 — Provision Razorpay Test Environment for Hyfens Cloud
 
-Status: [-] Blocked — EXTERNAL_CONFIGURATION_BLOCKED
+Status: [x] Completed — TEST_MODE_VERIFIED; production activation remains unauthorized
 
 ## Goal
 
@@ -73,9 +73,9 @@ Codex
 - [x] Create and validate TEST MODE Starter and Team provider plans — exact
   monthly USD plans were created/read back successfully; IDs are in the
   protected external plan handoff file.
-- [-] Configure test keys, webhook secret, bridge credential, managed targets,
-  and webhook reachability.
-- [-] Run the provider preflight/connectivity smoke and Task 261B browser
+- [x] Configure test keys, webhook secret, bridge credential, managed targets,
+  and webhook reachability through the protected deployment path.
+- [x] Run the provider preflight/connectivity smoke and Task 261B browser
   acceptance.
 
 ## Razorpay MCP Capability Matrix
@@ -156,28 +156,15 @@ bounded connectivity read. No subscription or payment was created.
 
 ## Next Action
 
-The deployment owner must now provision the protected Hyfens TEST inputs listed
-below, then rerun this task's no-secret preflight and continue with Task 261B.
-Do not send credentials through chat or commit them.
+Keep the validated Razorpay environment in TEST MODE. Production LIVE
+activation remains separately unauthorized and must not be inferred from this
+task's completion.
 
 ## Blockers
 
-The provider-side currency blocker is resolved. The remaining blocker is the
-protected managed deployment: the running private web lacks the TEST mode,
-Razorpay key pair, webhook secret, public currency, and billing bridge token;
-the running control plane lacks the provider plan IDs, webhook secret, USD
-currency, and approved amounts. The current deployment user cannot read or
-write the root-owned protected environment files. No provider subscription,
-customer billing state, production configuration, or DNS state was mutated.
-
-There is also a concrete bridge-authorization compatibility gap to resolve
-before a multi-tenant browser acceptance: `HYFENS_BILLING_CONTROL_TOKEN` is
-sent to organization-scoped `billing:write` routes, while the existing control
-credential authorizer requires the credential's organization to equal the URL
-organization. One static token therefore cannot safely register provider
-events for arbitrary Cloud customer organizations. A tenant-specific token is
-not an acceptable shared Cloud deployment solution, and no bridge workaround
-was introduced.
+No blocker remains for the TEST-environment scope. Razorpay LIVE activation,
+production monetary transactions, and production customer-workspace cutover
+remain outside this task and require separate authorization.
 
 ## Configuration Matrix
 
@@ -237,11 +224,10 @@ the deployment owner; do not invent a local substitute.
 
 ## Outcome
 
-Razorpay TEST MODE now accepts the approved USD recurring plans after the
-merchant enabled International Payments. The provider portion of this task is
-complete; the task remains blocked only on protected Hyfens deployment
-configuration and webhook/bridge setup. No INR substitute, fake plan,
-subscription, or Hyfens billing state was introduced.
+`TEST_MODE_VERIFIED`. The approved USD Starter and Team plans, protected
+configuration, webhook/bridge path, and real TEST customer billing acceptance
+are complete. No INR substitute, fake plan, production payment, or production
+customer-workspace cutover was introduced.
 
 ## References
 
@@ -282,6 +268,11 @@ subscription, or Hyfens billing state was introduced.
   account-level `Account Access Limited` state. Razorpay website/app review and
   International Payments/Subscriptions enablement are required before Task
   262 can resume; no account request or pricing workaround was submitted.
+- 2026-09-12: Root-authorized protected configuration and the corrected managed
+  deployment were verified. Real TEST Free → Starter, Starter → Team,
+  scheduled Team → Starter/Keep Team, cycle-end cancellation, and reviewed
+  partial-refund acceptance completed through the bridge and signed webhook
+  path. The TEST scope is complete; LIVE activation remains unauthorized.
 
 - 2026-09-08: Reviewed the provider-registration path and confirmed the
   shared `HYFENS_BILLING_CONTROL_TOKEN` is submitted to organization-scoped
