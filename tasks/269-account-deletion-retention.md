@@ -347,3 +347,8 @@ control-plane validation passed 89 tests; `dart analyze`, scoped formatting,
 and `git diff --check` also passed. Managed backup/restore, tombstone
 reconciliation, personal deletion after ownership resolution, and legal
 retention decisions remain Task 259 gates.
+
+Follow-up commit `93248b0` also compare-and-set fences the initial
+organization billing-to-grace transition, preventing a concurrent worker from
+having its recovered billing or credential evidence overwritten by the
+requesting process.
