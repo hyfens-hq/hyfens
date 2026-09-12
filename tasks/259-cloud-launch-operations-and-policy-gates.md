@@ -459,7 +459,7 @@ rewriting their historical evidence:
 | Organization deletion | Partial: cancellation and staged completion runs passed | No backup/resurrection proof; no public launch |
 | Account deletion | Partial: no-login/ownership gates covered; final personal deletion not run | Email/cadence and ownership operations still incomplete |
 | Deletion worker | Verified for bounded managed cancellation replay and completion | Timer active; retry/failure ownership not assigned |
-| Deletion notifications | Mailbox receipt observed once for verification, acknowledgement, day 5, day 7, and completion | Provider delivery telemetry remains subject to the external Keplars correlation blocker |
+| Deletion notifications | Mailbox receipt observed once for verification, acknowledgement, day 5, day 7, and completion | Current managed Keplars correlation evidence exists; exact provider-ID matching remains mandatory |
 | Backup/restore | Not verified | No proven managed backup, off-host rotation, isolated restore, or resurrection rehearsal |
 | Policy/catalog | Routes deployed and reachable | Legal approval pending; public free-plan naming is `developer` in `/api/pricing` vs approved `Free` copy |
 
@@ -530,3 +530,54 @@ position is:
   transition remain outside this evidence.
 
 Task 259 remains `NOT_READY`; Task 256B remains `DO_NOT_CUT_OVER`.
+
+### Keplars contract refresh — 2026-09-12
+
+The current official Keplars documentation still does not provide a safe
+correlation bridge for the managed runtime mismatch. The send/status examples
+use `data.id`, while integration examples continue to show top-level
+`msg_...` identifiers. Webhook examples expose `id`, `event_type`, `email_id`,
+`recipient_email`, `status`, `timestamp`, and `workspace_id` (plus `reason` for
+failure/warning events), but document no client-reference/metadata echo or
+lookup from a send `msg_...` identifier to callback `email_id`.
+
+Hyfens therefore retains exact provider-ID correlation and leaves naturally
+unmatched callbacks in sanitized audit telemetry without promoting
+`accepted` to `delivered`. The response `metadata` shown in the integration
+examples is provider-generated delivery metadata, not an echoed Hyfens
+reference. The adapter now also matches the documented `email.rejected`,
+`email.complaint`, and `email.spam` event vocabulary, rejects an API-level
+`success: false` response, explicitly marks raw bodies as HTML, uses Keplars'
+boolean Reply-To switch, and routes the upcoming-renewal notification through
+the documented raw `async` queue rather than the distinct scheduled-email
+envelope. This does not change the Task 259 launch blockers or claim provider
+telemetry verification.
+
+References: [Keplars webhooks](https://docs.keplars.com/docs/getting-started/webhooks),
+[Keplars send emails](https://docs.keplars.com/docs/getting-started/send-emails),
+[Keplars API reference](https://docs.keplars.com/api-reference/email-sending/sendEmailAsync),
+and [Keplars sandbox mode](https://docs.keplars.com/docs/getting-started/sandbox-mode).
+
+### Managed Keplars correlation revalidation — 2026-09-12
+
+The earlier provider-correlation blocker is superseded by a current managed
+TEST run. A fresh public registration returned HTTP 202, generated the
+`auth.email.verification.requested:v1` delivery, and the active notification
+timer processed it. The persisted delivery
+`ndl_ac3bfa7b90cb9a77aed8173bd156081` stored provider ID
+`01a09575-a171-7c06-99f7-3d43e41f323b`; its state became `delivered` from the
+natural `email.delivered` callback and the corresponding status audit was
+recorded. No synthetic callback was used.
+
+A separate direct TEST `/async` send returned a sanitized HTTP 200 response
+with top-level provider `id`
+`01a0957a-4659-7d7e-8342-eec274a068bd`. The natural callback's `email_id`
+produced the same SHA-256
+`53affb7e16520100ae751812dcc89981994b2e183c06c7fa9503329468327` as that
+send-response ID. The direct send had no Hyfens delivery row, so its
+sanitized unmatched audit was expected. Hyfens continues to use exact
+provider-ID equality only; callback context fields are not correlation keys.
+
+This evidence advances Keplars provider correlation for the current live
+contract. It does not close the independent Task 259 launch gates for backup
+and restore, operational ownership, tax, or legal/evidence-retention policy.

@@ -95,6 +95,16 @@ void main() {
     expect(rendered.html, isNot(contains('undefined')));
   });
 
+  test('catalogue priorities use documented raw Keplars queues', () {
+    const providerQueues = <String>{'instant', 'high', 'async', 'bulk'};
+    expect(
+      NotificationCatalog.definitions.every(
+        (definition) => providerQueues.contains(definition.priority),
+      ),
+      isTrue,
+    );
+  });
+
   test('customer emails show the Hyfens mark once in each body format', () {
     final brand = RegExp(r'\bhyfens\b', caseSensitive: false);
     final url = RegExp(r'https?://[^\s"<>]+');
@@ -182,13 +192,17 @@ void main() {
     try {
       server.listen((request) async {
         expect(request.method, 'POST');
-        expect(request.uri.path, '/api/v1/send-email/normal');
+        expect(request.uri.path, '/api/v1/send-email/async');
         expect(
           request.headers.value(HttpHeaders.authorizationHeader),
           'Bearer test-key',
         );
         expect(request.headers.value('Idempotency-Key'), 'delivery-1');
-        await request.drain<void>();
+        final requestBody = jsonDecode(
+          await utf8.decoder.bind(request).join(),
+        ) as Map<String, Object?>;
+        expect(requestBody['is_html'], true);
+        expect(requestBody['body'], '<p>Test notification</p>');
         request.response
           ..statusCode = HttpStatus.ok
           ..headers.contentType = ContentType.json
@@ -214,7 +228,7 @@ void main() {
           html: '<p>Test notification</p>',
           text: 'Test notification',
           sender: HyfensSenderPolicy.transactional,
-          priority: 'normal',
+          priority: 'async',
           eventId: 'event-1',
         ),
         idempotencyKey: 'delivery-1',
@@ -261,13 +275,115 @@ void main() {
             html: '<p>Test notification</p>',
             text: 'Test notification',
             sender: HyfensSenderPolicy.transactional,
-            priority: 'normal',
+            priority: 'async',
             eventId: 'event-1',
           ),
           idempotencyKey: 'delivery-2',
         );
 
         expect(result.providerMessageId, '456');
+      } finally {
+        await server.close(force: true);
+      }
+    },
+  );
+
+  test(
+    'Keplars adapter enables the configured workspace Reply-To setting',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      try {
+        server.listen((request) async {
+          final requestBody = jsonDecode(
+            await utf8.decoder.bind(request).join(),
+          ) as Map<String, Object?>;
+          expect(requestBody['reply_to'], true);
+          expect(requestBody['from'], 'no-reply@hyfens.com');
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode(<String, Object?>{
+                'success': true,
+                'data': <String, Object?>{'id': 'msg_reply_to'},
+              }),
+            );
+          await request.response.close();
+        });
+
+        final provider = KeplarsNotificationProvider(
+          apiKey: 'test-key',
+          apiBase: Uri.parse('http://127.0.0.1:${server.port}/api/v1'),
+        );
+        final result = await provider.send(
+          const NotificationMessage(
+            to: 'owner@example.com',
+            subject: 'Billing update',
+            preheader: 'Billing update',
+            html: '<p>Billing update</p>',
+            text: 'Billing update',
+            sender: HyfensSenderPolicy.support,
+            priority: 'async',
+            eventId: 'event-reply-to',
+          ),
+          idempotencyKey: 'delivery-reply-to',
+        );
+
+        expect(result.providerMessageId, 'msg_reply_to');
+      } finally {
+        await server.close(force: true);
+      }
+    },
+  );
+
+  test(
+    'Keplars success=false responses are not recorded as accepted',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      try {
+        server.listen((request) async {
+          await request.drain<void>();
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode(<String, Object?>{
+                'success': false,
+                'error': 'Invalid email address',
+                'code': 'INVALID_EMAIL',
+              }),
+            );
+          await request.response.close();
+        });
+
+        final provider = KeplarsNotificationProvider(
+          apiKey: 'test-key',
+          apiBase: Uri.parse('http://127.0.0.1:${server.port}/api/v1'),
+        );
+        await expectLater(
+          provider.send(
+            const NotificationMessage(
+              to: 'owner@example.com',
+              subject: 'Test notification',
+              preheader: 'Test notification',
+              html: '<p>Test notification</p>',
+              text: 'Test notification',
+              sender: HyfensSenderPolicy.transactional,
+              priority: 'async',
+              eventId: 'event-error-envelope',
+            ),
+            idempotencyKey: 'delivery-error-envelope',
+          ),
+          throwsA(
+            isA<NotificationProviderException>()
+                .having((error) => error.retryable, 'retryable', false)
+                .having(
+                  (error) => error.failureClass,
+                  'failureClass',
+                  'provider_rejected',
+                ),
+          ),
+        );
       } finally {
         await server.close(force: true);
       }
@@ -688,9 +804,12 @@ void main() {
         jsonEncode(<String, Object?>{
           'id': 'evt_unrelated',
           'event_type': 'email.delivered',
-          'email_id': 'provider-id-for-another-message',
-          'recipient': 'owner@example.com',
+          'email_id': 456,
+          'recipient_email': 'owner@example.com',
           'subject': 'Payment received',
+          'status': 'delivered',
+          'timestamp': '2026-09-09T12:00:00Z',
+          'workspace_id': 'ws_hyfens_test',
         }),
       );
       final digest = Hmac(
@@ -704,10 +823,7 @@ void main() {
         secret: 'callback-secret',
       );
 
-      expect(
-        delivery['providerMessageId'],
-        isNot('provider-id-for-another-message'),
-      );
+      expect(delivery['providerMessageId'], isNot('456'));
       expect(
         (await store.listJson(notificationDeliveryCollection)).single['state'],
         'accepted',
@@ -718,9 +834,63 @@ void main() {
       );
       expect(unmatchedAudit, hasLength(1));
       final auditJson = jsonEncode(unmatchedAudit.single);
-      expect(auditJson, isNot(contains('provider-id-for-another-message')));
+      expect(auditJson, isNot(contains('456')));
       expect(auditJson, isNot(contains('owner@example.com')));
       expect(auditJson, isNot(contains('Payment received')));
+    },
+  );
+
+  test(
+    'current Keplars terminal event names normalize without heuristics',
+    () async {
+      Future<String> stateFor(String stableKey, String eventType) async {
+        final eventId = await notifications.enqueue(
+          NotificationEvent(
+            key: 'billing.payment.succeeded',
+            stableKey: stableKey,
+            recipientEmails: const <String>['owner@example.com'],
+            variables: const <String, Object?>{'message': 'Captured.'},
+            occurredAt: DateTime.utc(2026, 9, 9),
+            organizationId: 'org_notifications',
+          ),
+        );
+        await notifications.dispatchPending();
+        final delivery = (await store.listJson(notificationDeliveryCollection))
+            .singleWhere((row) => row['eventId'] == eventId);
+        final body = utf8.encode(
+          jsonEncode(<String, Object?>{
+            'id': 'evt_$stableKey',
+            'event_type': eventType,
+            'email_id': delivery['providerMessageId'],
+            'recipient_email': 'owner@example.com',
+            'status': eventType.substring('email.'.length),
+            'timestamp': '2026-09-09T12:00:00Z',
+            'workspace_id': 'ws_hyfens_test',
+          }),
+        );
+        final digest = Hmac(
+          sha256,
+          utf8.encode('callback-secret'),
+        ).convert(body).toString();
+        await notifications.applyProviderDeliveryWebhook(
+          rawBody: body,
+          signature: 'sha256=$digest',
+          secret: 'callback-secret',
+        );
+        return (await store.listJson(notificationDeliveryCollection))
+                .singleWhere((row) => row['eventId'] == eventId)['state']
+            as String;
+      }
+
+      expect(
+        await stateFor('keplars-rejected-event', 'email.rejected'),
+        'hard_failed',
+      );
+      expect(
+        await stateFor('keplars-complaint-event', 'email.complaint'),
+        'complained',
+      );
+      expect(await stateFor('keplars-spam-event', 'email.spam'), 'complained');
     },
   );
 

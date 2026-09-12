@@ -298,7 +298,7 @@ The older list above is retained as deployment history. Current status is:
 | Tax | `COMMERCIAL_POLICY_BLOCKER: tax` | Accountant/legal approval of entity, registrations, classifications, location evidence, rates, invoice owner, and display policy. |
 | Evidence retention | `LEGAL_POLICY_REQUIRED` | Approve data-class durations/holds for financial, security/audit, Enterprise, and backups; then align policy wording. |
 | Policy/cutover | Legal/maintainer approval and Task 256B remain outstanding | Publish/verify approved content and separately authorize any `app.hyfens.com` cutover. |
-| Provider delivery telemetry | Exact-ID safety remains; any unmatched external callback is not treated as delivered | Resolve the external provider correlation contract before claiming delivered telemetry. |
+| Provider delivery telemetry | Current managed TEST run correlated a natural callback using exact provider ID equality | Retain exact-ID-only handling; the remaining documentation/contract ambiguity is not a Hyfens heuristic-correlation blocker. |
 
 Task 259 therefore remains `NOT_READY`, and Task 256B remains
 `DO_NOT_CUT_OVER`. The Hetzner database rehearsal reduces uncertainty but does
