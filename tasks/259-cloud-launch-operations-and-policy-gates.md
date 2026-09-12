@@ -710,3 +710,50 @@ when the existing deletion seam supports it, with revocation fallback. The
 focused deletion/auth/onboarding/billing/notification suite passed 66 tests and
 `dart analyze`/format checks passed. Sole-owner transfer and atomic concurrent
 ownership resolution remain explicit blockers; no transfer API was invented.
+
+## Root-authorized deployment and recovery evidence — 2026-09-13
+
+The staged source was synchronized from reviewed commit `0125e30` into the
+managed host staging boundary. The installed public control-plane wrapper
+matches the reviewed staged wrapper byte-for-byte, uses the current workspace
+topology, and contains no obsolete `apps/web` or provider-package path
+assumptions. The protected public control-plane environment remains
+`root:root` with mode `0600`.
+
+The protected wrapper built the current control-plane image before service
+replacement, recreated the intended managed TEST service, and completed its
+readiness gate. Post-deployment checks returned HTTP 200 for both
+`https://api.hyfens.com/healthz` and `https://api.hyfens.com/readyz`; the active
+control-plane and PostgreSQL containers were healthy. No `app.hyfens.com`
+route, DNS record, or customer-workspace target was changed.
+
+The disposable Hetzner recovery rehearsal then passed in a unique Compose
+project using pinned Quay MinIO images and rehearsal-only loopback HTTP
+configuration. It covered control-plane startup, artifact registration and
+upload, PostgreSQL and content-addressed object backup, destroy/recreate,
+database/object restore, readiness, audit verification, reconciliation, and
+digest-verified artifact fetch. Source and restored artifact digests matched,
+with no data loss observed in the quiesced rehearsal. This is
+`DISASTER_RECOVERY_DIRECTIONAL` evidence only; it does not prove an
+application-owned scheduled/off-host encrypted backup, approved backup
+rotation/RPO/RTO, full configuration/backend coverage, or restore-time
+deletion-tombstone replay.
+
+The durable rollback path was exercised. The retained previous release was
+activated with `hyfens-public-control-plane-dev-deploy --rollback` and
+returned HTTP 200 for health/readiness. The current reviewed release was then
+rebuilt and redeployed through the same protected wrapper and again returned
+HTTP 200 for health/readiness. The host was not left on the rollback release.
+
+The live policy route smoke remains: `/`, `/pricing`, `/pricing.md`, `/terms`,
+`/privacy`, `/refund-policy`, and `/account-deletion` return 200. The
+authoritative `/api/pricing` response remains 503 `pricing_unavailable` because
+the legal catalog reference gate is not approved; route reachability is not
+legal/catalog approval. No live payment activation was performed.
+
+The managed launch verdict remains `NOT_READY`. Remaining independent gates
+are scheduled/off-host encrypted backup and restore-time tombstone replay,
+managed object/configuration/backend backup scope, artifact purge and
+reconciliation acceptance, approved tax and evidence-retention policy,
+catalog/legal approval, personal ownership-resolution completion, and
+Enterprise end-to-end TEST acceptance if Enterprise remains in launch scope.

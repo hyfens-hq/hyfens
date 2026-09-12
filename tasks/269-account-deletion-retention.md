@@ -500,3 +500,30 @@ Managed backup scheduling/off-host encryption, object purge/reconciliation,
 restore-time tombstone replay, sole-owner transfer completion, and concurrent
 ownership coordination remain open. These are not silently reclassified as
 passed by the local directional rehearsal.
+
+## Root-authorized deployment and recovery evidence — 2026-09-13
+
+The current reviewed control-plane source was synchronized into the managed
+staging boundary and deployed through the installed protected wrapper. The
+wrapper matched the reviewed source, built before replacement, retained a
+durable previous release, and kept the protected environment at
+`root:root`/`0600`. The managed service returned HTTP 200 for health and
+readiness after deployment; `app.hyfens.com` was not changed.
+
+A separate disposable Hetzner recovery rehearsal passed with PostgreSQL and
+content-addressed object backup/restore, post-restore readiness, audit
+verification, artifact reconciliation, and digest-verified artifact fetch.
+This is `DISASTER_RECOVERY_DIRECTIONAL` evidence and does not close managed
+backup scheduling, off-host encrypted rotation, object/configuration/backend
+coverage, approved RPO/RTO, or restore-time deletion-tombstone replay.
+
+The wrapper rollback rehearsal also passed: the retained previous release
+activated successfully with health/readiness HTTP 200, then the current
+reviewed release was rebuilt and redeployed successfully. The host was
+restored to the current release.
+
+The recovery run does not upgrade deletion acceptance. Managed shared/exclusive
+artifact purge and reconciliation, final personal deletion after ownership
+resolution, and old-backup tombstone replay remain unclaimed. Completion
+emails continue to describe active-system completion and retained/backup
+caveats; they do not claim backup erasure.
