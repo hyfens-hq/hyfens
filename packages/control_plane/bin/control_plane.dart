@@ -84,6 +84,57 @@ Future<void> main(List<String> arguments) async {
     deletionPolicy: config.deletionPolicy,
   );
   await configuredService.initialize();
+  if (options.containsKey('process-artifact-retention')) {
+    try {
+      if (options.containsKey('bootstrap') ||
+          options.containsKey('bootstrap-admin') ||
+          options.containsKey('bootstrap-owner') ||
+          options.containsKey('seed-demo') ||
+          options.containsKey('process-deletions') ||
+          options.containsKey('process-notifications')) {
+        throw ArgumentError(
+          '--process-artifact-retention cannot be combined with another '
+          'worker or bootstrap mode',
+        );
+      }
+      final limit = _artifactRetentionLimit(options);
+      final report = await configuredService.runArtifactRetentionCleanup(
+        limit: limit,
+      );
+      stdout.writeln(
+        'artifact_retention_worker_managed=${report.managed} '
+        'artifact_retention_worker_deletion_supported='
+        '${report.deletionSupported} '
+        'artifact_retention_worker_limit=$limit '
+        'artifact_retention_worker_considered=${report.consideredCount} '
+        'artifact_retention_worker_purged=${report.purgedCount} '
+        'artifact_retention_worker_skipped=${report.skippedCount} '
+        'artifact_retention_worker_failed=${report.failedCount}',
+      );
+      if (!report.managed) {
+        stderr.writeln(
+          '--process-artifact-retention requires a Cloud deployment',
+        );
+        exitCode = 1;
+      } else if (!report.deletionSupported) {
+        stderr.writeln(
+          '--process-artifact-retention requires an artifact store that '
+          'supports deletion',
+        );
+        exitCode = 1;
+      } else if (report.failedCount > 0) {
+        stderr.writeln(
+          'artifact retention worker completed with '
+          '${report.failedCount} failed item(s)',
+        );
+        exitCode = 1;
+      }
+    } finally {
+      await store.close();
+      taskRoleCredentials?.close();
+    }
+    return;
+  }
   if (options.containsKey('process-deletions')) {
     if (options.containsKey('bootstrap') ||
         options.containsKey('bootstrap-admin') ||
@@ -337,6 +388,18 @@ DateTime? _deletionWorkerNow(
   return parsed;
 }
 
+int _artifactRetentionLimit(Map<String, String> options) {
+  final raw = options['artifact-retention-limit'];
+  if (raw == null) return 100;
+  final limit = int.tryParse(raw);
+  if (limit == null || limit < 1 || limit > 1000) {
+    throw ArgumentError(
+      '--artifact-retention-limit must be an integer between 1 and 1000',
+    );
+  }
+  return limit;
+}
+
 Map<String, String> _options(List<String> arguments) {
   final result = <String, String>{};
   for (var index = 0; index < arguments.length; index++) {
@@ -347,6 +410,7 @@ Map<String, String> _options(List<String> arguments) {
       continue;
     }
     if (argument == '--process-deletions' ||
+        argument == '--process-artifact-retention' ||
         argument == '--process-notifications' ||
         argument == '--seed-demo' ||
         argument == '--bootstrap-admin' ||
