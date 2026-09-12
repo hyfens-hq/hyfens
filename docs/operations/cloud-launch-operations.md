@@ -214,6 +214,54 @@ create an incident platform, establish statutory retention periods, approve
 tax treatment, or prove that the mailbox is monitored. Those decisions and
 the backup/restore acceptance gate remain external launch requirements.
 
+## Geo-aware tax and retention boundary — 2026-09-12
+
+The payment gateway is not the merchant's tax-policy authority. Before LIVE
+paid billing, the maintainer's accountant/legal owner must approve the legal
+entity and registrations, supported jurisdictions, SaaS/IT-ITES/OIDAR
+classification where relevant, B2B/B2C treatment, GST/IGST or VAT place of
+supply, tax-inclusive/exclusive public pricing, invoice/credit-note owner,
+and the evidence retained for each tax decision. Hyfens should use customer
+country/state, business status, validated GSTIN/VAT ID, billing address, and
+versioned rule/evidence snapshots; IP/payment-country signals are supporting
+evidence only, not a sole geolocation rule.
+
+India's CBIC material and the European Commission's VAT guidance both make
+customer status and service classification material. They do not support one
+global “charge tax from IP” implementation. India's CGST section 36 also gives
+a jurisdiction-specific accounts/records baseline, while GDPR's storage
+limitation principle does not create one universal personal-data duration.
+The source-backed decision matrix and links are in
+`docs/operations/tax-retention-geolocation-research.md`.
+
+Until those decisions are approved, classify the LIVE tax gate as
+`COMMERCIAL_POLICY_BLOCKER: tax` and the financial/security/Enterprise
+retention gate as `LEGAL_POLICY_REQUIRED`; do not claim a statutory duration
+from this repository.
+
+## Hetzner isolated database backup/restore rehearsal — 2026-09-12
+
+Using the root-authorized OpenShip terminal on the managed Hetzner host, an
+operator created root-only custom-format PostgreSQL dumps of the live public
+control-plane and private Cloud databases. Both dumps were restored with
+`pg_restore --no-owner --no-privileges --exit-on-error` into a disposable
+PostgreSQL container with no published port. The restored databases exposed
+the expected table counts (89 public-control-plane tables and 70 private-Cloud
+tables); the live service containers were not replaced or restored over.
+
+This is recorded as `DATABASE_RESTORE_REHEARSAL_PASS`, not
+`MANAGED_BACKUP_READY`. It proves a database-only isolated rehearsal on the
+host. It does not prove scheduled backups, off-host/encrypted durability,
+approved rotation, restore RPO/RTO, application/object-store recovery, or
+deletion-tombstone replay that prevents an old backup from resurrecting a
+deleted tenant. The inspected Cloud volume was PostgreSQL data; no separate
+artifact/object-store backup was evidenced.
+
+The temporary rehearsal dump directory and disposable restore container were
+left root-only for operator-controlled cleanup; no customer-facing service was
+changed. Until the complete recovery unit is backed up and the tombstone/
+object-store restore rehearsal is recorded, the backup gate remains blocked.
+
 ## Remaining gates
 
 1. Install the staged current private-web and Cloud control-plane wrappers
@@ -224,7 +272,8 @@ the backup/restore acceptance gate remain external launch requirements.
    test origin and verify HMAC delivery.
 3. Configure/verify transactional email and Enterprise inquiry monitoring.
 4. Record the real backup/restore and retention policy, including legal
-   evidence durations.
+   evidence durations. The Hetzner database-only rehearsal is partial evidence
+   and does not close this item.
 5. Publish legally approved policy content and verify `/terms`, `/privacy`,
    `/refund-policy`, `/pricing`, and `/pricing.md` from the active edge.
 6. Run Task 261B, Task 270 provider acceptance, Task 268 TEST refund, Task 266
@@ -233,3 +282,24 @@ the backup/restore acceptance gate remain external launch requirements.
 
 Until these gates pass, the Task 256B recommendation is
 `DO_NOT_CUT_OVER`.
+
+## Current managed-gate reconciliation — 2026-09-12
+
+The older list above is retained as deployment history. Current status is:
+
+| Gate | Current status | What still closes it |
+| --- | --- | --- |
+| Deployment/wrappers, protected TEST configuration, health/routes | Resolved for the current managed composition | Keep the repeatable runbook and rollback evidence current. |
+| Razorpay TEST checkout, subscription lifecycle, scheduled changes, cancellation, reviewed refund | TEST evidence exists for the supported flows | Do not enable LIVE money; production tax/invoice approval remains separate. |
+| Transactional email and deletion cadence | Partial managed evidence; `admin@hyfens.com` is the assigned owner for all six operational roles | Prove the owner mailbox is monitored and complete any remaining Enterprise/deletion/customer-mailbox acceptance. |
+| Enterprise quote/payment | Not fully closed in the current evidence | Run a disposable end-to-end Enterprise TEST quote/payment and record signed provider evidence. |
+| Deletion | Organization cancellation/staged completion is partial; personal deletion remains partial | Complete managed personal/no-login and ownership cases, including final tombstone/object evidence. |
+| Backup/restore | `DATABASE_RESTORE_REHEARSAL_PASS` only | Add scheduled, encrypted/off-host recovery for DB and object/configuration data, approved rotation/RPO/RTO, isolated application restore, and tombstone replay/resurrection proof. |
+| Tax | `COMMERCIAL_POLICY_BLOCKER: tax` | Accountant/legal approval of entity, registrations, classifications, location evidence, rates, invoice owner, and display policy. |
+| Evidence retention | `LEGAL_POLICY_REQUIRED` | Approve data-class durations/holds for financial, security/audit, Enterprise, and backups; then align policy wording. |
+| Policy/cutover | Legal/maintainer approval and Task 256B remain outstanding | Publish/verify approved content and separately authorize any `app.hyfens.com` cutover. |
+| Provider delivery telemetry | Exact-ID safety remains; any unmatched external callback is not treated as delivered | Resolve the external provider correlation contract before claiming delivered telemetry. |
+
+Task 259 therefore remains `NOT_READY`, and Task 256B remains
+`DO_NOT_CUT_OVER`. The Hetzner database rehearsal reduces uncertainty but does
+not close the recovery or policy gates.

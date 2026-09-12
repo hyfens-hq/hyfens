@@ -462,3 +462,71 @@ rewriting their historical evidence:
 | Deletion notifications | Mailbox receipt observed once for verification, acknowledgement, day 5, day 7, and completion | Provider delivery telemetry remains subject to the external Keplars correlation blocker |
 | Backup/restore | Not verified | No proven managed backup, off-host rotation, isolated restore, or resurrection rehearsal |
 | Policy/catalog | Routes deployed and reachable | Legal approval pending; public free-plan naming is `developer` in `/api/pricing` vs approved `Free` copy |
+
+## Hetzner isolated database restore rehearsal — 2026-09-12
+
+The root-authorized OpenShip terminal on the managed Hetzner host was used for
+a non-destructive database-only rehearsal. Custom-format dumps were created
+for the live public control-plane database (`hyfens`) and private Cloud
+database (`hyfens_cloud`) under a root-only, mode-restricted rehearsal
+directory. Both were restored with `pg_restore --no-owner --no-privileges
+--exit-on-error` into a disposable PostgreSQL container with no published
+port. Integrity checks found 89 tables in the public restore and 70 tables in
+the private restore. The live service containers were left running and were
+not overwritten.
+
+Evidence classification: `DATABASE_RESTORE_REHEARSAL_PASS`.
+
+This does not close the managed backup gate. No scheduled backup job,
+off-host/encrypted copy, approved rotation/RPO/RTO, separate artifact/object
+store backup, application-level smoke after restore, or deletion-tombstone
+reconciliation/resurrection test was proven. The host volume inspected for
+the private Cloud data is PostgreSQL data; it is not evidence of an artifact
+object-store backup. The temporary rehearsal artifacts remain root-only for
+operator-controlled cleanup.
+
+## Geo-aware tax and evidence-retention decision boundary — 2026-09-12
+
+Official CBIC and European Commission material was reviewed and recorded in
+`docs/operations/tax-retention-geolocation-research.md`. The result is not a
+legal approval: tax depends on the Hyfens legal entity/registrations, service
+classification, customer B2B/B2C status, address/tax-ID evidence, place of
+supply, and jurisdiction-specific rules. The gateway does not remove the
+merchant's invoice, refund, reconciliation, or filing responsibility.
+
+For retention, the product keeps the existing ERASE/ANONYMIZE/RETAIN/
+TEMPORARY_RETAIN taxonomy. India GST records have a source-backed 72-month
+baseline in CGST section 36 for registered-person accounts/records, subject to
+proceedings and applicability; GDPR storage limitation is a purpose/legal-
+obligation principle rather than a universal duration. Hyfens must still get
+accountant/legal approval for financial/refund, security/audit, Enterprise
+commercial, and backup durations before LIVE launch. No statutory duration was
+invented in code.
+
+`admin@hyfens.com` is now the assigned owner for all six operational roles in
+the audited registry. This closes the missing assignment mechanism, not the
+proof that the mailbox is monitored or that its response/runbooks have passed
+managed acceptance.
+
+## Current managed-gate reconciliation — 2026-09-12
+
+The historical acceptance rows above remain unchanged. The current launch
+position is:
+
+- deployment, protected TEST configuration, health/routes, and the supported
+  Razorpay TEST lifecycle evidence are present;
+- `admin@hyfens.com` is the assigned owner for email, payments/webhooks,
+  refunds, Enterprise inquiries, deletion/object cleanup, and backup/restore;
+  actual mailbox monitoring and response evidence remain unproven;
+- Enterprise end-to-end TEST quote/payment, complete managed personal/no-login
+  deletion, and final object/tombstone acceptance remain open or partial;
+- the Hetzner result is `DATABASE_RESTORE_REHEARSAL_PASS`, not managed backup
+  readiness; scheduled/off-host/encrypted recovery, object/configuration
+  recovery, approved RPO/RTO/rotation, and tombstone replay remain open;
+- tax remains `COMMERCIAL_POLICY_BLOCKER: tax`, and statutory/approved
+  financial, security/audit, Enterprise, and backup retention remains
+  `LEGAL_POLICY_REQUIRED`;
+- policy publication/cutover and the separately authorized `app.hyfens.com`
+  transition remain outside this evidence.
+
+Task 259 remains `NOT_READY`; Task 256B remains `DO_NOT_CUT_OVER`.
