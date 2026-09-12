@@ -138,13 +138,28 @@ final class ControlPlaneService {
   /// Returns the lifecycle state used to reject access after a tenant's
   /// staged organization deletion has completed. Provider webhooks continue
   /// through the billing service and do not use this customer credential seam.
-  Future<void> ensureOrganizationAccessAllowed(String organizationId) async {
+  Future<void> ensureOrganizationAccessAllowed(
+    String organizationId, {
+    bool allowDeletionStatus = false,
+  }) async {
     final value = await store.readJson('organizations', organizationId);
     if (value?['deletionState'] == 'deleted') {
       throw const ControlPlaneException(
         'ORGANIZATION_DELETED',
         'This Cloud organization is no longer active',
         statusCode: 410,
+      );
+    }
+    if (value?['deletionState'] == 'deletion_requested' &&
+        !allowDeletionStatus) {
+      throw const ControlPlaneException(
+        'ORGANIZATION_DELETION_PENDING',
+        'This Cloud organization is restricted while deletion is pending',
+        statusCode: 409,
+        details: <String, Object?>{
+          'scope': 'organization',
+          'status': 'deletion_pending',
+        },
       );
     }
   }
@@ -493,6 +508,7 @@ final class ControlPlaneService {
       final user = await auth.verifiedCustomerForAccessToken(
         accessToken: token,
       );
+      await deletion?.ensureAccountMutationAllowed(userId: user.id);
       return _provisionCustomerOrganization(
         user: user,
         organizationName: organizationName,
@@ -5228,6 +5244,17 @@ final class ControlPlaneService {
         statusCode: 503,
       );
     }
+    final actor = await auth.authorizeAccessToken(
+      token: token,
+      requiredScope: organizationMembersReadScope,
+      kind: CredentialKind.control,
+      organizationId: organizationId,
+    );
+    await _enforcePendingAccountDeletion(actor, allowDeletionStatus: true);
+    await ensureOrganizationAccessAllowed(
+      actor.organizationId,
+      allowDeletionStatus: true,
+    );
     return auth.listOrganizationMembers(
       accessToken: token,
       organizationId: organizationId,
@@ -5776,7 +5803,15 @@ final class ControlPlaneService {
         applicationId: applicationId,
         environmentId: environmentId,
       );
-      await ensureOrganizationAccessAllowed(actor.organizationId);
+      final deletionStatusRead = _isDeletionStatusReadScope(scope);
+      await _enforcePendingAccountDeletion(
+        actor,
+        allowDeletionStatus: deletionStatusRead,
+      );
+      await ensureOrganizationAccessAllowed(
+        actor.organizationId,
+        allowDeletionStatus: deletionStatusRead,
+      );
       await _enforceCloudEntitlement(actor: actor, scope: scope);
       return actor;
     }
@@ -5793,7 +5828,15 @@ final class ControlPlaneService {
       kind: kind,
       now: _now(),
     );
-    await ensureOrganizationAccessAllowed(actor.organizationId);
+    final deletionStatusRead = _isDeletionStatusReadScope(scope);
+    await _enforcePendingAccountDeletion(
+      actor,
+      allowDeletionStatus: deletionStatusRead,
+    );
+    await ensureOrganizationAccessAllowed(
+      actor.organizationId,
+      allowDeletionStatus: deletionStatusRead,
+    );
     await _enforceCloudEntitlement(actor: actor, scope: scope);
     return actor;
   }
@@ -5819,6 +5862,43 @@ final class ControlPlaneService {
       },
     );
   }
+
+  Future<void> _enforcePendingAccountDeletion(
+    CredentialRecord actor, {
+    bool allowDeletionStatus = false,
+  }) async {
+    if (allowDeletionStatus) return;
+    final requests = await store.listJson(accountDeletionRequestCollection);
+    for (final request in requests) {
+      if (!_isAccountDeletionRestrictedStatus(request['status'])) continue;
+      final userId = request['userId'];
+      final blocked = request['blockedCredentialIds'];
+      final blockedIds = blocked is List
+          ? blocked.whereType<String>().toSet()
+          : const <String>{};
+      if (actor.id == userId || blockedIds.contains(actor.id)) {
+        throw const ControlPlaneException(
+          'ACCOUNT_DELETION_PENDING',
+          'This account is restricted while deletion is pending',
+          statusCode: 409,
+          details: <String, Object?>{
+            'scope': 'account',
+            'status': 'deletion_pending',
+          },
+        );
+      }
+    }
+  }
+
+  bool _isAccountDeletionRestrictedStatus(Object? status) =>
+      status == 'ownership_resolution_required' ||
+      status == 'policy_decision_required' ||
+      status == 'grace_period' ||
+      status == 'processing' ||
+      status == 'failed';
+
+  bool _isDeletionStatusReadScope(String scope) =>
+      scope == billingReadScope || scope == organizationMembersReadScope;
 
   Future<CredentialRecord> _authorizeHealth(
     String token, {

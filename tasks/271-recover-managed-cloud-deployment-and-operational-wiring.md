@@ -1,7 +1,7 @@
 # Task 271 — Recover Managed Cloud Deployment and Operational Wiring
 
-Status: [-] Blocked — root-managed installation and protected operational
-configuration remain external prerequisites
+Status: [-] Blocked — backup/restore, operational ownership, and policy gates
+remain unresolved
 
 ## Goal
 
@@ -59,7 +59,7 @@ Codex
   build-before-replace, health-gated deployment, and rollback.
 - [x] Fix the existing control-plane deployment wrapper for current-source,
   build-before-replace, health-gated deployment, and rollback.
-- [-] Validate protected configuration and document the exact root-level
+- [x] Validate protected configuration and document the exact root-level
   installation action without exposing secrets.
 - [-] Wire or verify production email, deletion worker, backup/restore,
   webhook, policy routes, and operational ownership.
@@ -100,11 +100,10 @@ slice passed independently.
 
 ## Next Action
 
-The repository-owned wrappers and current source trees are corrected, validated,
-and staged. The next action is for a root operator to install the staged
-wrappers, install protected configuration through the deployment secret
-mechanism, and run the no-secret preflight. Do not mutate production routing
-or provider state until that preflight passes.
+Complete the remaining managed acceptance and operations gates: Enterprise TEST
+payment, personal-account deletion, managed backup/restore with deletion
+resurrection protection, role-based ownership, and legal/tax/evidence-retention
+decisions. Keep `app.hyfens.com` and Razorpay LIVE outside this task.
 
 ## Blockers
 
@@ -121,18 +120,21 @@ Initial blockers carried from Task 259:
 Task-271-specific status:
 
 - current source Docker builds and repository wrappers are no longer blocked;
-- the managed host still has the obsolete installed wrappers;
-- protected Cloud/provider configuration is still missing from the running
-  composition;
-- no managed deployment, webhook delivery, email acceptance, backup restore,
-  deletion worker, or provider/customer acceptance could be executed safely.
+- root-authorized wrappers and protected Cloud/provider configuration are
+  installed; the current composition is healthy and its rollback path was
+  exercised;
+- policy routes, TEST billing/bridge flows, and the bounded deletion worker
+  deployment have managed evidence;
+- managed backup/restore and deletion-resurrection protection are not proven,
+  and Enterprise payment, complete personal deletion, and role-based failure
+  ownership remain open.
 
 ## Outcome
 
-`NOT_READY`. Repository deployment recovery is complete and staged, but the
-managed operational target cannot be replaced from this session because the
-required root installation/protected-secret action is unavailable. Task 259
-therefore remains `NOT_READY`; Task 256B remains `DO_NOT_CUT_OVER`.
+`NOT_READY`. Repository deployment recovery and root-authorized installation are
+complete, but backup/restore, deletion-resurrection protection, operational
+ownership, Enterprise acceptance, and policy gates remain incomplete. Task 259
+remains `NOT_READY`; Task 256B remains `DO_NOT_CUT_OVER`.
 
 ## References
 
@@ -148,6 +150,11 @@ therefore remains `NOT_READY`; Task 256B remains `DO_NOT_CUT_OVER`.
 - 2026-09-09: Reserved for deployment recovery and operational wiring after
   Task 259 reported NOT_READY.
 - 2026-09-09: Corrected current source paths and local control-plane Docker
-  dependencies; hardened and staged both health-gated wrappers; repository
-  and lifecycle-focused validation passed. Managed installation remains
-  blocked on root-owned wrapper/protected configuration access.
+dependencies; hardened and staged both health-gated wrappers; repository
+and lifecycle-focused validation passed. Managed installation remains
+blocked on root-owned wrapper/protected configuration access.
+- 2026-09-12: Root-authorized installation completed. The current wrappers,
+  protected TEST configuration, health/readiness checks, live route smoke,
+  provider bridge, and rollback rehearsal passed. The task remains blocked only
+  by the separately identified backup/restore, resurrection, ownership,
+  Enterprise, and legal/policy acceptance gates.

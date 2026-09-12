@@ -1,6 +1,6 @@
 # Task 266 — Enterprise quote, contract, custom entitlements and payment lifecycle
 
-Status: [-] Blocked — Enterprise quote/contract implementation and local validation are complete; managed Razorpay TEST acceptance requires protected deployment configuration
+Status: [-] Blocked — Enterprise quote/contract implementation and local validation are complete; managed Razorpay TEST acceptance has not yet run
 
 ## Goal
 
@@ -67,8 +67,8 @@ commercial policy.
 - [x] Add focused authorization, versioning, concurrency, provider-mismatch,
   entitlement, and cancellation tests.
 - [x] Update architecture, billing, and task documentation.
-- [-] Run real Razorpay TEST Enterprise acceptance if protected deployment
-  configuration is unavailable.
+- [-] Run real Razorpay TEST Enterprise acceptance in the protected managed
+  environment; the acceptance remains unexecuted.
 
 ## Validation
 
@@ -89,28 +89,32 @@ history, and Self-hosted separation. The existing provider-bridge and customer
 billing regressions also pass.
 
 Real Razorpay TEST acceptance will be reported separately from code/provider
-fixture evidence and will not be claimed without protected deployment access.
+fixture evidence. Protected deployment access is now available, but no real
+Enterprise TEST payment has been executed or claimed.
 
 ## Next Action
 
-Provision/deploy the protected managed Razorpay TEST environment, then run the
-real Enterprise acceptance: inquiry-linked quote → issue → customer acceptance
-→ custom TEST Plan/Subscription → signed provider activation. Do not use live
-credentials or perform production customer-workspace cutover.
+Run the real Enterprise acceptance in the existing protected Razorpay TEST
+environment: inquiry-linked quote → issue → customer acceptance → custom TEST
+Plan/Subscription → signed provider activation. Do not use live credentials or
+perform production customer-workspace cutover.
 
 ## Blockers
 
-The protected managed Cloud Razorpay TEST environment, webhook, and deployment
-configuration are not available in this worktree. This blocks real Enterprise
-checkout/webhook acceptance but does not block the completed local domain/API
-implementation and automated validation. No provider or database state was
-fabricated.
+The protected managed Cloud Razorpay TEST environment and webhook are
+available, but the real Enterprise checkout/webhook acceptance has not been
+run. This blocks closing the managed acceptance item but does not block the
+completed local domain/API implementation and automated validation. No
+provider or database state was fabricated.
 
 ## Outcome
 
 Code-verified. The Enterprise domain, control-plane routes, private Cloud web
 customer/operator surfaces, focused tests, and architecture documentation are
 complete. Real Razorpay TEST acceptance remains externally blocked.
+
+The implementation remains code-verified while managed Enterprise TEST
+acceptance is pending.
 
 ## References
 
@@ -138,3 +142,7 @@ complete. Real Razorpay TEST acceptance remains externally blocked.
   contract-created audit evidence, and focused isolation/lifecycle tests.
 - 2026-09-08 — Consolidated validation passed. Real Razorpay TEST acceptance is
   blocked only by protected managed deployment/provider configuration.
+- 2026-09-12 — Protected TEST deployment and bridge configuration became
+  available, and public Starter/Team/refund acceptance passed in Tasks 261–262.
+  The Enterprise task remains blocked solely because its inquiry → quote →
+  custom TEST payment → signed activation acceptance has not been executed.

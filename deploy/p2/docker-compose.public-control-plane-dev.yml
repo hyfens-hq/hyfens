@@ -71,6 +71,8 @@ services:
       # Managed Cloud deletion policy is deployment-owned. Keep it unset for
       # the default self-hosted development stack.
       HYFENS_DELETION_GRACE_PERIOD: ${HYFENS_DELETION_GRACE_PERIOD:-}
+      HYFENS_DELETION_BUSINESS_TIMEZONE: ${HYFENS_DELETION_BUSINESS_TIMEZONE:-UTC}
+      HYFENS_DELETION_HOLIDAYS: ${HYFENS_DELETION_HOLIDAYS:-}
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:18081/readyz >/dev/null"]
       interval: 5s

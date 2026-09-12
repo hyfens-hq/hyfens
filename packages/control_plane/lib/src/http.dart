@@ -499,14 +499,16 @@ final class ControlPlaneHttpServer {
         return;
       }
       if (request.method == 'POST' &&
-          _matches(path, const ['v1', 'public', 'cloud', 'register'])) {
+          (_matches(path, const ['v1', 'public', 'cloud', 'register']) ||
+              _matches(path, const ['v1', 'cloud', 'signup']))) {
         _enforceAuthRateLimit(request);
         _rejectPublicQuery(request);
         await _publicCloudRegister(request, requestId);
         return;
       }
       if (request.method == 'POST' &&
-          _matches(path, const ['v1', 'public', 'cloud', 'verify'])) {
+          (_matches(path, const ['v1', 'public', 'cloud', 'verify']) ||
+              _matches(path, const ['v1', 'cloud', 'verify']))) {
         _enforceAuthRateLimit(request);
         _rejectPublicQuery(request);
         await _publicCloudVerify(request, requestId);
@@ -563,6 +565,19 @@ final class ControlPlaneHttpServer {
         _enforceAuthRateLimit(request);
         _rejectPublicQuery(request);
         await _publicAccountDeletionVerify(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'public',
+            'cloud',
+            'account-deletion',
+            'cancel',
+          ])) {
+        _enforceAuthRateLimit(request);
+        _rejectPublicQuery(request);
+        await _publicAccountDeletionCancel(request, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -3074,7 +3089,7 @@ final class ControlPlaneHttpServer {
           'amount':
               '${checkout['currency']} ${((checkout['amountMinor'] as int) / 100).toStringAsFixed(2)}',
           'currency': checkout['currency'],
-          'message': 'Your secure Hyfens checkout is ready to continue.',
+          'message': 'Your secure checkout is ready to continue.',
           'action_url': 'https://app.hyfens.com/dashboard/billing',
           'action_label': 'Open billing',
         },
@@ -3817,7 +3832,7 @@ final class ControlPlaneHttpServer {
             'billing.refund.initiated' => 'The approved refund has been sent to the payment provider for processing.',
             'billing.refund.completed' =>
               'The approved refund was processed by the payment provider.',
-            _ => 'The payment provider could not complete the approved refund. Hyfens will retry or reconcile it.',
+            _ => 'The payment provider could not complete the approved refund. We will retry or reconcile it.',
           },
         },
       );
@@ -4874,13 +4889,18 @@ final class ControlPlaneHttpServer {
     );
     await _json(request.response, 202, <String, Object?>{
       ...result.toJson(),
+      'email': _string(body, 'email'),
       'request_id': requestId,
     });
   }
 
   Future<void> _publicCloudVerify(HttpRequest request, String requestId) async {
     final body = await _publicJsonBody(request);
-    const allowed = <String>{'token', 'organization_name'};
+    // The current Cloud web verification form includes the email as a
+    // display/context field. The token remains the sole authority for the
+    // account being verified; accepting the optional email preserves that
+    // public contract without trusting client-supplied identity data.
+    const allowed = <String>{'token', 'email', 'organization_name'};
     if (!body.containsKey('token') ||
         body.keys.any((key) => !allowed.contains(key))) {
       throw const ControlPlaneException(
@@ -4968,6 +4988,7 @@ final class ControlPlaneHttpServer {
     HttpRequest request,
     String requestId,
   ) async {
+    _requireCloudDeletion();
     final body = await _publicJsonBody(request);
     if (!setEquals(body.keys.toSet(), const <String>{'email'})) {
       throw const ControlPlaneException(
@@ -4989,6 +5010,7 @@ final class ControlPlaneHttpServer {
     HttpRequest request,
     String requestId,
   ) async {
+    _requireCloudDeletion();
     final body = await _publicJsonBody(request);
     if (!setEquals(body.keys.toSet(), const <String>{'token'})) {
       throw const ControlPlaneException(
@@ -5007,7 +5029,82 @@ final class ControlPlaneHttpServer {
       requestId: requestId,
     );
     await _json(request.response, 202, <String, Object?>{
-      'status': result['status'],
+      ...deletionStatusForCustomer(result),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _publicAccountDeletionCancel(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    _requireCloudDeletion();
+    final body = await _publicJsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'token'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Deletion cancellation fields are unsupported',
+        statusCode: 422,
+      );
+    }
+    final token = _string(body, 'token');
+    final auth = _humanAuth();
+    final record = await auth.inspectDeletionCancellationToken(token: token);
+    final userId = record['userId'];
+    final deletionRequestId = record['deletionRequestId'];
+    final deletionRequestGeneration = record['deletionRequestGeneration'];
+    final scope = record['scope'];
+    if (userId is! String ||
+        deletionRequestId is! String ||
+        (scope != 'account' && scope != 'organization')) {
+      throw const ControlPlaneException(
+        'DELETION_CANCELLATION_TOKEN_INVALID',
+        'The deletion cancellation link is invalid or expired',
+        statusCode: 400,
+      );
+    }
+    final deletion = _deletion();
+    late final Map<String, Object?> result;
+    if (scope == 'account') {
+      result = await deletion.cancelAccountDeletion(
+        userId: userId,
+        actorId: 'email:deletion-cancellation',
+        requestId: requestId,
+        expectedDeletionRequestId: deletionRequestId,
+        expectedDeletionRequestGeneration: deletionRequestGeneration is int
+            ? deletionRequestGeneration
+            : null,
+      );
+    } else {
+      final organizationId = record['organizationId'];
+      if (organizationId is! String) {
+        throw const ControlPlaneException(
+          'DELETION_CANCELLATION_TOKEN_INVALID',
+          'The deletion cancellation link is invalid or expired',
+          statusCode: 400,
+        );
+      }
+      result = await deletion.cancelOrganizationDeletion(
+        userId: userId,
+        organizationId: organizationId,
+        actorId: 'email:deletion-cancellation',
+        requestId: requestId,
+        expectedDeletionRequestId: deletionRequestId,
+        expectedDeletionRequestGeneration: deletionRequestGeneration is int
+            ? deletionRequestGeneration
+            : null,
+      );
+    }
+    if (result['status'] != 'cancelled') {
+      throw const ControlPlaneException(
+        'DELETION_NOT_CANCELLABLE',
+        'This deletion request can no longer be cancelled',
+        statusCode: 409,
+      );
+    }
+    await auth.consumeDeletionCancellationToken(token: token);
+    await _json(request.response, 200, <String, Object?>{
+      ...deletionStatusForCustomer(result),
       'request_id': requestId,
     });
   }
@@ -5020,7 +5117,9 @@ final class ControlPlaneHttpServer {
       accessToken: _bearer(request),
     );
     await _json(request.response, 200, <String, Object?>{
-      ...await _deletion().accountStatus(userId: user.id),
+      ...deletionStatusForCustomer(
+        await _deletion().accountStatus(userId: user.id),
+      ),
       'request_id': requestId,
     });
   }
@@ -5047,7 +5146,7 @@ final class ControlPlaneHttpServer {
       requestId: requestId,
     );
     await _json(request.response, 202, <String, Object?>{
-      ...result,
+      ...deletionStatusForCustomer(result),
       'request_id': requestId,
     });
   }
@@ -5074,7 +5173,7 @@ final class ControlPlaneHttpServer {
       requestId: requestId,
     );
     await _json(request.response, 200, <String, Object?>{
-      ...result,
+      ...deletionStatusForCustomer(result),
       'request_id': requestId,
     });
   }
@@ -5088,9 +5187,11 @@ final class ControlPlaneHttpServer {
       accessToken: _bearer(request),
     );
     await _json(request.response, 200, <String, Object?>{
-      ...await _deletion().organizationStatus(
-        userId: user.id,
-        organizationId: path[2],
+      ...deletionStatusForCustomer(
+        await _deletion().organizationStatus(
+          userId: user.id,
+          organizationId: path[2],
+        ),
       ),
       'request_id': requestId,
     });
@@ -5119,7 +5220,7 @@ final class ControlPlaneHttpServer {
       requestId: requestId,
     );
     await _json(request.response, 202, <String, Object?>{
-      ...result,
+      ...deletionStatusForCustomer(result),
       'request_id': requestId,
     });
   }
@@ -5176,7 +5277,7 @@ final class ControlPlaneHttpServer {
       requestId: requestId,
     );
     await _json(request.response, 200, <String, Object?>{
-      ...result,
+      ...deletionStatusForCustomer(result),
       'request_id': requestId,
     });
   }
@@ -5559,6 +5660,16 @@ final class ControlPlaneHttpServer {
       );
     }
     return auth;
+  }
+
+  void _requireCloudDeletion() {
+    if (service.deploymentModel != DeploymentModel.cloud) {
+      throw const ControlPlaneException(
+        'CLOUD_DELETION_UNAVAILABLE',
+        'Cloud deletion is not available on a self-hosted deployment',
+        statusCode: 404,
+      );
+    }
   }
 
   AccountDeletionService _deletion() {

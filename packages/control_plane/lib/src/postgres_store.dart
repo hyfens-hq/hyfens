@@ -159,6 +159,7 @@ final class PostgresControlPlaneStore
         ArtifactDeletion,
         JsonRecordDeletion,
         OneTimeTokenConsumption,
+        DeletionRequestStateStore,
         BoundedObservationDeletion,
         BillingRefundTransactionStore,
         NotificationDeliveryClaimStore {
@@ -339,6 +340,41 @@ final class PostgresControlPlaneStore
     await session.execute('SELECT pg_advisory_xact_lock(7812452)');
     return action(_PostgresBillingRefundTransaction(session, this));
   });
+
+  @override
+  Future<bool> compareAndSetDeletionRequestStatus({
+    required String collection,
+    required String id,
+    required String expectedStatus,
+    required Map<String, Object?> value,
+    String? expectedProcessingLeaseId,
+    bool expectProcessingLeaseAbsent = false,
+  }) async {
+    final result = await _pool.runTx((session) async {
+      return session.execute(
+        Sql.named(
+          'UPDATE control_plane_records SET organization_id = @organization:text, '
+          'body = @body:jsonb, updated_at = now() '
+          'WHERE collection = @collection:text AND record_id = @id:text '
+          'AND body->>\'status\' = @expected:text '
+          'AND (@expected_claim:text IS NULL OR '
+          'body->>\'processingLeaseId\' = @expected_claim:text) '
+          'AND (@claim_absent:boolean = false OR '
+          'body->>\'processingLeaseId\' IS NULL)',
+        ),
+        parameters: <String, Object?>{
+          'collection': collection,
+          'id': id,
+          'expected': expectedStatus,
+          'expected_claim': expectedProcessingLeaseId,
+          'claim_absent': expectProcessingLeaseAbsent,
+          'organization': value['organizationId'],
+          'body': value,
+        },
+      );
+    });
+    return result.affectedRows == 1;
+  }
 
   @override
   Future<Map<String, Object?>?> claimNotificationDelivery({

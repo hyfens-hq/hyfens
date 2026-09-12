@@ -331,3 +331,15 @@ and recipient digest without storing unnecessary message or credential data.
 The narrow interface that renders a Hyfens Notification Event and submits it
 to a selected transport such as Keplars. Provider responses are normalized and
 must not become the source of truth for billing, entitlement, or account state.
+
+**Deletion Grace Period**:
+A verified account or organization deletion request remains recoverable and
+restricted during the configured working-day window. Verification schedules
+deletion; it does not erase data. Cancellation is available until the worker
+atomically claims irreversible processing.
+
+**Business Deletion Schedule**:
+The persisted working-day schedule derived from the configured business
+timezone, Monday-Friday rule, and explicit holiday list. It contains the day-5
+and day-7 reminder boundaries and the day-8 `processingAt` authority shared by
+the worker, customer UI, and deletion notifications.
