@@ -652,3 +652,34 @@ controls during restricted or unknown status, and leaves billing status and
 reviewed refund access separate. Typecheck, lint, production build, and diff
 checks pass. It remains pending review/deployment and does not change
 `app.hyfens.com`.
+
+## Coordinator blocker reconciliation — 2026-09-13
+
+The root-authorized managed-host audit was completed without changing
+`app.hyfens.com` or protected secret ownership. The live public and API
+composition remains healthy, the deletion and notification timers are active,
+and the six operational roles are assigned to `admin@hyfens.com`.
+
+The disposable recovery rehearsal did not reach its backup/restore assertions:
+the host could pull the pinned official MinIO Client image from Quay, but the
+current Compose files hard-code `minio/mc:latest` in `object-bootstrap` while
+the existing object-backup script already accepts `HYFENS_MC_IMAGE`. This is a
+reproducible deployment/configuration defect, not evidence of data loss; the
+rehearsal was isolated and live services were left untouched. A small Compose
+image-override correction is being prepared for review.
+
+The same audit found no application-owned scheduled database backup, off-host
+encrypted rotation, object/configuration backup, or restore-time deletion
+tombstone replay proof on the managed host. The root-only disposable database
+dumps and isolated PostgreSQL restore remain classified as
+`DATABASE_RESTORE_REHEARSAL_PASS`, not managed backup readiness. Artifact
+cleanup/reconciliation is not invoked by the deployed deletion timer, and the
+additional data-bearing `hyfens-backend.service` remains outside the proven
+backup scope.
+
+The tax/retention research is source-backed decision input only. Seller/MoR,
+GST/VAT jurisdiction, invoice/credit-note ownership, geolocation evidence,
+financial/security/Enterprise retention durations, and backup rotation still
+require maintainer/accounting/legal decisions. No statutory duration or tax
+calculation was added. Task 259 remains `NOT_READY`; Task 256B remains
+`DO_NOT_CUT_OVER`.

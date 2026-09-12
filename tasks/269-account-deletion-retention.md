@@ -448,3 +448,31 @@ existing account/organization deletion projections, hides those controls while
 deletion is restricted, and fails closed while status is unavailable. It keeps
 authoritative billing status and the separate reviewed-refund path visible.
 The PR is validated but not yet deployed; no deletion-safety bypass was found.
+
+## Coordinator blocker reconciliation — 2026-09-13
+
+The managed deletion timers and root-protected environment are active. The
+working-day grace, cancellation CAS, reminder idempotency, organization
+tombstone, billing/refund separation, and disposable mailbox acceptance remain
+as recorded above.
+
+Two concrete implementation gaps remain under bounded review. Personal-account
+deletion currently resolves a verified identity before confirming customer
+membership, and final credential collection only recognizes `credential.issue`
+although the service emits additional credential issuance audit actions. The
+final account path also revokes credential rows rather than erasing their
+token-hash keyed records where the existing deletion store can safely do so.
+These are being corrected with focused tests; no ownership-transfer API or new
+workflow engine is being introduced.
+
+The host has not yet proven a scheduled/off-host encrypted backup, an object
+store purge/reconciliation run, or replay of deletion tombstones after an old
+backup restore. The isolated database restore remains
+`DATABASE_RESTORE_REHEARSAL_PASS` only. The additional backend service's data
+scope is not included in the current deletion/backup acceptance boundary.
+
+The previously identified sole-owner transfer flow and atomic concurrent owner
+coordination remain product/governance gaps rather than silently passing
+acceptance. Task 269 remains `CODE_VERIFIED` with managed acceptance and
+retention gates open; no claim of statutory compliance or backup erasure is
+made.
