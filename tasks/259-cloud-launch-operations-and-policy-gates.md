@@ -640,3 +640,15 @@ The managed deletion revalidation and launch-matrix delta are published on
 commit `671ebbd` and pull request `#10`. The launch verdict remains
 `NOT_READY`; no LIVE payment activation or `app.hyfens.com` cutover was
 performed.
+
+## Pending deletion-aware billing UI correction — 2026-09-13
+
+Cloud PR `#11` (`fix/deletion-pending-billing-ui`, commit `d91ae85`) closes a
+presentation mismatch found during managed acceptance: the backend already
+blocked billing mutations during deletion, but the private billing page could
+render those actions until its status was known. The correction uses the
+existing deletion-status endpoints, hides plan/renewal/Enterprise mutation
+controls during restricted or unknown status, and leaves billing status and
+reviewed refund access separate. Typecheck, lint, production build, and diff
+checks pass. It remains pending review/deployment and does not change
+`app.hyfens.com`.

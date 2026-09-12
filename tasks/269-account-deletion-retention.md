@@ -437,3 +437,14 @@ The revalidation evidence in this append-only update is published on commit
 `671ebbd` and pull request `#10`. The task remains blocked at
 `CODE_VERIFIED` pending the explicitly listed managed backup/object-store and
 policy gates.
+
+## Pending billing-surface correction — 2026-09-13
+
+The managed review found that the private billing page could briefly show
+upgrade, downgrade, cancellation, and Enterprise mutation controls while the
+server-side deletion boundary correctly rejected those operations. Cloud PR
+`#11` (`fix/deletion-pending-billing-ui`, commit `d91ae85`) now reads the
+existing account/organization deletion projections, hides those controls while
+deletion is restricted, and fails closed while status is unavailable. It keeps
+authoritative billing status and the separate reviewed-refund path visible.
+The PR is validated but not yet deployed; no deletion-safety bypass was found.
