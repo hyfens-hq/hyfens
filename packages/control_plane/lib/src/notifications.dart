@@ -400,7 +400,10 @@ final class NotificationCatalog {
       template: 'billing_summary',
       subject: 'Your renewal is coming up',
       preheader: 'Review the plan and date for your next renewal.',
-      priority: 'schedule',
+      // Hyfens emits this event when its reminder window opens. Keplars'
+      // /schedule endpoint requires a different envelope and a future
+      // timestamp, so the normal durable dispatcher must use /async here.
+      priority: 'async',
       userCanDisable: false,
       deduplication: 'renewal_window',
       sender: HyfensSenderPolicy.support,
@@ -906,6 +909,9 @@ final class KeplarsNotificationProvider implements NotificationProvider {
             'to': <String>[message.to],
             'subject': message.subject,
             'body': message.html,
+            // The current API reference exposes is_html for raw HTML bodies;
+            // set it explicitly instead of relying on content detection.
+            'is_html': true,
             // The notification definition owns the sender identity. The
             // environment value is validated at startup but cannot override
             // a security or billing message into the wrong mailbox.
@@ -913,8 +919,13 @@ final class KeplarsNotificationProvider implements NotificationProvider {
             'from_name': message.sender.displayName.isEmpty
                 ? fromName
                 : message.sender.displayName,
-            if (message.replyTo ?? message.sender.replyTo case final replyTo?)
-              'reply_to': replyTo,
+            // Keplars' current raw-send contract uses a boolean to enable the
+            // workspace Reply-To setting. The configured workspace address is
+            // documented separately and remains support@hyfens.com for the
+            // support sender policy; do not send an unsupported address value
+            // in this field.
+            if ((message.replyTo ?? message.sender.replyTo) != null)
+              'reply_to': true,
           }),
         ),
       );
@@ -930,34 +941,48 @@ final class KeplarsNotificationProvider implements NotificationProvider {
               : 'provider_rejected',
         );
       }
-      String? messageId;
+      Map? decodedResponse;
       try {
         final decoded = jsonDecode(responseText);
-        if (decoded is Map) {
-          // Keplars documents both a nested `data.id` send response and an
-          // `email_id` callback field. Accept only provider-declared response
-          // identifiers. Recipient/subject/time matching is intentionally not
-          // a fallback because it cannot safely reconcile billing or security
-          // notifications.
-          final containers = <Object?>[decoded, decoded['data']];
-          for (final container in containers) {
-            if (container is! Map) continue;
-            for (final key in const <String>['email_id', 'id']) {
-              final candidate = container[key];
-              if (candidate is String && candidate.trim().isNotEmpty) {
-                messageId = candidate.trim();
-                break;
-              }
-              if (candidate is num) {
-                messageId = '$candidate';
-                break;
-              }
-            }
-            if (messageId != null) break;
-          }
-        }
+        if (decoded is Map) decodedResponse = decoded;
       } on Object {
         // A successful provider response without JSON is still accepted.
+      }
+
+      if (decodedResponse?['success'] == false) {
+        throw NotificationProviderException(
+          'Keplars rejected notification (${response.statusCode})',
+          statusCode: response.statusCode,
+          retryable: response.statusCode == 429 || response.statusCode >= 500,
+          failureClass: response.statusCode == 429
+              ? 'rate_limited'
+              : 'provider_rejected',
+        );
+      }
+
+      String? messageId;
+      if (decodedResponse != null) {
+        // Keplars documents both a nested `data.id` send response and an
+        // `email_id` callback field. Accept only provider-declared response
+        // identifiers. Recipient/subject/time matching is intentionally not
+        // a fallback because it cannot safely reconcile billing or security
+        // notifications.
+        final containers = <Object?>[decodedResponse, decodedResponse['data']];
+        for (final container in containers) {
+          if (container is! Map) continue;
+          for (final key in const <String>['email_id', 'id']) {
+            final candidate = container[key];
+            if (candidate is String && candidate.trim().isNotEmpty) {
+              messageId = candidate.trim();
+              break;
+            }
+            if (candidate is num) {
+              messageId = '$candidate';
+              break;
+            }
+          }
+          if (messageId != null) break;
+        }
       }
       return NotificationProviderResult(
         state: NotificationDeliveryState.accepted,
@@ -2247,8 +2272,15 @@ final class NotificationService implements HumanAuthNotificationSink {
       'email.clicked' => NotificationDeliveryState.delivered,
       'bounced' || 'email.bounced' => NotificationDeliveryState.bounced,
       'complained' ||
-      'email.complained' => NotificationDeliveryState.complained,
-      'failed' || 'email.failed' => NotificationDeliveryState.hardFailed,
+      'complaint' ||
+      'spam' ||
+      'email.complained' ||
+      'email.complaint' ||
+      'email.spam' => NotificationDeliveryState.complained,
+      'failed' ||
+      'rejected' ||
+      'email.failed' ||
+      'email.rejected' => NotificationDeliveryState.hardFailed,
       'cancelled' || 'email.cancelled' => NotificationDeliveryState.cancelled,
       _ => NotificationDeliveryState.accepted,
     };
