@@ -335,3 +335,18 @@ The older list above is retained as deployment history. Current status is:
 Task 259 therefore remains `NOT_READY`, and Task 256B remains
 `DO_NOT_CUT_OVER`. The Hetzner database rehearsal reduces uncertainty but does
 not close the recovery or policy gates.
+
+## OpenShip backup-destination audit — 2026-09-13
+
+The authenticated OpenShip Backups page for the managed Hetzner server was
+checked during the current gate reconciliation. It reports `No backup
+destinations yet`; no S3-compatible, SFTP, existing-server, or local-disk
+destination is configured. The server timer inventory contains the Hyfens
+deletion, notification, and artifact-retention timers and the OS
+`dpkg-db-backup.timer`, but no application-owned Hyfens backup timer.
+
+The existing root-only PostgreSQL restore rehearsal therefore remains
+`DATABASE_RESTORE_REHEARSAL_PASS` only. It does not establish scheduled,
+off-host encrypted database/object/configuration backup, an approved rotation
+interval/RPO/RTO, or restore-time deletion-tombstone replay. The backup gate
+and Task 259 `NOT_READY` verdict remain unchanged.

@@ -781,3 +781,19 @@ Task 259 remains `NOT_READY`: scheduled/off-host encrypted backup and
 restore-time deletion-tombstone replay, approved backup/evidence retention,
 tax/catalog approval, ownership resolution, and any remaining Enterprise
 acceptance are still independent gates.
+
+## OpenShip backup-destination audit — 2026-09-13
+
+The authenticated OpenShip Backups surface was inspected for the managed
+Hetzner server. It reports `No backup destinations yet` and offers only
+unconfigured S3-compatible, SFTP, existing-server, or local-disk targets.
+The host's timer inventory shows the Hyfens deletion, notification, and
+artifact-retention timers plus the OS `dpkg-db-backup.timer`; it does not show
+an application-owned Hyfens database/object/configuration backup timer.
+
+This is direct operational evidence that the managed recovery gate is still
+open. The earlier root-only database dump/restore rehearsal remains
+`DATABASE_RESTORE_REHEARSAL_PASS` evidence for an isolated test, not scheduled
+or off-host encrypted backup readiness. No backup destination, retention
+interval, RPO/RTO, or restore-time deletion-tombstone replay was invented or
+configured by this audit.

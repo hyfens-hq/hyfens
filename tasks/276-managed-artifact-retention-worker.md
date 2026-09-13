@@ -108,3 +108,11 @@ changed scope.
   retention timer is enabled and active. The managed smoke returned zero with
   a Cloud/deletion-supported report and no eligible rows. No physical purge or
   backup/object-store acceptance is claimed.
+- 2026-09-13: Managed acceptance was subsequently completed for the trigger:
+  the installed timer is enabled and active, the root worker exits `0`, and
+  the worker reports `managed=true`, `deletion_supported=true`,
+  `considered=0`, `purged=0`, and `failed=0`. This supersedes the earlier
+  “managed TEST worker smoke — not run” note; no eligible artifact row was
+  available, so physical exclusive purge and shared-object retention remain
+  unproven. The OpenShip backup surface was also inspected and has no backup
+  destination configured; this task does not claim managed backup readiness.
