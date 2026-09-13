@@ -47,6 +47,9 @@ ENVIRONMENT_CREATE_PATH = re.compile(
 ENVIRONMENT_PROMOTE_PATH = re.compile(
     r"^/v1/organizations/[^/]+/environments/[^/]+/release-promotions$"
 )
+PLATFORM_COMMERCIAL_LEGAL_APPROVAL_PATH = re.compile(
+    r"^/v1/platform/commercial/catalog/[^/]+/legal-approve$"
+)
 PLATFORM_VIEW_PATH = re.compile(r"^/platform/organizations/[^/]+$")
 PLATFORM_HOST_ORGANIZATION_PATH = re.compile(r"^/organizations/[^/]+$")
 PLATFORM_HOSTNAMES = {"platform.hyfens.com"}
@@ -106,6 +109,7 @@ _PROXY_ROUTES = {
     ("GET", "/v1/platform/audit"): "platform-audit",
     ("GET", "/v1/platform/users"): "platform-users",
     ("GET", "/v1/platform/entitlements"): "platform-entitlements",
+    ("GET", "/v1/platform/commercial/catalog"): "platform-commercial-catalog",
 }
 
 _AUTHORIZATION_QUERY_KEYS = {
@@ -234,6 +238,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return "environment-create"
         if self.command == "POST" and ENVIRONMENT_PROMOTE_PATH.fullmatch(parsed.path):
             return "environment-promote"
+        if self.command == "POST" and PLATFORM_COMMERCIAL_LEGAL_APPROVAL_PATH.fullmatch(
+            parsed.path
+        ):
+            return "platform-commercial-legal-approval"
         return None
 
     def _proxy_request(self) -> None:
@@ -255,6 +263,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 "platform-audit",
                 "platform-users",
                 "platform-entitlements",
+                "platform-commercial-catalog",
+                "platform-commercial-legal-approval",
             }
             and self._platform_query_is_safe(route, parsed.query)
         ):
@@ -277,6 +287,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "organization-create",
             "auth-authorize-post",
             "auth-device-approve",
+            "platform-commercial-catalog",
+            "platform-commercial-legal-approval",
         }:
             if not authorization or not authorization.startswith("Bearer "):
                 self._json_error(401, "Bearer credential is required")
@@ -297,6 +309,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "platform-audit",
             "platform-users",
             "platform-entitlements",
+            "platform-commercial-catalog",
+            "platform-commercial-legal-approval",
         }:
             target += f"?{parsed.query}"
         headers = {"Accept": "application/json"}
@@ -318,6 +332,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "organization-create",
             "auth-authorize-post",
             "auth-device-approve",
+            "platform-commercial-catalog",
+            "platform-commercial-legal-approval",
         }:
             headers["Authorization"] = authorization
         if body is not None:
@@ -394,6 +410,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "platform-audit": {"profile", "organization_id"},
             "platform-users": {"profile"},
             "platform-entitlements": {"profile"},
+            "platform-commercial-catalog": {"profile", "include_internal"},
+            "platform-commercial-legal-approval": {"profile"},
         }.get(route, set())
         if not set(values).issubset(allowed):
             return False

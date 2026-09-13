@@ -2970,6 +2970,83 @@ body.shortcuts-dialog-open .shortcuts-dialog-panel {
   line-height: 1.5;
 }
 
+.commercial-catalog-list {
+  display: grid;
+  gap: 16px;
+}
+
+.commercial-catalog-card {
+  display: grid;
+  gap: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 18px;
+  background: var(--surface-soft);
+}
+
+.commercial-catalog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.commercial-catalog-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.96rem;
+  font-weight: 600;
+}
+
+.commercial-catalog-heading p {
+  max-width: 680px;
+  margin: 7px 0 0;
+}
+
+.commercial-catalog-status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.commercial-catalog-details {
+  gap: 14px 24px;
+}
+
+.commercial-reference-link {
+  display: inline-block;
+  color: var(--accent-text);
+  font-size: 0.78rem;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-line);
+  text-underline-offset: 3px;
+}
+
+.commercial-reference-link:hover {
+  color: var(--text);
+}
+
+.commercial-catalog-preview {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.commercial-catalog-confirmation,
+.commercial-approval-warning {
+  margin-top: 0;
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+}
+
+.commercial-approval-warning {
+  color: var(--warning);
+}
+
 .one-time-secret {
   display: grid;
   gap: 8px;
@@ -3354,6 +3431,14 @@ body.shortcuts-dialog-open .shortcuts-dialog-panel {
 
   .panel-heading {
     flex-direction: column;
+  }
+
+  .commercial-catalog-heading {
+    flex-direction: column;
+  }
+
+  .commercial-catalog-status {
+    justify-content: flex-start;
   }
 
   .panel-heading > .caption {

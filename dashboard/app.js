@@ -439,6 +439,8 @@
     platformUsersError: null,
     platformEntitlements: null,
     platformEntitlementsError: null,
+    platformCommercial: null,
+    platformCommercialError: null,
     platformDataLoading: false,
     platformDataGeneration: 0,
     organizationMembers: null,
@@ -751,6 +753,53 @@
       );
     }
 
+    commercialBaseUrl() {
+      const url = new URL(this.baseUrl);
+      if (url.pathname === '/p2' || url.pathname === '/p2/') {
+        url.pathname = '/';
+        url.search = '';
+        url.hash = '';
+      }
+      return url.toString();
+    }
+
+    async platformCommercialCatalog(profileName, { signal } = {}) {
+      const parameters = new URLSearchParams();
+      if (profileName) parameters.set('profile', profileName);
+      parameters.set('include_internal', 'true');
+      const suffix = `?${parameters.toString()}`;
+      return unwrapPayload(
+        await this.request(`v1/platform/commercial/catalog${suffix}`, {
+          requiresAuth: true,
+          signal,
+          baseUrl: this.commercialBaseUrl(),
+        }),
+      );
+    }
+
+    async approvePlatformCommercialCatalog(
+      profileName,
+      catalogId,
+      body,
+      idempotencyKey,
+    ) {
+      const query = profileName
+        ? `?profile=${encodeURIComponent(profileName)}`
+        : '';
+      return unwrapPayload(
+        await this.request(
+          `v1/platform/commercial/catalog/${encodeURIComponent(catalogId)}/legal-approve${query}`,
+          {
+            method: 'POST',
+            body,
+            requiresAuth: true,
+            headers: { 'Idempotency-Key': idempotencyKey },
+            baseUrl: this.commercialBaseUrl(),
+          },
+        ),
+      );
+    }
+
     async createApplication(organizationId, body, idempotencyKey) {
       return unwrapPayload(
         await this.request(
@@ -857,9 +906,10 @@
       retry = true,
       signal,
       headers: additionalHeaders = {},
+      baseUrl = this.baseUrl,
     } = {}) {
       if (requiresAuth && !this.accessToken) throw new SessionExpiredError();
-      const url = new URL(path.replace(/^\/+/, ''), this.baseUrl);
+      const url = new URL(path.replace(/^\/+/, ''), baseUrl);
       const headers = { Accept: 'application/json', ...additionalHeaders };
       if (body !== undefined) headers['Content-Type'] = 'application/json';
       if (requiresAuth) headers.Authorization = `Bearer ${this.accessToken}`;
@@ -897,6 +947,7 @@
           retry: false,
           signal,
           headers: additionalHeaders,
+          baseUrl,
         });
       }
       if (!response.ok) {
@@ -1356,7 +1407,11 @@
   function metadataItem(label, value, { code = false } = {}) {
     const wrapper = element('div');
     wrapper.append(element('span', 'metadata-label', label));
-    const node = code ? codeValue(value, 'metadata-value') : element('span', 'metadata-value', stringValue(value) ?? 'Not set');
+    const node = code
+      ? codeValue(value, 'metadata-value')
+      : value instanceof Node
+        ? value
+        : element('span', 'metadata-value', stringValue(value) ?? 'Not set');
     wrapper.append(node);
     return wrapper;
   }
@@ -2733,8 +2788,212 @@
           primaryCell(dateValue(pick(subscription, 'currentStartAt')), dateValue(pick(subscription, 'currentEndAt'))),
         ]),
       ));
-    stack.append(plansPanel.section, subscriptionsPanel.section);
+    stack.append(
+      plansPanel.section,
+      subscriptionsPanel.section,
+      renderPlatformCommercialGovernancePanel(),
+    );
     return stack;
+  }
+
+  function commercialReferenceLink(label, value) {
+    const url = stringValue(value);
+    if (!url) return element('span', 'metadata-value muted', 'Not set');
+    const link = element('a', 'metadata-value commercial-reference-link', label);
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    return link;
+  }
+
+  function legalInputValue(value) {
+    const text = stringValue(value) ?? '';
+    return ['pending', 'placeholder', 'todo'].includes(text.trim().toLowerCase())
+      ? ''
+      : text;
+  }
+
+  function renderPlatformCommercialGovernancePanel() {
+    const projection = state.platformCommercial;
+    const panel = makePanel(
+      'Public pricing governance',
+      'Review the exact Cloud commercial catalog before public pricing is exposed. Approval is explicit, concurrency-protected, and recorded by the existing Cloud audit trail.',
+      projection ? `${arrayValue(projection.catalogs).length} catalog revisions` : 'Private Cloud review',
+    );
+    if (!hasPlatformCapability('platform:commercial:read')) {
+      panel.body.append(stateBlock(
+        'unavailable',
+        'Commercial review is not available to this profile',
+        'This profile can inspect control-plane entitlements but cannot read the private commercial catalog. A platform administrator or authorized commercial reviewer must grant the appropriate scope.',
+      ));
+      return panel.section;
+    }
+    if (!projection) {
+      const error = state.platformCommercialError;
+      panel.body.append(stateBlock(
+        'unavailable',
+        'Commercial catalog unavailable',
+        error?.status === 403
+          ? 'The current platform profile is not authorized to read private commercial review records.'
+          : 'The private Cloud commercial API did not return a catalog. Public pricing remains safely fail-closed until the review projection is available.',
+      ));
+      return panel.section;
+    }
+    const catalogs = arrayValue(projection.catalogs);
+    if (catalogs.length === 0) {
+      panel.body.append(stateBlock(
+        'empty',
+        'No commercial catalog revisions',
+        'There is no Cloud catalog revision available for legal review.',
+      ));
+      return panel.section;
+    }
+
+    const canApprove = hasPlatformCapability('platform:plans:legal_review');
+    const list = element('div', 'commercial-catalog-list');
+    for (const catalog of catalogs) {
+      const legal = objectValue(pick(catalog, 'legal_reference')) ?? {};
+      const preview = objectValue(pick(catalog, 'public_preview')) ?? {};
+      const card = element('article', 'commercial-catalog-card');
+      const heading = element('div', 'commercial-catalog-heading');
+      const title = element('div');
+      title.append(
+        element('h3', '', `Revision ${stringValue(pick(catalog, 'revision')) ?? 'not set'}`),
+        element('p', 'form-hint', 'The public projection uses this catalog only after its effective revision and legal reference are valid.'),
+      );
+      const status = element('div', 'commercial-catalog-status');
+      status.append(
+        statusTag(pick(catalog, 'status')),
+        statusTag(pick(legal, 'review_status'), 'Legal review pending'),
+      );
+      heading.append(title, status);
+      card.append(heading);
+
+      const details = element('div', 'field-grid commercial-catalog-details');
+      details.append(
+        metadataItem('Effective at', formatDateText(pick(catalog, 'effective_at'))),
+        metadataItem('Terms', commercialReferenceLink('Open terms', pick(legal, 'terms_url'))),
+        metadataItem('Privacy', commercialReferenceLink('Open privacy', pick(legal, 'privacy_url'))),
+        metadataItem('Terms version', pick(legal, 'terms_version')),
+        metadataItem('Privacy version', pick(legal, 'privacy_version')),
+        metadataItem('Review recorded', formatDateText(pick(legal, 'reviewed_at'))),
+      );
+      card.append(details);
+
+      const previewPlans = arrayValue(pick(preview, 'plans'));
+      if (previewPlans.length > 0) {
+        const previewLine = element('p', 'commercial-catalog-preview');
+        previewLine.append(
+          element('span', 'metadata-label', 'Public preview'),
+          previewPlans
+            .map((plan) => stringValue(pick(plan, 'name')))
+            .filter(Boolean)
+            .join(' · '),
+        );
+        card.append(previewLine);
+      }
+
+      const isApproved = String(pick(legal, 'review_status') ?? '').toLowerCase() === 'approved';
+      if (isApproved) {
+        card.append(element(
+          'p',
+          'settings-note commercial-catalog-confirmation',
+          'Legal approval is recorded for this catalog revision. The public API will still apply its own effective-time and catalog consistency checks.',
+        ));
+      } else if (!canApprove) {
+        card.append(element(
+          'p',
+          'settings-note',
+          'This profile can inspect the pending review, but cannot record legal approval. Use an authorized legal-review profile after the terms and privacy references have been confirmed.',
+        ));
+      } else {
+        const form = element('form', 'action-form commercial-approval-form');
+        form.dataset.platformAction = 'commercial-catalog-approve';
+        const catalogId = element('input');
+        catalogId.type = 'hidden';
+        catalogId.name = 'catalog_id';
+        catalogId.value = stringValue(pick(catalog, 'id')) ?? '';
+        const expectedEtag = element('input');
+        expectedEtag.type = 'hidden';
+        expectedEtag.name = 'expected_etag';
+        expectedEtag.value = stringValue(pick(catalog, 'edit_etag')) ?? '';
+        const termsVersion = element('input');
+        termsVersion.type = 'text';
+        termsVersion.name = 'terms_version';
+        termsVersion.value = legalInputValue(pick(legal, 'terms_version'));
+        termsVersion.required = true;
+        termsVersion.autocomplete = 'off';
+        const termsUrl = element('input');
+        termsUrl.type = 'url';
+        termsUrl.name = 'terms_url';
+        termsUrl.value = stringValue(pick(legal, 'terms_url')) ?? '';
+        termsUrl.required = true;
+        termsUrl.inputMode = 'url';
+        const termsDigest = element('input');
+        termsDigest.type = 'text';
+        termsDigest.name = 'terms_digest';
+        termsDigest.value = legalInputValue(pick(legal, 'terms_digest'));
+        termsDigest.required = true;
+        termsDigest.autocomplete = 'off';
+        const privacyVersion = element('input');
+        privacyVersion.type = 'text';
+        privacyVersion.name = 'privacy_version';
+        privacyVersion.value = legalInputValue(pick(legal, 'privacy_version'));
+        privacyVersion.required = true;
+        privacyVersion.autocomplete = 'off';
+        const privacyUrl = element('input');
+        privacyUrl.type = 'url';
+        privacyUrl.name = 'privacy_url';
+        privacyUrl.value = stringValue(pick(legal, 'privacy_url')) ?? '';
+        privacyUrl.required = true;
+        privacyUrl.inputMode = 'url';
+        const privacyDigest = element('input');
+        privacyDigest.type = 'text';
+        privacyDigest.name = 'privacy_digest';
+        privacyDigest.value = legalInputValue(pick(legal, 'privacy_digest'));
+        privacyDigest.required = true;
+        privacyDigest.autocomplete = 'off';
+        const approvalReference = element('input');
+        approvalReference.type = 'text';
+        approvalReference.name = 'approval_reference';
+        approvalReference.placeholder = 'Legal review record or ticket reference';
+        approvalReference.required = true;
+        approvalReference.maxLength = 256;
+        approvalReference.autocomplete = 'off';
+        const reviewedAt = element('input');
+        reviewedAt.type = 'text';
+        reviewedAt.name = 'reviewed_at';
+        reviewedAt.placeholder = '2026-09-13T12:00:00Z';
+        reviewedAt.required = true;
+        reviewedAt.autocomplete = 'off';
+        const fields = element('div', 'action-form-grid');
+        fields.append(
+          formField('Terms version', termsVersion),
+          formField('Terms URL', termsUrl),
+          formField('Terms digest', termsDigest, 'Use the digest from the approved terms record.'),
+          formField('Privacy version', privacyVersion),
+          formField('Privacy URL', privacyUrl),
+          formField('Privacy digest', privacyDigest, 'Use the digest from the approved privacy record.'),
+          formField('Approval reference', approvalReference, 'Required for the audit record; do not use a placeholder.'),
+          formField('Reviewed at (UTC)', reviewedAt, 'ISO-8601 UTC timestamp from the completed legal review.'),
+        );
+        const actions = element('div', 'action-form-actions');
+        actions.append(actionSubmitButton('commercial-catalog-approve', 'Record legal approval'));
+        const error = actionErrorMessage('commercial-catalog-approve');
+        form.append(
+          catalogId,
+          expectedEtag,
+          element('p', 'settings-note commercial-approval-warning', 'Submitting this form records an authorized legal decision against this exact catalog revision. It does not edit pricing, tax behavior, or plan entitlements.'),
+          fields,
+        );
+        if (error) form.append(error);
+        form.append(actions);
+        card.append(form);
+      }
+      list.append(card);
+    }
+    panel.body.append(list);
+    return panel.section;
   }
 
   function renderPlatformSettingsPage() {
@@ -4250,6 +4509,8 @@
     state.platformUsersError = null;
     state.platformEntitlements = null;
     state.platformEntitlementsError = null;
+    state.platformCommercial = null;
+    state.platformCommercialError = null;
     state.platformDataLoading = false;
     invalidatePlatformDataRequest();
     state.organizationMembers = null;
@@ -4566,6 +4827,7 @@
       state.platformAudit = null;
       state.platformUsers = null;
       state.platformEntitlements = null;
+      state.platformCommercial = null;
       state.platformOrganizationError = new ApiError(
         'The selected profile is not authorized for the Platform Console.',
         { status: 403 },
@@ -4583,11 +4845,15 @@
     state.platformAuditError = null;
     state.platformUsersError = null;
     state.platformEntitlementsError = null;
+    state.platformCommercialError = null;
     if (view === 'platform-organizations') state.platformOrganizations = null;
     if (view === 'platform-organization') state.platformOrganization = null;
     if (view === 'platform-audit') state.platformAudit = null;
     if (view === 'platform-users') state.platformUsers = null;
-    if (view === 'platform-entitlements') state.platformEntitlements = null;
+    if (view === 'platform-entitlements') {
+      state.platformEntitlements = null;
+      state.platformCommercial = null;
+    }
     renderCurrentPage();
     let loaded = false;
     try {
@@ -4617,6 +4883,15 @@
         const body = await api.platformEntitlements(profileName, {});
         if (!platformDataRequestIsCurrent(generation, view)) return;
         state.platformEntitlements = validatePlatformEntitlements(body);
+        try {
+          const commercialBody = await api.platformCommercialCatalog(profileName, {});
+          if (!platformDataRequestIsCurrent(generation, view)) return;
+          state.platformCommercial = validatePlatformCommercialCatalog(commercialBody);
+        } catch (error) {
+          if (!platformDataRequestIsCurrent(generation, view) || isAbortError(error)) return;
+          state.platformCommercial = null;
+          state.platformCommercialError = error;
+        }
       }
       state.lastFetchedAt = new Date().toISOString();
       loaded = true;
@@ -4685,6 +4960,14 @@
       !Array.isArray(root.subscriptions)
     ) {
       throw new ApiError('The control plane did not return the required entitlement projection.');
+    }
+    return root;
+  }
+
+  function validatePlatformCommercialCatalog(body) {
+    const root = unwrapPayload(body);
+    if (root.schema_version !== 1 || !Array.isArray(root.catalogs)) {
+      throw new ApiError('The Cloud commercial API did not return the required catalog projection.');
     }
     return root;
   }
@@ -5310,6 +5593,121 @@
     return 'The requested customer action could not be completed. Try again.';
   }
 
+  function platformCommercialActionErrorMessage(error) {
+    if (error instanceof SessionExpiredError) return 'Your platform session expired. Sign in again.';
+    if (error instanceof ApiError) {
+      if (error.status === 401 || error.status === 403) {
+        return 'This platform profile is not authorized to record commercial legal approval.';
+      }
+      if (error.status === 409 || error.status === 412) {
+        return 'The catalog changed before approval was recorded. Refresh this page and review the latest revision.';
+      }
+      if (error.status === 422) {
+        return 'The legal references were rejected. Check the URLs, digests, approval reference, and UTC review time.';
+      }
+      if (error.status === 503) {
+        return 'The private Cloud commercial service is unavailable. No approval was recorded.';
+      }
+    }
+    return 'Legal approval could not be recorded. No pricing or catalog data was changed.';
+  }
+
+  async function handlePlatformActionSubmit(event) {
+    const form = event.target.closest?.('form[data-platform-action]');
+    if (!form || !nodes.pageRegion.contains(form)) return;
+    event.preventDefault();
+    if (state.actionLoading) return;
+    const action = form.dataset.platformAction;
+    if (action !== 'commercial-catalog-approve') return;
+    if (!state.api || !hasPlatformCapability('platform:plans:legal_review')) {
+      state.actionError = {
+        action,
+        message: 'This platform profile cannot record commercial legal approval.',
+      };
+      renderCurrentPage();
+      return;
+    }
+    const data = new FormData(form);
+    const value = (name) => stringValue(data.get(name))?.trim() ?? '';
+    const requiredFields = [
+      'catalog_id',
+      'expected_etag',
+      'terms_version',
+      'terms_url',
+      'terms_digest',
+      'privacy_version',
+      'privacy_url',
+      'privacy_digest',
+      'approval_reference',
+      'reviewed_at',
+    ];
+    const missing = requiredFields.find((field) => !value(field));
+    if (missing) {
+      state.actionError = {
+        action,
+        message: `Complete ${missing.replaceAll('_', ' ')} before submitting the review.`,
+      };
+      renderCurrentPage();
+      return;
+    }
+    const placeholderField = [
+      'terms_version',
+      'terms_digest',
+      'privacy_version',
+      'privacy_digest',
+    ].find((field) => ['pending', 'placeholder', 'todo'].includes(value(field).toLowerCase()));
+    if (placeholderField) {
+      state.actionError = {
+        action,
+        message: `Replace the placeholder ${placeholderField.replaceAll('_', ' ')} with the approved document value.`,
+      };
+      renderCurrentPage();
+      return;
+    }
+    state.actionLoading = action;
+    state.actionError = null;
+    renderCurrentPage();
+    try {
+      const profileName = stringValue(pick(selectedProfile(), 'name'));
+      await state.api.approvePlatformCommercialCatalog(
+        profileName,
+        value('catalog_id'),
+        {
+          expected_etag: value('expected_etag'),
+          terms_version: value('terms_version'),
+          terms_url: value('terms_url'),
+          terms_digest: value('terms_digest'),
+          privacy_version: value('privacy_version'),
+          privacy_url: value('privacy_url'),
+          privacy_digest: value('privacy_digest'),
+          approval_reference: value('approval_reference'),
+          reviewed_at: value('reviewed_at'),
+        },
+        makeIdempotencyKey('commercial-catalog-legal-approve'),
+      );
+      state.actionLoading = null;
+      state.actionError = null;
+      state.platformCommercial = null;
+      state.platformEntitlements = null;
+      await loadPlatformViewData();
+      showToast('Commercial legal approval recorded and audited.', 'success');
+    } catch (error) {
+      if (error instanceof SessionExpiredError) {
+        await expireSession();
+        return;
+      }
+      state.actionError = {
+        action,
+        message: platformCommercialActionErrorMessage(error),
+      };
+    } finally {
+      if (state.actionLoading === action) {
+        state.actionLoading = null;
+        renderCurrentPage();
+      }
+    }
+  }
+
   async function refreshAfterCustomerMutation(message) {
     state.actionLoading = null;
     state.actionError = null;
@@ -5786,6 +6184,7 @@
   document.addEventListener('keydown', handleRecordSheetKeydown, true);
   nodes.pageRegion.addEventListener('input', handleCollectionInput);
   nodes.pageRegion.addEventListener('change', handleCollectionChange);
+  nodes.pageRegion.addEventListener('submit', handlePlatformActionSubmit);
   nodes.pageRegion.addEventListener('submit', handleCustomerActionSubmit);
   nodes.pageRegion.addEventListener('click', handleSearchResultClick);
   nodes.pageRegion.addEventListener('click', handlePlatformOrganizationClick);

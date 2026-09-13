@@ -40,6 +40,12 @@ const String platformOperationsManageCapability = 'platform:operations:manage';
 const String platformAccountsReadCapability = 'platform:accounts:read';
 const String platformEntitlementsReadCapability = 'platform:entitlements:read';
 const String platformPlansManageCapability = 'platform:plans:manage';
+// These capabilities are consumed by the private Cloud commercial API. They
+// live in the control-plane identity catalogue so the same protected
+// Platform Console session can be authorized at both API boundaries.
+const String platformCommercialReadCapability = 'platform:commercial:read';
+const String platformPlansPublishCapability = 'platform:plans:publish';
+const String platformPlansLegalReviewCapability = 'platform:plans:legal_review';
 const String platformEnterpriseQuotesReadCapability =
     'platform:enterprise_quotes:read';
 const String platformEnterpriseQuotesManageCapability =
@@ -78,6 +84,9 @@ const Map<String, Set<String>> managedPlatformStaffRoleCapabilities =
         platformAccountsReadCapability,
         platformEntitlementsReadCapability,
         platformPlansManageCapability,
+        platformCommercialReadCapability,
+        platformPlansPublishCapability,
+        platformPlansLegalReviewCapability,
         platformEnterpriseQuotesReadCapability,
         platformBillingRefundsReadCapability,
         platformSettingsReadCapability,
@@ -108,6 +117,7 @@ const Map<String, Set<String>> managedPlatformStaffRoleCapabilities =
         platformOverviewCapability,
         platformOrganizationsReadCapability,
         platformEntitlementsReadCapability,
+        platformCommercialReadCapability,
         platformEnterpriseQuotesReadCapability,
         platformEnterpriseQuotesManageCapability,
         platformBillingRefundsReadCapability,
@@ -149,6 +159,9 @@ const Set<String> platformCapabilities = <String>{
   platformAccountsReadCapability,
   platformEntitlementsReadCapability,
   platformPlansManageCapability,
+  platformCommercialReadCapability,
+  platformPlansPublishCapability,
+  platformPlansLegalReviewCapability,
   platformEnterpriseQuotesReadCapability,
   platformEnterpriseQuotesManageCapability,
   platformBillingRefundsReadCapability,

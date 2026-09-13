@@ -6,10 +6,13 @@ authentication routes and keeps the access and session tokens only in live
 memory. It does not use `localStorage`, `sessionStorage`, cookies, or token
 URLs.
 
-The dashboard is intentionally read-only. It renders the safe overview
-projection when the configured control plane provides it. Releases, patches,
-deployment records, and audit records are never synthesized from counts or
-client-side guesses. Unsupported backend capabilities are shown as
+The dashboard is read-focused. It renders safe projections when the configured
+control plane provides them. Releases, patches, deployment records, and audit
+records are never synthesized from counts or client-side guesses. The protected
+Platform Console also exposes the existing, audited commercial legal-review
+action under Plans & entitlements; it requires the matching platform capability
+and an explicit document-reference submission. It does not auto-approve public
+pricing or edit plan economics. Unsupported backend capabilities are shown as
 unavailable.
 
 ## Run it locally
@@ -61,6 +64,8 @@ POST /v1/public/register
 POST /v1/public/waitlist
 POST /v1/public/newsletter
 GET  /v1/organizations/{organization_id}/overview
+GET  /v1/platform/commercial/catalog?profile={name}&include_internal=true
+POST /v1/platform/commercial/catalog/{catalog_id}/legal-approve?profile={name}
 ```
 
 Public registration accepts exactly `{"email":"...","password":"..."}`

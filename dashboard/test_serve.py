@@ -27,6 +27,9 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         ) or urllib.parse.urlparse(self.path).path == "/v1/platform/audit":
             self._json(200, {"readOnly": True, "scope": "platform"})
             return
+        if urllib.parse.urlparse(self.path).path == "/v1/platform/commercial/catalog":
+            self._json(200, {"schema_version": 1, "catalogs": []})
+            return
         if self.path.startswith("/v1/organizations/"):
             self._json(200, {"readOnly": True, "source": "upstream"})
             return
@@ -63,6 +66,9 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
             return
         if self.path in {"/v1/public/register", "/v1/public/waitlist", "/v1/public/newsletter"}:
             self._json(200, {"status": "accepted", "request_id": "request_demo"})
+            return
+        if urllib.parse.urlparse(self.path).path.endswith("/legal-approve"):
+            self._json(200, {"status": "approved"})
             return
         if self.path in {"/auth/token", "/auth/device/code", "/auth/device/token", "/auth/device/approve"}:
             self._json(200, {"status": "accepted"})
@@ -348,6 +354,54 @@ class ProxyRouteTest(unittest.TestCase):
         self.assertEqual(status, 405)
         self.assertEqual(_UpstreamHandler.calls, [])
 
+    def test_platform_commercial_review_proxy_forwards_safe_reads_and_approval(self):
+        status, _ = self.request("GET", "/v1/platform/commercial/catalog")
+        self.assertEqual(status, 401)
+        self.assertEqual(_UpstreamHandler.calls, [])
+
+        status, body = self.request(
+            "GET",
+            "/v1/platform/commercial/catalog?profile=super-admin&include_internal=true",
+            headers={"Authorization": "Bearer memory-access"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["schema_version"], 1)
+        self.assertEqual(
+            _UpstreamHandler.calls[-1][0:3],
+            (
+                "GET",
+                "/v1/platform/commercial/catalog?profile=super-admin&include_internal=true",
+                "Bearer memory-access",
+            ),
+        )
+
+        status, _ = self.request(
+            "GET",
+            "/v1/platform/commercial/catalog?token=secret",
+            headers={"Authorization": "Bearer memory-access"},
+        )
+        self.assertEqual(status, 400)
+
+        status, body = self.request(
+            "POST",
+            "/v1/platform/commercial/catalog/catalog_demo/legal-approve?profile=super-admin",
+            {},
+            headers={
+                "Authorization": "Bearer memory-access",
+                "Idempotency-Key": "approval-demo-1",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["status"], "approved")
+        self.assertEqual(
+            _UpstreamHandler.calls[-1][0:3],
+            (
+                "POST",
+                "/v1/platform/commercial/catalog/catalog_demo/legal-approve?profile=super-admin",
+                "Bearer memory-access",
+            ),
+        )
+
     def test_auth_pages_are_served_as_static_same_origin_routes(self):
         for path in ("/cli/authorize/", "/device/"):
             status, body = self.request("GET", path)
@@ -432,6 +486,26 @@ class ProxyRouteTest(unittest.TestCase):
 
 
 class DashboardContractTest(unittest.TestCase):
+    def test_platform_entitlements_exposes_audited_commercial_approval_workflow(self):
+        root = Path(__file__).resolve().parent
+        app_source = (root / "app.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("v1/platform/commercial/catalog", app_source)
+        self.assertIn("include_internal", app_source)
+        self.assertIn("legal-approve", app_source)
+        self.assertIn("platform:commercial:read", app_source)
+        self.assertIn("platform:plans:legal_review", app_source)
+        self.assertIn("data-platform-action", app_source)
+        self.assertIn("expected_etag", app_source)
+        self.assertIn("commercial-catalog-legal-approve", app_source)
+        task_text = (
+            root.parent / "tasks" / "279-platform-commercial-approval-console.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("no automatic legal approval", task_text.lower())
+        self.assertIn("commercial-catalog-card", styles)
+        self.assertIn("commercial-approval-warning", styles)
+
     def test_auth_forms_use_a_stable_interruptible_transition_stage(self):
         root = Path(__file__).resolve().parent
         markup = (root / "index.html").read_text(encoding="utf-8")
@@ -473,8 +547,8 @@ class DashboardContractTest(unittest.TestCase):
         auth_panel_rule = styles.split(".auth-panel {", 1)[1].split("}", 1)[0]
         auth_focus_marker = ".auth-form input:focus,\n.auth-form input:focus-visible {"
 
-        self.assertIn('href="styles.css?v=237"', markup)
-        self.assertIn('src="app.js?v=233"', markup)
+        self.assertIn('href="styles.css?v=238"', markup)
+        self.assertIn('src="app.js?v=234"', markup)
         self.assertIn("min-height: 100dvh;", auth_layout_rule)
         self.assertIn("place-items: center;", auth_layout_rule)
         self.assertIn("padding:", auth_layout_rule)
@@ -531,8 +605,8 @@ class DashboardContractTest(unittest.TestCase):
             tokens,
         )
         self.assertIn('href="tokens.css?v=223"', markup)
-        self.assertIn('href="styles.css?v=237"', markup)
-        self.assertIn('src="app.js?v=233"', markup)
+        self.assertIn('href="styles.css?v=238"', markup)
+        self.assertIn('src="app.js?v=234"', markup)
         self.assertGreaterEqual(
             styles.count("font-family: var(--hyfens-font-display);"),
             2,
