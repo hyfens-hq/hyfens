@@ -388,6 +388,7 @@ final class BillingService {
         'rank': definition.rank,
         'paymentRequired': definition.paymentRequired,
         'providerBacked': definition.providerBacked,
+        'active': true,
         'capabilities': definition.capabilities.toList()..sort(),
         'limits': <String, Object?>{
           for (final entry in definition.limits.entries)
@@ -400,8 +401,10 @@ final class BillingService {
         // Task 248 seeded the stable rows before typed limits existed. Keep
         // the plan policy current without replacing catalog state or touching
         // organization subscriptions.
-        if (canonicalJson(existing['limits']) !=
-            canonicalJson(value['limits'])) {
+        if (!_hasCloudLimitShape(
+          existing['limits'],
+          value['limits']! as Map<String, Object?>,
+        )) {
           await store.replaceJson('billing_plan_catalog', id, <String, Object?>{
             ...existing,
             'limits': value['limits'],
@@ -417,6 +420,19 @@ final class BillingService {
         if (await store.readJson('billing_plan_catalog', id) == null) rethrow;
       }
     }
+  }
+
+  bool _hasCloudLimitShape(Object? raw, Map<String, Object?> expected) {
+    if (raw is! Map || raw.length != expected.length) return false;
+    for (final key in expected.keys) {
+      if (!raw.containsKey(key)) return false;
+      try {
+        CloudLimit.fromJson(raw[key]);
+      } on FormatException {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Backfills organizations already present in a managed Cloud store. The
@@ -4051,6 +4067,17 @@ final class BillingService {
     required String planKey,
     required RazorpayBillingConfig config,
   }) async {
+    final catalog = await store.readJson(
+      'billing_plan_catalog',
+      _cloudPlanId(planKey),
+    );
+    if (catalog?['active'] == false) {
+      throw const ControlPlaneException(
+        'BILLING_PLAN_UNAVAILABLE',
+        'The selected Cloud plan is not currently available',
+        statusCode: 409,
+      );
+    }
     final providerPlanId = config.providerPlanId(planKey);
     final current = await _scoped('billing_plans', organizationId);
     for (final plan in current) {

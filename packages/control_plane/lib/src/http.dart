@@ -14,6 +14,7 @@ import 'operator_overview.dart';
 import 'p3e_evaluation.dart';
 import 'platform_console.dart';
 import 'platform_metrics.dart';
+import 'platform_plan_admin.dart';
 import 'platform_staff.dart';
 import 'public_onboarding.dart';
 import 'reconciliation_domain.dart';
@@ -236,6 +237,9 @@ final class ControlPlaneHttpServer {
          enterpriseInquiryNotifier: enterpriseInquiryNotifier,
        ),
        _platformConsole = PlatformConsoleProjection(service.store),
+       _platformPlanAdmin = PlatformCloudPlanAdministrationService(
+         store: service.store,
+       ),
        _platformMetrics = PlatformMetricsProjection(store: service.store),
        _platformStaff = service.platformStaffAccess,
        _readyCheck = readyCheck ?? service.checkReadiness;
@@ -251,6 +255,7 @@ final class ControlPlaneHttpServer {
   final OperatorOverviewProjection _operatorOverview;
   final PublicOnboardingService _publicOnboarding;
   final PlatformConsoleProjection _platformConsole;
+  final PlatformCloudPlanAdministrationService _platformPlanAdmin;
   final PlatformMetricsProjection _platformMetrics;
   final PlatformStaffAccessService? _platformStaff;
   final ControlPlaneMetrics metrics = ControlPlaneMetrics();
@@ -497,6 +502,17 @@ final class ControlPlaneHttpServer {
       if (request.method == 'GET' &&
           _matches(path, const ['v1', 'platform', 'entitlements'])) {
         await _readPlatformEntitlements(request, requestId);
+        return;
+      }
+      if (request.method == 'PATCH' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'entitlements',
+            'plans',
+            '*',
+          ])) {
+        await _updatePlatformCloudPlan(request, path, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -2944,6 +2960,82 @@ final class ControlPlaneHttpServer {
     final projection = await _platformConsole.readEntitlements();
     await _json(request.response, 200, <String, Object?>{
       ...projection,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _updatePlatformCloudPlan(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform plan updates support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    final identity = await _humanAuth().me(accessToken: _bearer(request));
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: platformPlansManageCapability,
+      profileName: query['profile'],
+    );
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'name',
+      'description',
+      'active',
+      'limits',
+      'reason',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform plan updates require name, description, active, limits, and reason',
+        statusCode: 422,
+      );
+    }
+    if (body['active'] is! bool) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Plan active must be a boolean',
+        statusCode: 422,
+      );
+    }
+    final rawLimits = body['limits'];
+    if (rawLimits is! Map) {
+      throw const ControlPlaneException(
+        'INVALID_PLAN_LIMIT',
+        'Plan limits must be an object',
+        statusCode: 422,
+      );
+    }
+    final limits = <String, Object?>{};
+    for (final entry in rawLimits.entries) {
+      if (entry.key is! String) {
+        throw const ControlPlaneException(
+          'INVALID_PLAN_LIMIT',
+          'Plan limit keys must be strings',
+          statusCode: 422,
+        );
+      }
+      limits[entry.key as String] = entry.value;
+    }
+    final result = await _platformPlanAdmin.update(
+      planKey: path[4],
+      name: _string(body, 'name'),
+      description: _string(body, 'description'),
+      active: body['active']! as bool,
+      limits: limits,
+      reason: _string(body, 'reason'),
+      actorId: identity.user.id,
+      requestId: requestId,
+      idempotencyKey: _idempotency(request),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
       'request_id': requestId,
     });
   }

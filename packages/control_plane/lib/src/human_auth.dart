@@ -39,6 +39,7 @@ const String platformOperationsReadCapability = 'platform:operations:read';
 const String platformOperationsManageCapability = 'platform:operations:manage';
 const String platformAccountsReadCapability = 'platform:accounts:read';
 const String platformEntitlementsReadCapability = 'platform:entitlements:read';
+const String platformPlansManageCapability = 'platform:plans:manage';
 const String platformEnterpriseQuotesReadCapability =
     'platform:enterprise_quotes:read';
 const String platformEnterpriseQuotesManageCapability =
@@ -76,6 +77,7 @@ const Map<String, Set<String>> managedPlatformStaffRoleCapabilities =
         platformOperationsReadCapability,
         platformAccountsReadCapability,
         platformEntitlementsReadCapability,
+        platformPlansManageCapability,
         platformEnterpriseQuotesReadCapability,
         platformBillingRefundsReadCapability,
         platformSettingsReadCapability,
@@ -146,6 +148,7 @@ const Set<String> platformCapabilities = <String>{
   platformOperationsManageCapability,
   platformAccountsReadCapability,
   platformEntitlementsReadCapability,
+  platformPlansManageCapability,
   platformEnterpriseQuotesReadCapability,
   platformEnterpriseQuotesManageCapability,
   platformBillingRefundsReadCapability,

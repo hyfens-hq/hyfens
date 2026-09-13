@@ -239,6 +239,97 @@ void main() {
       client.close(force: true);
     }
   });
+
+  test('platform admins can edit the Cloud catalogue with an audit reason', () async {
+    final client = HttpClient();
+    try {
+      final login = await _login(
+        client,
+        server.port,
+        demoOwnerEmail,
+        'demo-password',
+        audience: platformAuthorizationAudience,
+      );
+      final token = login.body['access_token']! as String;
+      final body = <String, Object?>{
+        'name': 'Starter production',
+        'description': 'Production workspaces for a small team.',
+        'active': true,
+        'limits': <String, Object?>{
+          cloudApplicationsLimitKey: <String, Object?>{'type': 'unlimited'},
+          cloudEnvironmentsPerApplicationLimitKey: <String, Object?>{
+            'type': 'finite',
+            'value': 3,
+          },
+          cloudMembersLimitKey: <String, Object?>{'type': 'finite', 'value': 8},
+        },
+        'reason':
+            'Align the managed entitlement description with the approved offer',
+      };
+      final updated = await _patchJson(
+        client,
+        server.port,
+        '/v1/platform/entitlements/plans/starter?profile=$demoOwnerProfileName',
+        token: token,
+        idempotencyKey: 'platform-plan-update-1',
+        body: body,
+      );
+      expect(updated.statusCode, 200, reason: jsonEncode(updated.body));
+      expect(
+        (updated.body['plan']! as Map<String, Object?>)['name'],
+        'Starter production',
+      );
+
+      final repeated = await _patchJson(
+        client,
+        server.port,
+        '/v1/platform/entitlements/plans/starter?profile=$demoOwnerProfileName',
+        token: token,
+        idempotencyKey: 'platform-plan-update-1',
+        body: body,
+      );
+      expect(repeated.statusCode, 200);
+      expect(repeated.body['plan'], updated.body['plan']);
+
+      final projection = await _get(
+        client,
+        server.port,
+        '/v1/platform/entitlements?profile=$demoOwnerProfileName',
+        token: token,
+      );
+      expect(projection.statusCode, 200);
+      final plans = (projection.body['plans']! as List<Object?>)
+          .cast<Map<String, Object?>>();
+      expect(
+        plans.singleWhere((plan) => plan['key'] == cloudPlanStarterKey)['name'],
+        'Starter production',
+      );
+
+      final customerLogin = await _login(
+        client,
+        server.port,
+        demoOwnerEmail,
+        'demo-password',
+      );
+      final customerWrite = await _patchJson(
+        client,
+        server.port,
+        '/v1/platform/entitlements/plans/starter',
+        token: customerLogin.body['access_token']! as String,
+        idempotencyKey: 'platform-plan-customer-write',
+        body: body,
+      );
+      expect(customerWrite.statusCode, 403);
+
+      final audit = await store.listJson('audit');
+      expect(
+        audit.any((event) => event['action'] == 'platform.cloud_plan.updated'),
+        isTrue,
+      );
+    } finally {
+      client.close(force: true);
+    }
+  });
 }
 
 Future<_Response> _login(
