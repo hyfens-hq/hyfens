@@ -527,3 +527,20 @@ artifact purge and reconciliation, final personal deletion after ownership
 resolution, and old-backup tombstone replay remain unclaimed. Completion
 emails continue to describe active-system completion and retained/backup
 caveats; they do not claim backup erasure.
+
+## Managed artifact-cleanup trigger — 2026-09-13
+
+Task 276 commit `e48d52d` added the bounded operator/scheduler mode and its
+locked systemd timer. The reviewed current source was synchronized through
+the protected staging boundary, the existing installer installed the worker,
+and the current control-plane image was rebuilt and redeployed. The artifact
+retention timer is enabled and active. A managed smoke run returned `rc=0`
+with `managed=true`, `deletion_supported=true`, `considered=0`, `purged=0`,
+and `failed=0`; no eligible disposable artifact rows existed for a physical
+purge assertion. This is trigger/deployment evidence only, not shared-object,
+object-store purge, backup, or tombstone-replay acceptance.
+
+The deletion and notification timers remained healthy and the public API
+health/readiness checks stayed HTTP 200 after redeployment. Task 269 remains
+`CODE_VERIFIED` with managed final-personal-deletion, shared-object purge,
+backup/tombstone, and legal-retention gates open.

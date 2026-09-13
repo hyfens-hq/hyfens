@@ -757,3 +757,27 @@ managed object/configuration/backend backup scope, artifact purge and
 reconciliation acceptance, approved tax and evidence-retention policy,
 catalog/legal approval, personal ownership-resolution completion, and
 Enterprise end-to-end TEST acceptance if Enterprise remains in launch scope.
+
+## Managed artifact-retention trigger installation — 2026-09-13
+
+The bounded artifact-retention worker from Task 276 was reviewed and pushed as
+signed-off commit `e48d52d`. The current control-plane source and deployment
+files were synchronized into the root-managed staging boundary, installed by
+the existing protected installer, and the control plane was rebuilt and
+replaced only after the protected wrapper completed its build and readiness
+sequence. The new
+`hyfens-public-control-plane-dev-artifact-retention.timer` is enabled and
+active.
+
+The managed worker smoke returned `rc=0` with
+`managed=true`, `deletion_supported=true`, `considered=0`, `purged=0`, and
+`failed=0`. No eligible disposable artifact rows were present, so this proves
+the trigger, container command, lock path, and fail-closed result handling;
+it does not claim a physical object purge or shared-object acceptance. The
+existing deletion and notification timers remain enabled and active, and the
+API health/readiness checks remained HTTP 200 after deployment.
+
+Task 259 remains `NOT_READY`: scheduled/off-host encrypted backup and
+restore-time deletion-tombstone replay, approved backup/evidence retention,
+tax/catalog approval, ownership resolution, and any remaining Enterprise
+acceptance are still independent gates.

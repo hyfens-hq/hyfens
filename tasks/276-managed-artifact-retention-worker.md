@@ -101,4 +101,10 @@ production readiness is claimed.
   command tests passed again. The package-wide legacy suite still reports
   unrelated pre-existing closure/reconciliation failures and missing optional
   PostgreSQL integration configuration; those failures are outside this task's
-  changed scope.
+changed scope.
+- 2026-09-13: The reviewed commit was synchronized into the root-managed
+  staging boundary and installed through the existing protected installer.
+  The control plane was rebuilt and redeployed successfully; the artifact
+  retention timer is enabled and active. The managed smoke returned zero with
+  a Cloud/deletion-supported report and no eligible rows. No physical purge or
+  backup/object-store acceptance is claimed.
