@@ -47,6 +47,95 @@ const String platformBillingRefundsReadCapability =
     'platform:billing_refunds:read';
 const String platformBillingRefundsManageCapability =
     'platform:billing_refunds:manage';
+const String platformSettingsReadCapability = 'platform:settings:read';
+const String platformStaffReadCapability = 'platform:staff:read';
+const String platformStaffInviteCapability = 'platform:staff:invite';
+const String platformStaffReviewCapability = 'platform:staff:review';
+const String platformStaffManageCapability = 'platform:staff:manage';
+const String platformSessionsRevokeCapability = 'platform:sessions:revoke';
+
+/// Roles that can be provisioned through the reviewed platform-staff seam.
+/// Bootstrap `owner` / `super-admin` access remains a separate protected path.
+const Set<String> managedPlatformStaffRoles = <String>{
+  'admin',
+  'support',
+  'operations',
+  'commercial',
+  'security',
+};
+
+/// Platform access is role-derived. Callers may select one of these roles but
+/// cannot submit an arbitrary capability set to the staff-management seam.
+const Map<String, Set<String>> managedPlatformStaffRoleCapabilities =
+    <String, Set<String>>{
+      'admin': <String>{
+        platformOverviewCapability,
+        platformOrganizationsReadCapability,
+        platformOrganizationsInspectCapability,
+        platformAuditReadCapability,
+        platformOperationsReadCapability,
+        platformAccountsReadCapability,
+        platformEntitlementsReadCapability,
+        platformEnterpriseQuotesReadCapability,
+        platformBillingRefundsReadCapability,
+        platformSettingsReadCapability,
+        platformStaffReadCapability,
+        platformStaffInviteCapability,
+        platformStaffReviewCapability,
+        platformStaffManageCapability,
+        platformSessionsRevokeCapability,
+      },
+      'support': <String>{
+        platformOverviewCapability,
+        platformOrganizationsReadCapability,
+        platformOrganizationsInspectCapability,
+        platformAccountsReadCapability,
+        platformStaffReadCapability,
+      },
+      'operations': <String>{
+        platformOverviewCapability,
+        platformOrganizationsReadCapability,
+        platformOrganizationsInspectCapability,
+        platformAuditReadCapability,
+        platformOperationsReadCapability,
+        platformOperationsManageCapability,
+        platformEntitlementsReadCapability,
+        platformStaffReadCapability,
+      },
+      'commercial': <String>{
+        platformOverviewCapability,
+        platformOrganizationsReadCapability,
+        platformEntitlementsReadCapability,
+        platformEnterpriseQuotesReadCapability,
+        platformEnterpriseQuotesManageCapability,
+        platformBillingRefundsReadCapability,
+        platformBillingRefundsManageCapability,
+        platformStaffReadCapability,
+      },
+      'security': <String>{
+        platformOverviewCapability,
+        platformOrganizationsReadCapability,
+        platformOrganizationsInspectCapability,
+        platformAuditReadCapability,
+        platformAccountsReadCapability,
+        platformSettingsReadCapability,
+        platformStaffReadCapability,
+        platformStaffReviewCapability,
+        platformSessionsRevokeCapability,
+      },
+    };
+
+Set<String> platformCapabilitiesForManagedStaffRole(String role) {
+  final capabilities = managedPlatformStaffRoleCapabilities[role];
+  if (capabilities == null) {
+    throw const ControlPlaneException(
+      'INVALID_PLATFORM_STAFF_ROLE',
+      'The platform staff role is not supported',
+      statusCode: 422,
+    );
+  }
+  return Set.unmodifiable(capabilities);
+}
 
 const Set<String> platformCapabilities = <String>{
   platformOverviewCapability,
@@ -61,6 +150,12 @@ const Set<String> platformCapabilities = <String>{
   platformEnterpriseQuotesManageCapability,
   platformBillingRefundsReadCapability,
   platformBillingRefundsManageCapability,
+  platformSettingsReadCapability,
+  platformStaffReadCapability,
+  platformStaffInviteCapability,
+  platformStaffReviewCapability,
+  platformStaffManageCapability,
+  platformSessionsRevokeCapability,
 };
 
 const Set<String> supportedPlatformCapabilities = platformCapabilities;
@@ -551,6 +646,8 @@ final class HumanMembership {
     required String profileName,
     this.audience = customerAuthorizationAudience,
     Set<String> platformCapabilities = const <String>{},
+    this.active = true,
+    this.managedPlatformStaff = false,
     String? applicationId,
     String? environmentId,
     String? profileApplicationId,
@@ -609,6 +706,11 @@ final class HumanMembership {
             this.platformCapabilities.isNotEmpty)) {
       throw const FormatException('Invalid platform membership capability');
     }
+    if (managedPlatformStaff &&
+        (audience != platformAuthorizationAudience ||
+            !managedPlatformStaffRoles.contains(role))) {
+      throw const FormatException('Invalid managed platform staff membership');
+    }
   }
 
   final String organizationId;
@@ -621,6 +723,8 @@ final class HumanMembership {
   final String profileName;
   final String audience;
   final Set<String> platformCapabilities;
+  final bool active;
+  final bool managedPlatformStaff;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'organizationId': organizationId,
@@ -633,6 +737,8 @@ final class HumanMembership {
     'profileName': profileName,
     'audience': audience,
     'platformCapabilities': platformCapabilities.toList()..sort(),
+    'active': active,
+    'managedPlatformStaff': managedPlatformStaff,
   };
 
   static HumanMembership fromJson(Map<String, Object?> value) {
@@ -661,6 +767,8 @@ final class HumanMembership {
       profileName: value['profileName']! as String,
       audience: value['audience'] as String? ?? customerAuthorizationAudience,
       platformCapabilities: parsedPlatformCapabilities,
+      active: value['active'] as bool? ?? true,
+      managedPlatformStaff: value['managedPlatformStaff'] as bool? ?? false,
     );
   }
 }
@@ -2813,10 +2921,209 @@ final class HumanAuthService {
     );
   });
 
+  /// Creates the platform membership for a reviewed staff invitation. The
+  /// caller supplies only a fixed role; its capability set is resolved here so
+  /// a browser or operator adapter cannot mint arbitrary platform authority.
+  Future<HumanUserRecord> createManagedPlatformStaff({
+    required String email,
+    required String password,
+    required String role,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    _validatePassword(password);
+    final normalizedEmail = normalizeHumanEmail(email);
+    if (!managedPlatformStaffRoles.contains(role)) {
+      throw const ControlPlaneException(
+        'INVALID_PLATFORM_STAFF_ROLE',
+        'The platform staff role is not supported',
+        statusCode: 422,
+      );
+    }
+    final users = await _users();
+    if (users.any((user) => user.email == normalizedEmail)) {
+      throw const ControlPlaneException(
+        'PLATFORM_STAFF_ACCOUNT_EXISTS',
+        'An account already exists for this email; use an authenticated staff invitation flow',
+        statusCode: 409,
+      );
+    }
+    final membership = HumanMembership(
+      organizationId: 'platform',
+      role: role,
+      capabilities: publicClientReadScopes,
+      profileName: role,
+      audience: platformAuthorizationAudience,
+      platformCapabilities: platformCapabilitiesForManagedStaffRole(role),
+      managedPlatformStaff: true,
+    );
+    final user = HumanUserRecord(
+      id: 'usr_${sha256Hex(utf8.encode(normalizedEmail)).substring(0, 32)}',
+      email: normalizedEmail,
+      passwordHash: await _hashPassword(password),
+      active: true,
+      memberships: <HumanMembership>[membership],
+      createdAt: _now(),
+    );
+    await store.createJson('users', user.id, user.toJson());
+    return user;
+  });
+
+  /// Adds a reviewed platform membership to an existing identity without
+  /// changing any customer memberships or credentials. Possession of the
+  /// invitation is established by the staff-access service before this
+  /// method is called.
+  Future<HumanUserRecord> addManagedPlatformStaffMembership({
+    required String userId,
+    required String role,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    if (!managedPlatformStaffRoles.contains(role)) {
+      throw const ControlPlaneException(
+        'INVALID_PLATFORM_STAFF_ROLE',
+        'The platform staff role is not supported',
+        statusCode: 422,
+      );
+    }
+    final value = await store.readJson('users', userId);
+    if (value == null) {
+      throw const ControlPlaneException(
+        'PLATFORM_STAFF_NOT_FOUND',
+        'The platform staff identity was not found',
+        statusCode: 404,
+      );
+    }
+    final user = HumanUserRecord.fromJson(value);
+    if (!user.active || user.deletedAt != null) {
+      throw const ControlPlaneException(
+        'PLATFORM_STAFF_ACCOUNT_UNAVAILABLE',
+        'The platform staff identity is not available',
+        statusCode: 409,
+      );
+    }
+    final existingIndex = user.memberships.indexWhere(
+      (membership) =>
+          membership.audience == platformAuthorizationAudience &&
+          membership.managedPlatformStaff,
+    );
+    final membership = HumanMembership(
+      organizationId: 'platform',
+      role: role,
+      capabilities: publicClientReadScopes,
+      profileName: role,
+      audience: platformAuthorizationAudience,
+      platformCapabilities: platformCapabilitiesForManagedStaffRole(role),
+      managedPlatformStaff: true,
+    );
+    final memberships = user.memberships.toList();
+    if (existingIndex >= 0) {
+      final current = memberships[existingIndex];
+      if (current.role == role && current.active) return user;
+      memberships[existingIndex] = membership;
+    } else {
+      memberships.add(membership);
+    }
+    final updated = user.copyWith(memberships: memberships);
+    await store.replaceJson('users', user.id, updated.toJson());
+    return updated;
+  });
+
+  /// Applies a role-derived membership after the access review cool-off has
+  /// elapsed. It preserves all customer memberships on the same identity.
+  Future<HumanUserRecord> applyManagedPlatformStaff({
+    required String userId,
+    required String role,
+    required bool active,
+  }) => _serialized(() async {
+    await _ensureInitialized();
+    if (!managedPlatformStaffRoles.contains(role)) {
+      throw const ControlPlaneException(
+        'INVALID_PLATFORM_STAFF_ROLE',
+        'The platform staff role is not supported',
+        statusCode: 422,
+      );
+    }
+    final userValue = await store.readJson('users', userId);
+    if (userValue == null) {
+      throw const ControlPlaneException(
+        'PLATFORM_STAFF_NOT_FOUND',
+        'The platform staff identity was not found',
+        statusCode: 404,
+      );
+    }
+    final user = HumanUserRecord.fromJson(userValue);
+    final index = user.memberships.indexWhere(
+      (membership) =>
+          membership.audience == platformAuthorizationAudience &&
+          membership.managedPlatformStaff,
+    );
+    if (index < 0) {
+      throw const ControlPlaneException(
+        'PLATFORM_STAFF_NOT_FOUND',
+        'The platform staff membership was not found',
+        statusCode: 404,
+      );
+    }
+    final current = user.memberships[index];
+    final memberships = user.memberships.toList();
+    memberships[index] = HumanMembership(
+      organizationId: current.organizationId,
+      applicationId: current.applicationId,
+      environmentId: current.environmentId,
+      profileApplicationId: current.profileApplicationId,
+      profileEnvironmentId: current.profileEnvironmentId,
+      role: role,
+      capabilities: current.capabilities,
+      profileName: role,
+      audience: platformAuthorizationAudience,
+      platformCapabilities: platformCapabilitiesForManagedStaffRole(role),
+      active: active,
+      managedPlatformStaff: true,
+    );
+    final updated = user.copyWith(memberships: memberships);
+    await store.replaceJson('users', user.id, updated.toJson());
+    return updated;
+  });
+
+  /// Revokes only platform-audience sessions for the selected staff identity.
+  /// Customer sessions on a multi-purpose identity are not affected.
+  Future<int> revokePlatformStaffSessions({required String userId}) async {
+    await _ensureInitialized();
+    final userValue = await store.readJson('users', userId);
+    if (userValue == null) return 0;
+    final user = HumanUserRecord.fromJson(userValue);
+    if (!_hasManagedPlatformMembership(user)) return 0;
+    var revoked = 0;
+    final now = _now();
+    for (final value in await store.listJson('sessions')) {
+      if (value['userId'] != userId ||
+          value['audience'] != platformAuthorizationAudience) {
+        continue;
+      }
+      final id = value['id'];
+      final secretHash = value['secretHash'];
+      if (id is! String || secretHash is! String) continue;
+      if (await store.revokeSessionIfActive(
+        id: id,
+        expectedSecretHash: secretHash,
+        revokedAt: now,
+      )) {
+        revoked++;
+      }
+    }
+    return revoked;
+  }
+
   Future<HumanIdentity> me({required String accessToken}) async {
     final context = await _authenticateAccessToken(accessToken);
     return _identity(context.user, audience: context.audience);
   }
+
+  bool _hasManagedPlatformMembership(HumanUserRecord user) =>
+      user.memberships.any(
+        (membership) =>
+            membership.audience == platformAuthorizationAudience &&
+            membership.managedPlatformStaff,
+      );
 
   /// Authorizes one explicit Platform Console capability.
   ///
@@ -2853,15 +3160,13 @@ final class HumanAuthService {
         statusCode: 403,
       );
     }
-    final permitted =
-        config.platformAdminEmails.contains(context.user.email) &&
-        context.user.memberships.any(
-          (membership) =>
-              _isPlatformMembership(context.user, membership) &&
-              membership.platformCapabilities.contains(capability) &&
-              (requestedProfile == null ||
-                  membership.profileName == requestedProfile),
-        );
+    final permitted = context.user.memberships.any(
+      (membership) =>
+          _isPlatformMembership(context.user, membership) &&
+          _effectivePlatformCapabilities(membership).contains(capability) &&
+          (requestedProfile == null ||
+              membership.profileName == requestedProfile),
+    );
     if (!permitted) {
       throw const ControlPlaneException(
         'FORBIDDEN',
@@ -3364,7 +3669,12 @@ final class HumanAuthService {
     user: user,
     authorizationAudience: audience,
     profiles: user.memberships
-        .where((membership) => membership.audience == audience)
+        .where(
+          (membership) =>
+              membership.audience == audience &&
+              (audience != platformAuthorizationAudience ||
+                  _isPlatformMembership(user, membership)),
+        )
         .map(
           (membership) => HumanAuthProfile(
             name: membership.profileName,
@@ -3377,21 +3687,47 @@ final class HumanAuthService {
             capabilities: membership.capabilities,
             platform: _isPlatformMembership(user, membership),
             audience: membership.audience,
-            platformCapabilities: membership.platformCapabilities,
+            platformCapabilities: _effectivePlatformCapabilities(membership),
           ),
         )
         .toList(growable: false),
   );
 
-  bool _isPlatformMembership(
-    HumanUserRecord user,
-    HumanMembership membership,
-  ) =>
-      config.platformAdminEmails.contains(user.email) &&
-      membership.audience == platformAuthorizationAudience &&
-      membership.role == 'owner' &&
-      membership.profileName == 'super-admin' &&
-      membership.platformCapabilities.isNotEmpty;
+  Set<String> _effectivePlatformCapabilities(HumanMembership membership) {
+    if (membership.managedPlatformStaff) {
+      final roleCapabilities = platformCapabilitiesForManagedStaffRole(
+        membership.role,
+      );
+      return Set.unmodifiable(
+        membership.platformCapabilities.intersection(roleCapabilities),
+      );
+    }
+    return membership.platformCapabilities;
+  }
+
+  bool _isPlatformMembership(HumanUserRecord user, HumanMembership membership) {
+    if (membership.audience != platformAuthorizationAudience ||
+        !membership.active ||
+        membership.platformCapabilities.isEmpty) {
+      return false;
+    }
+    final bootstrapOwner =
+        config.platformAdminEmails.contains(user.email) &&
+        membership.role == 'owner' &&
+        membership.profileName == 'super-admin';
+    if (bootstrapOwner) return true;
+    if (!membership.managedPlatformStaff ||
+        !managedPlatformStaffRoles.contains(membership.role) ||
+        membership.profileName != membership.role) {
+      return false;
+    }
+    // A managed role may be narrowed by a future migration, but it can never
+    // carry a capability outside the role catalogue.
+    final roleCapabilities = platformCapabilitiesForManagedStaffRole(
+      membership.role,
+    );
+    return membership.platformCapabilities.difference(roleCapabilities).isEmpty;
+  }
 
   Future<String> _hashPassword(
     String password, {

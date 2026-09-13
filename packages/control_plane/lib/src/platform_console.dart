@@ -184,8 +184,22 @@ final class PlatformConsoleProjection {
               'organizationId': membership.organizationId,
               'profileName': membership.profileName,
               'role': membership.role,
-              'platformCapabilities': membership.platformCapabilities.toList()
-                ..sort(),
+              'displayName': membership.profileName == 'super-admin'
+                  ? 'Super administrator'
+                  : membership.role,
+              'active': membership.active && user.active,
+              'managedPlatformStaff': membership.managedPlatformStaff,
+              'platformCapabilities':
+                  membership.managedPlatformStaff
+                        ? membership.platformCapabilities
+                              .intersection(
+                                platformCapabilitiesForManagedStaffRole(
+                                  membership.role,
+                                ),
+                              )
+                              .toList()
+                        : membership.platformCapabilities.toList()
+                    ..sort(),
             },
           )
           .toList(growable: false);

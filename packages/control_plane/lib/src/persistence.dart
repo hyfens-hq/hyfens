@@ -325,6 +325,8 @@ final class FileControlPlaneStore
       'deletion_evidence',
       'notification_events',
       'notification_deliveries',
+      'platform_staff_invitations',
+      'platform_staff_access_reviews',
     ]) {
       await Directory(p.join(root.path, name)).create(recursive: true);
     }
