@@ -14,6 +14,7 @@ import 'operator_overview.dart';
 import 'p3e_evaluation.dart';
 import 'platform_console.dart';
 import 'platform_metrics.dart';
+import 'platform_staff.dart';
 import 'public_onboarding.dart';
 import 'reconciliation_domain.dart';
 import 'reconciliation_observability.dart';
@@ -236,6 +237,7 @@ final class ControlPlaneHttpServer {
        ),
        _platformConsole = PlatformConsoleProjection(service.store),
        _platformMetrics = PlatformMetricsProjection(store: service.store),
+       _platformStaff = service.platformStaffAccess,
        _readyCheck = readyCheck ?? service.checkReadiness;
 
   final ControlPlaneService service;
@@ -250,6 +252,7 @@ final class ControlPlaneHttpServer {
   final PublicOnboardingService _publicOnboarding;
   final PlatformConsoleProjection _platformConsole;
   final PlatformMetricsProjection _platformMetrics;
+  final PlatformStaffAccessService? _platformStaff;
   final ControlPlaneMetrics metrics = ControlPlaneMetrics();
   final Future<bool> Function() _readyCheck;
   final Map<String, List<DateTime>> _requestWindows =
@@ -339,6 +342,16 @@ final class ControlPlaneHttpServer {
       if (apiPath != null && apiPath.startsWith('/auth/')) {
         _rejectAuthSecretsInQuery(request);
       }
+      // A bounded review tick keeps approved staff changes from remaining in
+      // cool-off forever when the deployment does not have a separate worker.
+      // It runs before platform login so a newly effective staff membership is
+      // visible on the first sign-in, but it never makes email or billing
+      // delivery part of this request path.
+      if (apiPath != null &&
+          (apiPath.startsWith('/auth/login') ||
+              apiPath.startsWith('/v1/platform/'))) {
+        await _platformStaff?.processDueReviews();
+      }
       if (request.method == 'POST' && apiPath == '/auth/login') {
         _enforceAuthRateLimit(request);
         await _authLogin(request, requestId);
@@ -411,6 +424,74 @@ final class ControlPlaneHttpServer {
       if (request.method == 'GET' &&
           _matches(path, const ['v1', 'platform', 'users'])) {
         await _readPlatformUsers(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'staff', 'invitations'])) {
+        await _readPlatformStaffInvitations(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const ['v1', 'platform', 'staff', 'invitations'])) {
+        await _createPlatformStaffInvitation(request, requestId);
+        return;
+      }
+      if (request.method == 'GET' &&
+          _matches(path, const ['v1', 'platform', 'staff', 'access-reviews'])) {
+        await _readPlatformStaffAccessReviews(request, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'staff',
+            'access-reviews',
+            '*',
+            'approve',
+          ])) {
+        await _approvePlatformStaffAccessReview(request, path, requestId);
+        return;
+      }
+      if (request.method == 'PATCH' &&
+          _matches(path, const ['v1', 'platform', 'staff', '*'])) {
+        await _requestPlatformStaffAccessChange(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'staff',
+            '*',
+            'sessions',
+            'revoke',
+          ])) {
+        await _revokePlatformStaffSessions(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'staff',
+            'invitations',
+            '*',
+            'revoke',
+          ])) {
+        await _revokePlatformStaffInvitation(request, path, requestId);
+        return;
+      }
+      if (request.method == 'POST' &&
+          _matches(path, const [
+            'v1',
+            'platform',
+            'staff',
+            'invitations',
+            'accept',
+          ])) {
+        _enforceAuthRateLimit(request);
+        await _acceptPlatformStaffInvitation(request, requestId);
         return;
       }
       if (request.method == 'GET' &&
@@ -2573,6 +2654,274 @@ final class ControlPlaneHttpServer {
       ...projection,
       'request_id': requestId,
     });
+  }
+
+  Future<void> _readPlatformStaffInvitations(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform staff invitation reads support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _authorizePlatformStaff(
+      request,
+      capability: platformStaffReadCapability,
+      profileName: query['profile'],
+    );
+    final staff = _platformStaffService();
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'scope': 'platform',
+      'readOnly': true,
+      'invitations': await staff.listInvitations(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _createPlatformStaffInvitation(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final identity = await _authorizePlatformStaff(
+      request,
+      capability: platformStaffInviteCapability,
+    );
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'email',
+      'role',
+      'reason',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'A platform staff invitation requires email, role, and reason',
+        statusCode: 422,
+      );
+    }
+    final result = await _platformStaffService().createInvitation(
+      email: _string(body, 'email'),
+      role: _string(body, 'role'),
+      reason: _string(body, 'reason'),
+      actorId: identity.user.id,
+      requestId: requestId,
+      idempotencyKey: _idempotency(request),
+    );
+    await _json(request.response, 201, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _readPlatformStaffAccessReviews(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final query = request.uri.queryParameters;
+    if (query.keys.any((key) => key != 'profile')) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform staff review reads support only the profile query parameter',
+        statusCode: 422,
+      );
+    }
+    await _authorizePlatformStaff(
+      request,
+      capability: platformStaffReadCapability,
+      profileName: query['profile'],
+    );
+    await _json(request.response, 200, <String, Object?>{
+      'schemaVersion': 1,
+      'scope': 'platform',
+      'readOnly': true,
+      'reviews': await _platformStaffService().listAccessReviews(),
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _approvePlatformStaffAccessReview(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final identity = await _authorizePlatformStaff(
+      request,
+      capability: platformStaffReviewCapability,
+    );
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'reason'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Approving a platform staff review requires reason',
+        statusCode: 422,
+      );
+    }
+    final result = await _platformStaffService().approveAccessReview(
+      reviewId: path[4],
+      actorId: identity.user.id,
+      reason: _string(body, 'reason'),
+      requestId: requestId,
+      idempotencyKey: _idempotency(request),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _requestPlatformStaffAccessChange(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final identity = await _authorizePlatformStaff(
+      request,
+      capability: platformStaffManageCapability,
+    );
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{
+      'role',
+      'active',
+      'reason',
+    })) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'A platform staff access change requires role, active, and reason',
+        statusCode: 422,
+      );
+    }
+    final active = body['active'];
+    if (active is! bool) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Platform staff active must be a boolean',
+        statusCode: 422,
+      );
+    }
+    final result = await _platformStaffService().requestAccessChange(
+      userId: path[3],
+      role: _string(body, 'role'),
+      active: active,
+      reason: _string(body, 'reason'),
+      actorId: identity.user.id,
+      requestId: requestId,
+      idempotencyKey: _idempotency(request),
+    );
+    await _json(request.response, 202, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _revokePlatformStaffSessions(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final identity = await _authorizePlatformStaff(
+      request,
+      capability: platformSessionsRevokeCapability,
+    );
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'reason'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Revoking platform staff sessions requires reason',
+        statusCode: 422,
+      );
+    }
+    final result = await _platformStaffService().revokeStaffSessions(
+      userId: path[3],
+      actorId: identity.user.id,
+      reason: _string(body, 'reason'),
+      requestId: requestId,
+      idempotencyKey: _idempotency(request),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _revokePlatformStaffInvitation(
+    HttpRequest request,
+    List<String> path,
+    String requestId,
+  ) async {
+    final identity = await _authorizePlatformStaff(
+      request,
+      capability: platformStaffManageCapability,
+    );
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'reason'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Revoking a platform staff invitation requires reason',
+        statusCode: 422,
+      );
+    }
+    final result = await _platformStaffService().revokeInvitation(
+      invitationId: path[4],
+      actorId: identity.user.id,
+      reason: _string(body, 'reason'),
+      requestId: requestId,
+      idempotencyKey: _idempotency(request),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<void> _acceptPlatformStaffInvitation(
+    HttpRequest request,
+    String requestId,
+  ) async {
+    final body = await _jsonBody(request);
+    if (!setEquals(body.keys.toSet(), const <String>{'token', 'password'})) {
+      throw const ControlPlaneException(
+        'INVALID_REQUEST',
+        'Accepting a platform staff invitation requires token and password',
+        statusCode: 422,
+      );
+    }
+    final result = await _platformStaffService().acceptInvitation(
+      token: _string(body, 'token'),
+      password: _string(body, 'password'),
+    );
+    await _json(request.response, 200, <String, Object?>{
+      ...result,
+      'request_id': requestId,
+    });
+  }
+
+  Future<HumanIdentity> _authorizePlatformStaff(
+    HttpRequest request, {
+    required String capability,
+    String? profileName,
+  }) async {
+    await _humanAuth().authorizePlatformCapability(
+      accessToken: _bearer(request),
+      capability: capability,
+      profileName: profileName,
+    );
+    return _humanAuth().me(accessToken: _bearer(request));
+  }
+
+  PlatformStaffAccessService _platformStaffService() {
+    final staff = _platformStaff;
+    if (staff == null) {
+      throw const ControlPlaneException(
+        'PLATFORM_STAFF_UNAVAILABLE',
+        'Platform staff management is not configured for this deployment',
+        statusCode: 503,
+      );
+    }
+    return staff;
   }
 
   Future<void> _readPlatformEntitlements(

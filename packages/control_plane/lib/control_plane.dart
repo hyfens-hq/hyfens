@@ -43,6 +43,7 @@ export 'src/persistence.dart';
 export 'src/platform_console.dart';
 export 'src/platform_metrics.dart';
 export 'src/platform_operations.dart';
+export 'src/platform_staff.dart';
 export 'src/postgres_faults.dart';
 export 'src/postgres_store.dart';
 export 'src/public_onboarding.dart';

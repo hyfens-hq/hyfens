@@ -29,6 +29,7 @@ import 'p3e_persistence.dart';
 import 'p3e_schedule.dart';
 import 'persistence.dart';
 import 'platform_operations.dart';
+import 'platform_staff.dart';
 import 'reconciliation.dart';
 import 'release_bundle.dart';
 import 'rollout.dart';
@@ -112,6 +113,13 @@ final class ControlPlaneService {
       store: store,
       clock: _clock,
     );
+    platformStaffAccess = humanAuth == null
+        ? null
+        : PlatformStaffAccessService(
+            store: store,
+            auth: humanAuth!,
+            clock: _clock,
+          );
   }
 
   final ControlPlaneStore store;
@@ -125,6 +133,7 @@ final class ControlPlaneService {
   final NotificationService? notifications;
   final DeletionPolicy deletionPolicy;
   late final PlatformOperationsOwnershipService platformOperationsOwnership;
+  late final PlatformStaffAccessService? platformStaffAccess;
   final ArtifactRetentionPolicy artifactRetentionPolicy =
       const ArtifactRetentionPolicy();
   late final BillingService billing;
