@@ -95,6 +95,20 @@ lock. It drains durable notification deliveries asynchronously using the
 protected control-plane environment; it does not run from HTTP or provider
 webhook requests.
 
+The installation also enables the
+`hyfens-public-control-plane-dev-artifact-retention.timer`, which invokes the
+bounded `--process-artifact-retention --artifact-retention-limit 100` command
+hourly with its own host lock. It reuses
+`ControlPlaneService.runArtifactRetentionCleanup()` inside the current
+control-plane image, purges only eligible invalid `QUARANTINED` bytes, and
+preserves artifact metadata and historical evidence. A non-Cloud deployment,
+an artifact store without deletion support, or any failed item returns a
+non-zero worker status so the next persistent timer run can retry it. The
+worker does not delete `READY` artifacts, introduce a second queue, or claim
+managed object-store/backup acceptance. Operators may invoke the command
+directly with a different `--artifact-retention-limit` from 1 through 1000
+when a smaller or larger bounded batch is appropriate.
+
 For managed TEST acceptance only, the deletion worker exposes a guarded clock
 seam. Run the worker with `--process-deletions-at <UTC-ISO-8601>` while the
 process environment contains `HYFENS_DELETION_TEST_CLOCK=1` and
@@ -356,6 +370,20 @@ Use `scripts/p2-postgres-backup.sh` and
 `scripts/p2-postgres-restore.sh` for the matching PostgreSQL dump. A restored
 metadata row without matching bytes must remain unavailable or quarantined;
 the service never regenerates signed artifacts.
+
+For the complete disposable DR script, use the pinned official MinIO images
+when the host does not mirror the Docker Hub `latest` tags. The fixture uses
+loopback HTTP, so the insecure-auth flag is permitted only for this explicitly
+disposable run and must never be copied into a managed or production
+environment:
+
+```sh
+HYFENS_AUTH_ALLOW_INSECURE_HTTP=true \
+HYFENS_OBJECT_STORE_IMAGE=quay.io/minio/minio:latest \
+HYFENS_MC_IMAGE=quay.io/minio/mc:latest \
+HYFENS_ALLOW_RESTORE=1 \
+scripts/p2-dr-rehearsal.sh
+```
 
 ## Disposable two-instance rehearsal
 

@@ -352,3 +352,195 @@ Follow-up commit `93248b0` also compare-and-set fences the initial
 organization billing-to-grace transition, preventing a concurrent worker from
 having its recovered billing or credential evidence overwritten by the
 requesting process.
+
+## Managed working-day acceptance revalidation — 2026-09-13
+
+The merged working-day deletion implementation was revalidated against the
+managed control-plane composition using the approved Gmail workspace mailbox
+(`admin@hyfens.com`) as the owned acceptance mailbox. The business calendar was
+the persisted UTC Monday-Friday calendar with no configured holiday list. For
+the clean no-cancel run, verification occurred at
+`2026-09-12T18:58:53.581707Z`; the durable request projection persisted
+working day 5 as `2026-09-18`, working day 7 as `2026-09-22`, and day-8
+processing eligibility as `2026-09-23`. The test clock was passed to the
+worker; no host clock or database timestamp was edited.
+
+### Acceptance A — cancellation during grace
+
+- A disposable customer was created through public signup and real email
+  verification. No-login initiation returned the same neutral acknowledgement
+  for known and unknown addresses. The verification link was followed and
+  deletion was explicitly confirmed; opening the link alone did not mutate the
+  deletion state.
+- The organization entered the durable grace state. The privacy/status surface
+  remained available while ordinary tenant changes and billing mutations were
+  restricted by the server-side deletion boundary. The current billing state
+  was still independently readable for safe status purposes.
+- The current request generation produced one delivered day-5 reminder and one
+  delivered day-7 reminder. Cancellation after day 7 required password and
+  explicit `DELETE` confirmation, restored normal local access, and produced
+  one cancellation acknowledgement in the owned mailbox.
+- Replaying day-5, day-7, and day-8 worker/notifier work after cancellation
+  processed zero deletion requests and created no new reminder delivery. No
+  refund record/provider refund was created, and provider cancellation was not
+  falsely reported as reversed. Previously revoked credentials were not
+  implicitly restored.
+
+### Acceptance B — completion after day 8 eligibility
+
+- A separate disposable organization was verified for deletion and allowed to
+  pass the persisted day-5 and day-7 milestones without cancellation. The
+  mailbox contained exactly one each of the immediate scheduled
+  acknowledgement, day-5 reminder, day-7 final reminder, and completion
+  acknowledgement for that request, with the corresponding notification
+  deliveries reaching `delivered` at one attempt each.
+- At the persisted day-8 instant the managed deletion worker reported
+  `processed=1 completed=1`; the notification worker then delivered the final
+  completion message. The organization projection reached the explicit
+  `deleted` tombstone state and a fresh private Cloud login found no active
+  customer organization. This is not claimed as a direct authenticated 410
+  probe because credentials were revoked before that probe; the source/API
+  boundary still maps a valid deleted-organization request to
+  `ORGANIZATION_DELETED`/410.
+- The retained database evidence included audit, billing, notification,
+  deletion-request, idempotency, and organization tombstone records. The
+  disposable run created no application/environment/artifact rows, so it is
+  not managed evidence for exclusive or shared artifact-byte deletion.
+- Completion was emitted after the request reached its completed/tombstoned
+  state. The message described active-system completion and retained-evidence
+  caveats; it did not claim that backup copies had been erased.
+
+### Managed acceptance boundaries
+
+The worker timers are enabled and active, and the root-managed deployment
+configuration remains protected (`root:root`, mode `0600`). The six audited
+operational roles are assigned to `admin@hyfens.com`. These facts establish
+execution and assignment wiring, not backup readiness or mailbox/runbook
+monitoring.
+
+The following remain unclaimed as managed evidence: final personal-account
+deletion after ownership transfer, managed shared-object physical-retention
+acceptance, a scheduled/off-host encrypted backup, restore-time deletion
+tombstone reconciliation, and an isolated object-store purge run. The
+database-only restore rehearsal is recorded separately as
+`DATABASE_RESTORE_REHEARSAL_PASS`; it is not a managed backup policy or
+resurrection-proof result. The test restore container and root-only dumps are
+temporary operator rehearsal artifacts.
+
+The working-day implementation remains code-verified with partial managed
+acceptance. It does not claim statutory compliance or invent financial,
+security/audit, Enterprise, or backup retention durations.
+
+## Evidence publication — 2026-09-13
+
+The revalidation evidence in this append-only update is published on commit
+`671ebbd` and pull request `#10`. The task remains blocked at
+`CODE_VERIFIED` pending the explicitly listed managed backup/object-store and
+policy gates.
+
+## Pending billing-surface correction — 2026-09-13
+
+The managed review found that the private billing page could briefly show
+upgrade, downgrade, cancellation, and Enterprise mutation controls while the
+server-side deletion boundary correctly rejected those operations. Cloud PR
+`#11` (`fix/deletion-pending-billing-ui`, commit `d91ae85`) now reads the
+existing account/organization deletion projections, hides those controls while
+deletion is restricted, and fails closed while status is unavailable. It keeps
+authoritative billing status and the separate reviewed-refund path visible.
+The PR is validated but not yet deployed; no deletion-safety bypass was found.
+
+## Coordinator blocker reconciliation — 2026-09-13
+
+The managed deletion timers and root-protected environment are active. The
+working-day grace, cancellation CAS, reminder idempotency, organization
+tombstone, billing/refund separation, and disposable mailbox acceptance remain
+as recorded above.
+
+Two concrete implementation gaps remain under bounded review. Personal-account
+deletion currently resolves a verified identity before confirming customer
+membership, and final credential collection only recognizes `credential.issue`
+although the service emits additional credential issuance audit actions. The
+final account path also revokes credential rows rather than erasing their
+token-hash keyed records where the existing deletion store can safely do so.
+These are being corrected with focused tests; no ownership-transfer API or new
+workflow engine is being introduced.
+
+The host has not yet proven a scheduled/off-host encrypted backup, an object
+store purge/reconciliation run, or replay of deletion tombstones after an old
+backup restore. The isolated database restore remains
+`DATABASE_RESTORE_REHEARSAL_PASS` only. The additional backend service's data
+scope is not included in the current deletion/backup acceptance boundary.
+
+The previously identified sole-owner transfer flow and atomic concurrent owner
+coordination remain product/governance gaps rather than silently passing
+acceptance. Task 269 remains `CODE_VERIFIED` with managed acceptance and
+retention gates open; no claim of statutory compliance or backup erasure is
+made.
+
+## Disposable DR and security-hardening evidence — 2026-09-13
+
+The isolated corrected-manifest recovery rehearsal completed the full
+PostgreSQL plus content-addressed object backup/restore path, including
+post-restore readiness, audit validation, artifact reconciliation, and digest
+verified fetch. It used a unique disposable Compose project, pinned MinIO
+images, and an explicit loopback-only insecure-HTTP test override; it did not
+touch managed services or customer data. The result is classified
+`DISASTER_RECOVERY_DIRECTIONAL`, not a managed backup or deletion-resurrection
+proof.
+
+The account-deletion security hardening is integrated as signed-off commit
+`34acd2f`. It rejects platform-only identities for personal deletion, covers
+all four credential issuance audit actions currently emitted by the service,
+and deletes credential records by their existing token-hash storage key when
+supported, retaining the safe revocation fallback otherwise. Focused
+deletion/auth/onboarding/billing/notification validation passed 66 tests with
+analysis and formatting clean.
+
+Managed backup scheduling/off-host encryption, object purge/reconciliation,
+restore-time tombstone replay, sole-owner transfer completion, and concurrent
+ownership coordination remain open. These are not silently reclassified as
+passed by the local directional rehearsal.
+
+## Root-authorized deployment and recovery evidence — 2026-09-13
+
+The current reviewed control-plane source was synchronized into the managed
+staging boundary and deployed through the installed protected wrapper. The
+wrapper matched the reviewed source, built before replacement, retained a
+durable previous release, and kept the protected environment at
+`root:root`/`0600`. The managed service returned HTTP 200 for health and
+readiness after deployment; `app.hyfens.com` was not changed.
+
+A separate disposable Hetzner recovery rehearsal passed with PostgreSQL and
+content-addressed object backup/restore, post-restore readiness, audit
+verification, artifact reconciliation, and digest-verified artifact fetch.
+This is `DISASTER_RECOVERY_DIRECTIONAL` evidence and does not close managed
+backup scheduling, off-host encrypted rotation, object/configuration/backend
+coverage, approved RPO/RTO, or restore-time deletion-tombstone replay.
+
+The wrapper rollback rehearsal also passed: the retained previous release
+activated successfully with health/readiness HTTP 200, then the current
+reviewed release was rebuilt and redeployed successfully. The host was
+restored to the current release.
+
+The recovery run does not upgrade deletion acceptance. Managed shared/exclusive
+artifact purge and reconciliation, final personal deletion after ownership
+resolution, and old-backup tombstone replay remain unclaimed. Completion
+emails continue to describe active-system completion and retained/backup
+caveats; they do not claim backup erasure.
+
+## Managed artifact-cleanup trigger — 2026-09-13
+
+Task 276 commit `e48d52d` added the bounded operator/scheduler mode and its
+locked systemd timer. The reviewed current source was synchronized through
+the protected staging boundary, the existing installer installed the worker,
+and the current control-plane image was rebuilt and redeployed. The artifact
+retention timer is enabled and active. A managed smoke run returned `rc=0`
+with `managed=true`, `deletion_supported=true`, `considered=0`, `purged=0`,
+and `failed=0`; no eligible disposable artifact rows existed for a physical
+purge assertion. This is trigger/deployment evidence only, not shared-object,
+object-store purge, backup, or tombstone-replay acceptance.
+
+The deletion and notification timers remained healthy and the public API
+health/readiness checks stayed HTTP 200 after redeployment. Task 269 remains
+`CODE_VERIFIED` with managed final-personal-deletion, shared-object purge,
+backup/tombstone, and legal-retention gates open.

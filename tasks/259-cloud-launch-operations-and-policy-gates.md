@@ -581,3 +581,219 @@ provider-ID equality only; callback context fields are not correlation keys.
 This evidence advances Keplars provider correlation for the current live
 contract. It does not close the independent Task 259 launch gates for backup
 and restore, operational ownership, tax, or legal/evidence-retention policy.
+
+## Working-day deletion managed acceptance update — 2026-09-13
+
+Task 269's merged working-day implementation was exercised against the current
+managed composition using the approved Gmail workspace mailbox
+(`admin@hyfens.com`) as the owned acceptance mailbox. The configured calendar
+is UTC, Monday-Friday, with no silently assumed holidays. A clean disposable
+request verified at `2026-09-12T18:58:53.581707Z` persisted day 5 as
+`2026-09-18`, day 7 as `2026-09-22`, and day-8 processing eligibility as
+`2026-09-23`. The supported worker test clock supplied these instants; no
+database timestamps or host clock were modified.
+
+Acceptance A passed the recoverable path: known/unknown no-login initiation was
+neutral, verification was explicit, the grace request was restricted but
+status/cancellation remained available, day-5 and day-7 messages were each
+delivered once, password-confirmed cancellation restored local access, and
+replayed stale day-5/day-7/day-8 work became no-ops. No automatic refund was
+created and no irreversible provider cancellation was represented as undone.
+
+Acceptance B passed the clean organization path: the worker processed one due
+request and completed one tombstoned organization at day 8. The owned mailbox
+contained exactly one scheduled acknowledgement, one day-5 reminder, one
+day-7 final reminder, and one completion acknowledgement. The corresponding
+notification rows were delivered with one attempt each. The final private
+Cloud login no longer found an active organization. The managed run did not
+create artifact rows, so it does not claim shared/exclusive object-store
+acceptance or a direct 410 probe after credential revocation.
+
+The managed timers are enabled/active, protected environments remain
+`root:root`/`0600`, and all six operational roles are assigned to
+`admin@hyfens.com`. The Hetzner evidence remains only
+`DATABASE_RESTORE_REHEARSAL_PASS`: no scheduled/off-host encrypted backup,
+approved rotation/RPO/RTO, object/configuration backup, or deletion-tombstone
+replay after restoring an old backup is proven. Financial/refund,
+security/audit, Enterprise-commercial, and backup retention durations remain
+`LEGAL_POLICY_REQUIRED`; tax remains `COMMERCIAL_POLICY_BLOCKER: tax`.
+
+Current managed matrix delta:
+
+| Workflow | Code | Managed | Provider | Operational |
+| --- | --- | --- | --- | --- |
+| No-login deletion | Yes | Partial: neutral initiation, real verification, grace, and mailbox evidence | N/A | Email/worker path exercised; backup caveat remains |
+| Organization deletion | Yes | Partial-to-verified for the staged disposable run | N/A | Timer, worker, tombstone, and completion email exercised; object/backup proof open |
+| Account deletion | Yes | Partial: ownership-safe personal path exercised; final post-transfer run open | N/A | Credential/session and ownership boundaries remain policy-gated |
+| Backup/restore | Yes | Database restore rehearsal only | N/A | Managed schedule, off-host copy, and resurrection protection open |
+
+The live pricing catalog remains blocked by its explicit legal reference gate
+(`/api/pricing` currently returns 503 with `pricing_unavailable`); no
+unapproved legal auto-approval or LIVE payment activation was introduced.
+The separately authorized `app.hyfens.com` workspace cutover remains
+untouched. Task 259 therefore remains `NOT_READY`, and Task 256B remains
+`DO_NOT_CUT_OVER`.
+
+## Evidence publication — 2026-09-13
+
+The managed deletion revalidation and launch-matrix delta are published on
+commit `671ebbd` and pull request `#10`. The launch verdict remains
+`NOT_READY`; no LIVE payment activation or `app.hyfens.com` cutover was
+performed.
+
+## Pending deletion-aware billing UI correction — 2026-09-13
+
+Cloud PR `#11` (`fix/deletion-pending-billing-ui`, commit `d91ae85`) closes a
+presentation mismatch found during managed acceptance: the backend already
+blocked billing mutations during deletion, but the private billing page could
+render those actions until its status was known. The correction uses the
+existing deletion-status endpoints, hides plan/renewal/Enterprise mutation
+controls during restricted or unknown status, and leaves billing status and
+reviewed refund access separate. Typecheck, lint, production build, and diff
+checks pass. It remains pending review/deployment and does not change
+`app.hyfens.com`.
+
+## Coordinator blocker reconciliation — 2026-09-13
+
+The root-authorized managed-host audit was completed without changing
+`app.hyfens.com` or protected secret ownership. The live public and API
+composition remains healthy, the deletion and notification timers are active,
+and the six operational roles are assigned to `admin@hyfens.com`.
+
+The disposable recovery rehearsal did not reach its backup/restore assertions:
+the host could pull the pinned official MinIO Client image from Quay, but the
+current Compose files hard-code `minio/mc:latest` in `object-bootstrap` while
+the existing object-backup script already accepts `HYFENS_MC_IMAGE`. This is a
+reproducible deployment/configuration defect, not evidence of data loss; the
+rehearsal was isolated and live services were left untouched. A small Compose
+image-override correction is being prepared for review.
+
+The same audit found no application-owned scheduled database backup, off-host
+encrypted rotation, object/configuration backup, or restore-time deletion
+tombstone replay proof on the managed host. The root-only disposable database
+dumps and isolated PostgreSQL restore remain classified as
+`DATABASE_RESTORE_REHEARSAL_PASS`, not managed backup readiness. Artifact
+cleanup/reconciliation is not invoked by the deployed deletion timer, and the
+additional data-bearing `hyfens-backend.service` remains outside the proven
+backup scope.
+
+The tax/retention research is source-backed decision input only. Seller/MoR,
+GST/VAT jurisdiction, invoice/credit-note ownership, geolocation evidence,
+financial/security/Enterprise retention durations, and backup rotation still
+require maintainer/accounting/legal decisions. No statutory duration or tax
+calculation was added. Task 259 remains `NOT_READY`; Task 256B remains
+`DO_NOT_CUT_OVER`.
+
+## Disposable DR rerun and deletion hardening — 2026-09-13
+
+The corrected Compose manifests were exercised in an isolated Docker project
+with pinned official MinIO images and the explicit rehearsal-only
+`HYFENS_AUTH_ALLOW_INSECURE_HTTP=true` setting required for its loopback HTTP
+endpoint. The run completed the full directional sequence: control-plane
+startup, signed artifact registration/upload, PostgreSQL and object-store
+backup, destroy/recreate, database/object restore, readiness, audit
+verification, reconciliation, and artifact fetch. Source and restored
+artifact digests matched and the rehearsal observed no data loss in the
+quiesced disposable run. This is `DISASTER_RECOVERY_DIRECTIONAL` evidence,
+not managed backup readiness.
+
+The run does not close the managed gate: no scheduled/off-host encrypted
+backup rotation, object/configuration backup, approved RPO/RTO, or
+restore-time deletion-tombstone replay is installed on the managed host. The
+additional `hyfens-backend.service` data scope remains unresolved.
+
+The deletion hardening correction is now integrated as signed-off commit
+`34acd2f` (cherry-picked from the bounded worker change). Account deletion
+requires an active customer identity, discovers all credential issuance audit
+variants emitted by the service, and erases token-hash-keyed credential rows
+when the existing deletion seam supports it, with revocation fallback. The
+focused deletion/auth/onboarding/billing/notification suite passed 66 tests and
+`dart analyze`/format checks passed. Sole-owner transfer and atomic concurrent
+ownership resolution remain explicit blockers; no transfer API was invented.
+
+## Root-authorized deployment and recovery evidence — 2026-09-13
+
+The staged source was synchronized from reviewed commit `0125e30` into the
+managed host staging boundary. The installed public control-plane wrapper
+matches the reviewed staged wrapper byte-for-byte, uses the current workspace
+topology, and contains no obsolete `apps/web` or provider-package path
+assumptions. The protected public control-plane environment remains
+`root:root` with mode `0600`.
+
+The protected wrapper built the current control-plane image before service
+replacement, recreated the intended managed TEST service, and completed its
+readiness gate. Post-deployment checks returned HTTP 200 for both
+`https://api.hyfens.com/healthz` and `https://api.hyfens.com/readyz`; the active
+control-plane and PostgreSQL containers were healthy. No `app.hyfens.com`
+route, DNS record, or customer-workspace target was changed.
+
+The disposable Hetzner recovery rehearsal then passed in a unique Compose
+project using pinned Quay MinIO images and rehearsal-only loopback HTTP
+configuration. It covered control-plane startup, artifact registration and
+upload, PostgreSQL and content-addressed object backup, destroy/recreate,
+database/object restore, readiness, audit verification, reconciliation, and
+digest-verified artifact fetch. Source and restored artifact digests matched,
+with no data loss observed in the quiesced rehearsal. This is
+`DISASTER_RECOVERY_DIRECTIONAL` evidence only; it does not prove an
+application-owned scheduled/off-host encrypted backup, approved backup
+rotation/RPO/RTO, full configuration/backend coverage, or restore-time
+deletion-tombstone replay.
+
+The durable rollback path was exercised. The retained previous release was
+activated with `hyfens-public-control-plane-dev-deploy --rollback` and
+returned HTTP 200 for health/readiness. The current reviewed release was then
+rebuilt and redeployed through the same protected wrapper and again returned
+HTTP 200 for health/readiness. The host was not left on the rollback release.
+
+The live policy route smoke remains: `/`, `/pricing`, `/pricing.md`, `/terms`,
+`/privacy`, `/refund-policy`, and `/account-deletion` return 200. The
+authoritative `/api/pricing` response remains 503 `pricing_unavailable` because
+the legal catalog reference gate is not approved; route reachability is not
+legal/catalog approval. No live payment activation was performed.
+
+The managed launch verdict remains `NOT_READY`. Remaining independent gates
+are scheduled/off-host encrypted backup and restore-time tombstone replay,
+managed object/configuration/backend backup scope, artifact purge and
+reconciliation acceptance, approved tax and evidence-retention policy,
+catalog/legal approval, personal ownership-resolution completion, and
+Enterprise end-to-end TEST acceptance if Enterprise remains in launch scope.
+
+## Managed artifact-retention trigger installation — 2026-09-13
+
+The bounded artifact-retention worker from Task 276 was reviewed and pushed as
+signed-off commit `e48d52d`. The current control-plane source and deployment
+files were synchronized into the root-managed staging boundary, installed by
+the existing protected installer, and the control plane was rebuilt and
+replaced only after the protected wrapper completed its build and readiness
+sequence. The new
+`hyfens-public-control-plane-dev-artifact-retention.timer` is enabled and
+active.
+
+The managed worker smoke returned `rc=0` with
+`managed=true`, `deletion_supported=true`, `considered=0`, `purged=0`, and
+`failed=0`. No eligible disposable artifact rows were present, so this proves
+the trigger, container command, lock path, and fail-closed result handling;
+it does not claim a physical object purge or shared-object acceptance. The
+existing deletion and notification timers remain enabled and active, and the
+API health/readiness checks remained HTTP 200 after deployment.
+
+Task 259 remains `NOT_READY`: scheduled/off-host encrypted backup and
+restore-time deletion-tombstone replay, approved backup/evidence retention,
+tax/catalog approval, ownership resolution, and any remaining Enterprise
+acceptance are still independent gates.
+
+## OpenShip backup-destination audit — 2026-09-13
+
+The authenticated OpenShip Backups surface was inspected for the managed
+Hetzner server. It reports `No backup destinations yet` and offers only
+unconfigured S3-compatible, SFTP, existing-server, or local-disk targets.
+The host's timer inventory shows the Hyfens deletion, notification, and
+artifact-retention timers plus the OS `dpkg-db-backup.timer`; it does not show
+an application-owned Hyfens database/object/configuration backup timer.
+
+This is direct operational evidence that the managed recovery gate is still
+open. The earlier root-only database dump/restore rehearsal remains
+`DATABASE_RESTORE_REHEARSAL_PASS` evidence for an isolated test, not scheduled
+or off-host encrypted backup readiness. No backup destination, retention
+interval, RPO/RTO, or restore-time deletion-tombstone replay was invented or
+configured by this audit.

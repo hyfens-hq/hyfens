@@ -205,6 +205,49 @@ void main() {
     expect(calendar.dateKeyAt(DateTime.utc(2026, 9, 21)), '2026-09-21');
   });
 
+  test('account deletion requires an active customer identity', () async {
+    final customer = await _createCustomer(
+      email: 'platform-only-deletion@example.com',
+      password: 'correct horse battery staple',
+    );
+    final platformUser = HumanUserRecord(
+      id: 'usr_platform_only_deletion',
+      email: 'platform-only-deletion-operator@example.com',
+      passwordHash: 'platform-password-hash',
+      active: true,
+      memberships: <HumanMembership>[
+        HumanMembership(
+          organizationId: customer.organizationId,
+          role: 'owner',
+          capabilities: controlScopes,
+          profileName: 'super-admin',
+          audience: platformAuthorizationAudience,
+          platformCapabilities: platformCapabilities,
+        ),
+      ],
+      createdAt: now,
+      emailVerified: true,
+      emailVerifiedAt: now,
+    );
+    await store.createJson('users', platformUser.id, platformUser.toJson());
+
+    await expectLater(
+      service.deletion!.requestAccountDeletion(
+        userId: platformUser.id,
+        actorId: platformUser.id,
+        requestId: 'request-platform-only-delete',
+      ),
+      throwsA(
+        isA<ControlPlaneException>().having(
+          (error) => error.code,
+          'code',
+          'FORBIDDEN',
+        ),
+      ),
+    );
+    expect(await store.listJson(accountDeletionRequestCollection), isEmpty);
+  });
+
   test(
     'self-hosted organization deletion status and cancellation are unavailable',
     () async {
@@ -553,6 +596,217 @@ void main() {
       );
     },
   );
+
+  test('account deletion discovers and erases every issued credential audit variant', () async {
+    final customer = await _createCustomer(
+      email: 'credential-erasure@example.com',
+      password: 'correct horse battery staple',
+    );
+    final user = HumanUserRecord.fromJson(
+      (await store.readJson('users', customer.userId))!,
+    );
+    final membership = user.memberships.single;
+    await store.replaceJson(
+      'users',
+      customer.userId,
+      user
+          .copyWith(
+            memberships: <HumanMembership>[
+              HumanMembership(
+                organizationId: membership.organizationId,
+                role: 'member',
+                capabilities: membership.capabilities,
+                profileName: membership.profileName,
+                audience: membership.audience,
+                platformCapabilities: membership.platformCapabilities,
+              ),
+            ],
+          )
+          .toJson(),
+    );
+
+    const issuance =
+        <({String action, CredentialKind kind, Set<String> scopes})>[
+          (
+            action: 'credential.issue',
+            kind: CredentialKind.control,
+            scopes: <String>{'application:read'},
+          ),
+          (
+            action: 'observation.token_issued',
+            kind: CredentialKind.observation,
+            scopes: observationScopes,
+          ),
+          (
+            action: 'scheduler.credential_issued',
+            kind: CredentialKind.scheduler,
+            scopes: schedulerScopes,
+          ),
+          (
+            action: 'health.auto_halt_principal_issued',
+            kind: CredentialKind.autoHalt,
+            scopes: autoHaltScopes,
+          ),
+        ];
+    final credentialIds = <String>[];
+    final storageIds = <String>[];
+    for (final item in issuance) {
+      final suffix = item.kind.name.toLowerCase();
+      final credentialId = 'cred_account_$suffix';
+      final storageId = 'hash_account_$suffix';
+      credentialIds.add(credentialId);
+      storageIds.add(storageId);
+      final applicationScoped = item.kind != CredentialKind.control;
+      await store.createJson(
+        'credentials',
+        storageId,
+        CredentialRecord(
+          id: credentialId,
+          organizationId: customer.organizationId,
+          kind: item.kind,
+          tokenHash: storageId,
+          scopes: item.scopes,
+          applicationId: applicationScoped ? 'app_account_deletion' : null,
+          environmentId: applicationScoped ? 'env_account_deletion' : null,
+          createdAt: now,
+          expiresAt: null,
+          revoked: false,
+        ).toJson(),
+      );
+      await store.createJson(
+        'audit',
+        'audit_account_$suffix',
+        <String, Object?>{
+          'action': item.action,
+          'actorId': customer.userId,
+          'resourceId': credentialId,
+        },
+      );
+    }
+
+    final request = await service.deletion!.requestAccountDeletion(
+      userId: customer.userId,
+      actorId: customer.userId,
+      requestId: 'request-credential-erasure',
+    );
+    expect(request['status'], 'grace_period');
+    expect(request['blockedCredentialIds'], containsAll(credentialIds));
+    await store.replaceJson(
+      'users',
+      customer.userId,
+      HumanUserRecord(
+        id: user.id,
+        email: 'deleted+${user.id}@invalid.hyfens',
+        passwordHash: 'deleted',
+        active: false,
+        memberships: const <HumanMembership>[],
+        createdAt: user.createdAt,
+        emailVerified: false,
+        deletedAt: now,
+      ).toJson(),
+    );
+
+    final completed = await service.deletion!.processDeletion(
+      requestId: request['id']! as String,
+      now: DateTime.parse(request['processingAt']! as String)
+          .add(const Duration(minutes: 1)),
+    );
+    expect(completed['status'], 'completed');
+    for (final storageId in storageIds) {
+      expect(await store.readJson('credentials', storageId), isNull);
+    }
+  });
+
+  test('account deletion falls back to credential revocation without record deletion', () async {
+    final customer = await _createCustomer(
+      email: 'credential-fallback@example.com',
+      password: 'correct horse battery staple',
+    );
+    final user = HumanUserRecord.fromJson(
+      (await store.readJson('users', customer.userId))!,
+    );
+    final membership = user.memberships.single;
+    await store.replaceJson(
+      'users',
+      customer.userId,
+      user
+          .copyWith(
+            memberships: <HumanMembership>[
+              HumanMembership(
+                organizationId: membership.organizationId,
+                role: 'member',
+                capabilities: membership.capabilities,
+                profileName: membership.profileName,
+                audience: membership.audience,
+                platformCapabilities: membership.platformCapabilities,
+              ),
+            ],
+          )
+          .toJson(),
+    );
+    const credentialId = 'cred_account_fallback';
+    const storageId = 'hash_account_fallback';
+    await store.createJson(
+      'credentials',
+      storageId,
+      CredentialRecord(
+        id: credentialId,
+        organizationId: customer.organizationId,
+        kind: CredentialKind.control,
+        tokenHash: storageId,
+        scopes: <String>{'application:read'},
+        applicationId: null,
+        environmentId: null,
+        createdAt: now,
+        expiresAt: null,
+        revoked: false,
+      ).toJson(),
+    );
+    await store.createJson('audit', 'audit_account_fallback', <String, Object?>{
+      'action': 'credential.issue',
+      'actorId': customer.userId,
+      'resourceId': credentialId,
+    });
+
+    final fallbackDeletion = AccountDeletionService(
+      store: _NoRecordDeletionStore(store),
+      billing: service.billing,
+      deploymentModel: DeploymentModel.cloud,
+      policy: const DeletionPolicy(graceWorkingDays: 7),
+      clock: () => now,
+    );
+    final request = await fallbackDeletion.requestAccountDeletion(
+      userId: customer.userId,
+      actorId: customer.userId,
+      requestId: 'request-credential-fallback',
+    );
+    expect(request['blockedCredentialIds'], contains(credentialId));
+    await store.replaceJson(
+      'users',
+      customer.userId,
+      HumanUserRecord(
+        id: user.id,
+        email: 'deleted+${user.id}@invalid.hyfens',
+        passwordHash: 'deleted',
+        active: false,
+        memberships: const <HumanMembership>[],
+        createdAt: user.createdAt,
+        emailVerified: false,
+        deletedAt: now,
+      ).toJson(),
+    );
+
+    final completed = await fallbackDeletion.processDeletion(
+      requestId: request['id']! as String,
+      now: DateTime.parse(request['processingAt']! as String)
+          .add(const Duration(minutes: 1)),
+    );
+    expect(completed['status'], 'completed');
+    expect(
+      (await store.readJson('credentials', storageId))!['revoked'],
+      isTrue,
+    );
+  });
 
   test(
     'working-day reminders are durable and become no-ops after cancellation',
@@ -1015,3 +1269,151 @@ Future<_Customer> _createCustomer({
 // test's setUp-created service and delivery to remain isolated.
 late _DeletionDelivery deliveryForCurrentTest;
 late ControlPlaneService serviceForCurrentTest;
+
+final class _NoRecordDeletionStore implements ControlPlaneStore {
+  _NoRecordDeletionStore(this.delegate);
+
+  final ControlPlaneStore delegate;
+
+  @override
+  Future<void> initialize() => delegate.initialize();
+
+  @override
+  Future<void> close() => delegate.close();
+
+  @override
+  Future<void> checkReadiness() => delegate.checkReadiness();
+
+  @override
+  Future<Map<String, Object?>?> readJson(String collection, String id) =>
+      delegate.readJson(collection, id);
+
+  @override
+  Future<List<Map<String, Object?>>> listJson(String collection) =>
+      delegate.listJson(collection);
+
+  @override
+  Future<void> createJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) => delegate.createJson(collection, id, value);
+
+  @override
+  Future<void> replaceJson(
+    String collection,
+    String id,
+    Map<String, Object?> value,
+  ) => delegate.replaceJson(collection, id, value);
+
+  @override
+  Future<Map<String, Object?>?> touchSessionIfActive({
+    required String id,
+    required String expectedSecretHash,
+    required DateTime now,
+  }) => delegate.touchSessionIfActive(
+    id: id,
+    expectedSecretHash: expectedSecretHash,
+    now: now,
+  );
+
+  @override
+  Future<bool> revokeSessionIfActive({
+    required String id,
+    required String expectedSecretHash,
+    required DateTime revokedAt,
+  }) => delegate.revokeSessionIfActive(
+    id: id,
+    expectedSecretHash: expectedSecretHash,
+    revokedAt: revokedAt,
+  );
+
+  @override
+  Future<void> createIdempotency(
+    String scope,
+    String key,
+    Map<String, Object?> value,
+  ) => delegate.createIdempotency(scope, key, value);
+
+  @override
+  Future<Map<String, Object?>?> readIdempotency(String scope, String key) =>
+      delegate.readIdempotency(scope, key);
+
+  @override
+  Future<void> appendAudit(String id, Map<String, Object?> value) =>
+      delegate.appendAudit(id, value);
+
+  @override
+  Future<List<Map<String, Object?>>> readAuditChain() =>
+      delegate.readAuditChain();
+
+  @override
+  Future<void> putArtifact(String digest, List<int> bytes) =>
+      delegate.putArtifact(digest, bytes);
+
+  @override
+  Future<List<int>?> readArtifact(String digest) =>
+      delegate.readArtifact(digest);
+
+  @override
+  Future<ObservationWriteResult> createObservation(
+    String organizationId,
+    String applicationId,
+    String environmentId,
+    String eventId,
+    Map<String, Object?> value,
+  ) => delegate.createObservation(
+    organizationId,
+    applicationId,
+    environmentId,
+    eventId,
+    value,
+  );
+
+  @override
+  Future<List<Map<String, Object?>>> listObservations({
+    String? organizationId,
+    String? applicationId,
+    String? environmentId,
+  }) => delegate.listObservations(
+    organizationId: organizationId,
+    applicationId: applicationId,
+    environmentId: environmentId,
+  );
+
+  @override
+  Future<int> deleteObservations({
+    required String organizationId,
+    String? applicationId,
+    String? environmentId,
+    required DateTime olderThan,
+  }) => delegate.deleteObservations(
+    organizationId: organizationId,
+    applicationId: applicationId,
+    environmentId: environmentId,
+    olderThan: olderThan,
+  );
+
+  @override
+  Future<RolloutTransitionCommitResult> commitRolloutTransition({
+    required String rolloutId,
+    required int expectedRevision,
+    required Map<String, Object?> rollout,
+    required Map<String, Object?> revision,
+    required Map<String, Object?> audit,
+    required String idempotencyScope,
+    required String idempotencyKey,
+    required String requestDigest,
+    required Map<String, Object?> idempotencyResult,
+  }) => delegate.commitRolloutTransition(
+    rolloutId: rolloutId,
+    expectedRevision: expectedRevision,
+    rollout: rollout,
+    revision: revision,
+    audit: audit,
+    idempotencyScope: idempotencyScope,
+    idempotencyKey: idempotencyKey,
+    requestDigest: requestDigest,
+    idempotencyResult: idempotencyResult,
+  );
+}

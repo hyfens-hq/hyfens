@@ -20,6 +20,9 @@ source_timer="$stage/hyfens-public-control-plane-dev-deletion.timer"
 source_notification_worker="$stage/hyfens-public-control-plane-dev-notification-worker"
 source_notification_service="$stage/hyfens-public-control-plane-dev-notification.service"
 source_notification_timer="$stage/hyfens-public-control-plane-dev-notification.timer"
+source_artifact_retention_worker="$stage/hyfens-public-control-plane-dev-artifact-retention-worker"
+source_artifact_retention_service="$stage/hyfens-public-control-plane-dev-artifact-retention.service"
+source_artifact_retention_timer="$stage/hyfens-public-control-plane-dev-artifact-retention.timer"
 wrapper=/usr/local/sbin/hyfens-public-control-plane-dev-deploy
 worker=/usr/local/sbin/hyfens-public-control-plane-dev-deletion-worker
 service=/etc/systemd/system/hyfens-public-control-plane-dev-deletion.service
@@ -27,6 +30,9 @@ timer=/etc/systemd/system/hyfens-public-control-plane-dev-deletion.timer
 notification_worker=/usr/local/sbin/hyfens-public-control-plane-dev-notification-worker
 notification_service=/etc/systemd/system/hyfens-public-control-plane-dev-notification.service
 notification_timer=/etc/systemd/system/hyfens-public-control-plane-dev-notification.timer
+artifact_retention_worker=/usr/local/sbin/hyfens-public-control-plane-dev-artifact-retention-worker
+artifact_retention_service=/etc/systemd/system/hyfens-public-control-plane-dev-artifact-retention.service
+artifact_retention_timer=/etc/systemd/system/hyfens-public-control-plane-dev-artifact-retention.timer
 sudoers=/etc/sudoers.d/hyfens-public-control-plane-dev-deploy
 
 [ -d "$stage" ] || {
@@ -55,13 +61,16 @@ for file in \
   "$source_timer" \
   "$source_notification_worker" \
   "$source_notification_service" \
-  "$source_notification_timer"; do
+  "$source_notification_timer" \
+  "$source_artifact_retention_worker" \
+  "$source_artifact_retention_service" \
+  "$source_artifact_retention_timer"; do
   [ -f "$file" ] || {
     echo "required worker file is missing: $file" >&2
     exit 1
   }
   [ "$(readlink -f "$file")" = "$file" ] || {
-    echo "required deletion worker file must not be a symlink: $file" >&2
+    echo "required worker file must not be a symlink: $file" >&2
     exit 1
   }
 done
@@ -73,6 +82,10 @@ done
   echo 'notification worker must be executable' >&2
   exit 1
 }
+[ -x "$source_artifact_retention_worker" ] || {
+  echo 'artifact retention worker must be executable' >&2
+  exit 1
+}
 
 install -o root -g root -m 0755 "$source_wrapper" "$wrapper"
 install -o root -g root -m 0755 "$source_worker" "$worker"
@@ -81,6 +94,9 @@ install -o root -g root -m 0644 "$source_timer" "$timer"
 install -o root -g root -m 0755 "$source_notification_worker" "$notification_worker"
 install -o root -g root -m 0644 "$source_notification_service" "$notification_service"
 install -o root -g root -m 0644 "$source_notification_timer" "$notification_timer"
+install -o root -g root -m 0755 "$source_artifact_retention_worker" "$artifact_retention_worker"
+install -o root -g root -m 0644 "$source_artifact_retention_service" "$artifact_retention_service"
+install -o root -g root -m 0644 "$source_artifact_retention_timer" "$artifact_retention_timer"
 
 sudoers_tmp=$(mktemp /etc/sudoers.d/.hyfens-public-control-plane-dev-deploy.XXXXXX)
 trap 'rm -f "$sudoers_tmp"' EXIT
@@ -94,5 +110,6 @@ trap - EXIT
 systemctl daemon-reload
 systemctl enable --now hyfens-public-control-plane-dev-deletion.timer >/dev/null
 systemctl enable --now hyfens-public-control-plane-dev-notification.timer >/dev/null
+systemctl enable --now hyfens-public-control-plane-dev-artifact-retention.timer >/dev/null
 
 echo 'public control-plane development deployment access enabled' >&2

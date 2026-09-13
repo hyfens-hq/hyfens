@@ -20,6 +20,38 @@ private Cloud web: sibling hyfens-cloud-web/site
 private-web deployment: sibling hyfens-cloud-web/deploy/web
 ```
 
+## Current managed-gate reconciliation — 2026-09-13
+
+The historical deployment notes and evidence rows below are retained for
+incident history. The current managed host has now completed the root-only
+installation boundary: the reviewed control-plane wrapper and the bounded
+deletion, notification, and artifact-retention worker/timer files are
+installed from the staged current source. The control-plane was rebuilt and
+redeployed through the protected wrapper, and health/readiness remained HTTP
+200. Protected environment files remain root-owned with mode `0600`.
+
+The artifact-retention timer is enabled and active. Its first managed smoke
+returned `managed=true`, `deletion_supported=true`, `considered=0`,
+`purged=0`, and `failed=0`. No eligible disposable artifact rows were present,
+so this proves scheduling and fail-closed execution only; it does not prove a
+physical exclusive purge or shared content-addressed object retention.
+
+The remaining launch gates are:
+
+| Gate | Current state | Closure evidence or decision |
+| --- | --- | --- |
+| Managed deployment and rollback | Verified | Keep the protected wrapper and previous-release rehearsal current. |
+| Deletion/notification/artifact triggers | Installed; smoke passed | Exercise eligible exclusive/shared artifact rows and record reconciliation. |
+| Backup/restore | Directional disposable rehearsal only | Add scheduled encrypted/off-host DB, object, configuration, and backend coverage; approve rotation/RPO/RTO; replay deletion tombstones before exposure. |
+| Catalog/legal approval | Open; `/api/pricing` remains an explicit `pricing_unavailable` gate | Legal/maintainer approval with the exact policy/catalog reference. |
+| Tax and evidence retention | Open | Accountant/legal/security approval for jurisdiction, invoice/tax treatment, evidence durations, and holds. |
+| Personal/organization deletion | Code verified; managed boundaries partial | Complete ownership-resolution, final personal, and object/tombstone acceptance. |
+| Enterprise payment | Open if Enterprise remains launch scope | Complete disposable quote/payment/activation acceptance or explicitly defer the scope and public copy. |
+| Operational ownership | Roles assigned to `admin@hyfens.com` | Prove mailbox/alert monitoring and execute response drills. |
+
+No LIVE Razorpay activation, production payment, or `app.hyfens.com` customer
+workspace cutover was performed.
+
 The repository-owned wrappers now build the current source in an isolated
 directory before replacing a live target. They validate protected
 configuration, Compose, safe file trees, readiness, and the Nginx boundary;
@@ -303,3 +335,18 @@ The older list above is retained as deployment history. Current status is:
 Task 259 therefore remains `NOT_READY`, and Task 256B remains
 `DO_NOT_CUT_OVER`. The Hetzner database rehearsal reduces uncertainty but does
 not close the recovery or policy gates.
+
+## OpenShip backup-destination audit — 2026-09-13
+
+The authenticated OpenShip Backups page for the managed Hetzner server was
+checked during the current gate reconciliation. It reports `No backup
+destinations yet`; no S3-compatible, SFTP, existing-server, or local-disk
+destination is configured. The server timer inventory contains the Hyfens
+deletion, notification, and artifact-retention timers and the OS
+`dpkg-db-backup.timer`, but no application-owned Hyfens backup timer.
+
+The existing root-only PostgreSQL restore rehearsal therefore remains
+`DATABASE_RESTORE_REHEARSAL_PASS` only. It does not establish scheduled,
+off-host encrypted database/object/configuration backup, an approved rotation
+interval/RPO/RTO, or restore-time deletion-tombstone replay. The backup gate
+and Task 259 `NOT_READY` verdict remain unchanged.
