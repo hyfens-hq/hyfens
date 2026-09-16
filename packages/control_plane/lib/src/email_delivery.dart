@@ -50,6 +50,12 @@ final class KeplarsHumanMessageDelivery
     final from =
         _meaningful(values['HYFENS_EMAIL_FROM']) ??
         HyfensSenderPolicy.transactional.from;
+    if (from != HyfensSenderPolicy.transactional.from &&
+        from != HyfensSenderPolicy.team.from) {
+      throw ArgumentError(
+        'HYFENS_EMAIL_FROM must be no-reply@hyfens.com or team@hyfens.com',
+      );
+    }
     final origins = _origins(values['HYFENS_WEB_ORIGINS']);
     final dashboard = _configuredOrigin(
       origins,

@@ -350,3 +350,42 @@ The existing root-only PostgreSQL restore rehearsal therefore remains
 off-host encrypted database/object/configuration backup, an approved rotation
 interval/RPO/RTO, or restore-time deletion-tombstone replay. The backup gate
 and Task 259 `NOT_READY` verdict remain unchanged.
+
+## Current public-edge recheck — 2026-09-15
+
+The older route and deployment rows above are retained as historical evidence.
+This non-mutating recheck supersedes their route status for the current public
+edge:
+
+<!-- markdownlint-disable MD013 -->
+
+| Probe | Result |
+| --- | --- |
+| `api.hyfens.com/healthz` | HTTP 200 JSON |
+| `api.hyfens.com/readyz` | HTTP 200 JSON |
+| `hyfens.com/`, `/pricing`, `/pricing.md`, `/terms`, `/privacy`, `/refund-policy`, and `/account-deletion` | HTTP 200 |
+| `hyfens.com/api/pricing` | HTTP 200 JSON; live paid checkout and live overage remain false |
+| `app.hyfens.com/` | HTTP 200; legacy customer-workspace cutover remains separately unauthorized |
+
+<!-- markdownlint-enable MD013 -->
+
+The route responses prove reachability only. They do not close legal, tax,
+email, backup/restore, deletion-tombstone, Enterprise, provider-console,
+production-attestation, or LIVE payment gates. The consolidated current
+recommendation remains `NOT_READY`; see
+`docs/operations/cloud-launch-gate-matrix.md` for the active closure list.
+
+## Current notification wiring recheck — 2026-09-15
+
+The current control-plane entry point constructs the shared Keplars provider
+and notification service from protected environment values. When the
+encrypted notification payload key is present, authentication and deletion
+messages use the durable queue and the installed notification worker;
+otherwise the compatibility human-delivery path is used. Both paths use the
+shared renderer and sender policy, and the compatibility path now rejects an
+unapproved `HYFENS_EMAIL_FROM` value before constructing the provider.
+
+This verifies source wiring only. Managed launch still requires protected
+Keplars configuration, a verified sender/domain, successful verification,
+recovery, deletion, and Enterprise inquiry delivery, plus monitored bounce,
+complaint, and mailbox response evidence.

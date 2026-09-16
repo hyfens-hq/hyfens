@@ -943,6 +943,71 @@ void main() {
     );
   });
 
+  test('organization deletion retains bytes until same-organization duplicate is removed', () async {
+    final customer = await _createCustomer(
+      email: 'duplicate-artifact-owner@example.com',
+      password: 'correct horse battery staple',
+    );
+    final bytes = <int>[21, 22, 23, 24];
+    final digest = sha256Digest(bytes);
+    await store.putArtifact(digest, bytes);
+    for (final id in const <String>[
+      'artifact_duplicate_a',
+      'artifact_duplicate_b',
+    ]) {
+      await store.createJson(
+        'artifacts',
+        id,
+        ArtifactRecord(
+          id: id,
+          organizationId: customer.organizationId,
+          patchId: 'patch_$id',
+          sha256: digest,
+          sizeBytes: bytes.length,
+          contentType: 'application/octet-stream',
+          state: artifactReadyState,
+          createdAt: now,
+        ).toJson(),
+      );
+    }
+
+    final request = await service.deletion!.requestOrganizationDeletion(
+      userId: customer.userId,
+      organizationId: customer.organizationId,
+      requestId: 'request-duplicate-artifact-delete',
+    );
+    final processingNow = DateTime.parse(request['processingAt']! as String)
+        .add(const Duration(minutes: 1));
+    final first = await service.deletion!.processDeletion(
+      requestId: request['id']! as String,
+      maxItems: 1,
+      now: processingNow,
+    );
+
+    expect(first['status'], 'processing');
+    expect(await store.readJson('artifacts', 'artifact_duplicate_a'), isNull);
+    expect(
+      await store.readJson('artifacts', 'artifact_duplicate_b'),
+      isNotNull,
+    );
+    expect(await store.readArtifact(digest), bytes);
+
+    var state = first;
+    for (
+      var attempt = 0;
+      attempt < 20 && state['status'] != 'completed';
+      attempt++
+    ) {
+      state = await service.deletion!.processDeletion(
+        requestId: request['id']! as String,
+        maxItems: 1,
+        now: processingNow,
+      );
+    }
+    expect(state['status'], 'completed');
+    expect(await store.readArtifact(digest), isNull);
+  });
+
   test(
     'organization deletion is staged, tenant-safe, and shared-object safe',
     () async {

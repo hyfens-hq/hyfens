@@ -1589,7 +1589,6 @@ final class AccountDeletionService {
       if (processed >= maxItems) break;
       final values = await store.listJson(collection);
       if (collection == 'artifacts') {
-        final allArtifacts = values;
         for (final value in values) {
           if (processed >= maxItems) break;
           if (value['organizationId'] != organizationId) continue;
@@ -1599,7 +1598,6 @@ final class AccountDeletionService {
           await _deleteArtifactRecord(
             deletion,
             value,
-            allArtifacts,
             organizationId,
             requestId,
             now,
@@ -1820,7 +1818,6 @@ final class AccountDeletionService {
   Future<void> _deleteArtifactRecord(
     JsonRecordDeletion deletion,
     Map<String, Object?> value,
-    List<Map<String, Object?>> allArtifacts,
     String organizationId,
     String requestId,
     DateTime now,
@@ -1830,11 +1827,14 @@ final class AccountDeletionService {
     if (id is! String || digest is! String) {
       throw const FormatException('Artifact deletion record is invalid');
     }
-    final shared = allArtifacts.any(
+    // The collection passed to _processOrganization is a batch snapshot. A
+    // fresh read is required here so duplicate records in the same
+    // organization keep the bytes until the last live reference is removed,
+    // while records removed earlier in this batch no longer keep bytes alive.
+    final shared = (await store.listJson('artifacts')).any(
       (other) =>
           other['id'] != id &&
           other['sha256'] == digest &&
-          other['organizationId'] != organizationId &&
           other['state'] != artifactPurgedState,
     );
     final physical = store is ArtifactDeletion
