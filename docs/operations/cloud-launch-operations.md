@@ -1,6 +1,6 @@
 # Cloud launch operations
 
-Status: NOT READY — Task 271 deployment recovery, 2026-09-09
+Status: NOT READY — external launch gates remain, 2026-09-17
 
 This document records the operational boundary for the managed Cloud launch.
 It does not authorize `app.hyfens.com` customer-workspace cutover, Razorpay
@@ -20,7 +20,7 @@ private Cloud web: sibling hyfens-cloud-web/site
 private-web deployment: sibling hyfens-cloud-web/deploy/web
 ```
 
-## Current managed-gate reconciliation — 2026-09-13
+## Current managed-gate reconciliation — 2026-09-17
 
 The historical deployment notes and evidence rows below are retained for
 incident history. The current managed host has now completed the root-only
@@ -59,20 +59,16 @@ they retain a previous image/release and support `--rollback`. The control
 plane previously failed at `dart pub get` because the build context omitted
 its local path dependencies; the corrected context now builds successfully.
 
-The reviewed inputs are staged under
-`/home/hyfen/p2-deploy-stage/` on the managed host. The installed host
-wrappers are still obsolete, and this session has only password-gated sudo;
-it cannot install root-owned wrappers or protected environments. A root
-operator must run the staged one-time installers:
-
-```sh
-sudo /home/hyfen/p2-deploy-stage/platform/install-platform-deploy-access.sh
-sudo /home/hyfen/p2-deploy-stage/deploy/p2/install-public-control-plane-dev-deploy-access.sh
-```
-
-Protected environments must then be installed through the existing
-deployment-owned secret path. A repository `.env`, live-container edit, or
-provider/DNS mutation is not an acceptable substitute.
+The reviewed inputs were staged under `/home/hyfen/p2-deploy-stage/` and the
+fixed platform/control-plane wrappers were installed through the protected
+root boundary. The renamed `hyfens-public-control-plane-dev` stack is active,
+its protected environment remains root-owned with mode `0600`, and the
+deletion, notification, and artifact-retention timers are enabled and active.
+The legacy `p2-r2` target and environment remain only as an explicit rollback
+fallback; they are not the active deployment and are not deleted by this
+naming-only migration. A repository `.env`, live-container edit, or
+provider/DNS mutation is not an acceptable substitute for the protected
+deployment path.
 
 ## Launch policy decisions
 
@@ -95,13 +91,13 @@ provider/DNS mutation is not an acceptable substitute.
 | --- | --- | --- |
 | Current control-plane image | `docker build --tag hyfens-public-control-plane:task271 --file deploy/p2/Dockerfile .` passes with the complete local path-dependency graph | CODE VERIFIED |
 | Current Cloud web image | Sibling `site/` image build passes and generates all 38 current Next routes, including billing, deletion, pricing, and refund routes | CODE VERIFIED |
-| Deployment inputs | Current wrappers and required source trees are staged; installed wrappers still target obsolete layouts | BLOCKED ON ROOT INSTALL |
+| Deployment inputs | Current wrappers/source trees are installed; the renamed development stack and worker timers are active | VERIFIED |
 | Private web build | `npm run typecheck`, `npm run lint`, and `npm run build` pass in the current private-web checkout | CODE VERIFIED |
 | Control plane | `/healthz` and `/readyz` on `api.hyfens.com` returned 200 | MANAGED LIVENESS ONLY |
 | TLS/DNS | `hyfens.com`, `api.hyfens.com`, and `app.hyfens.com` resolve to the managed host; the certificate covers the required hostnames through 2026-12-02 | VERIFIED |
 | Razorpay plans | Task 263 verified TEST USD Starter/Team plans at 4900/19900 minor units | PROVIDER VERIFIED, DEPLOYMENT NOT INSTALLED |
 | Private-web billing | Running container has empty Razorpay key/secret, webhook secret, billing bridge, and public billing currency settings; current values are not installed | BLOCKED |
-| Control-plane billing | Running `hyfens-p2-r2` control plane has no Cloud billing/provider environment and is not the current managed Cloud composition | BLOCKED |
+| Control-plane billing | Running `hyfens-public-control-plane-dev` control plane has no Cloud billing/provider environment and is not the current managed Cloud composition | BLOCKED |
 | Webhook route | `https://hyfens.com/api/billing/webhook` returns 405 to GET, proving method routing only; no signed delivery was accepted | NOT VERIFIED |
 | Production policy routes | Latest check: `/terms` 200, `/privacy` 200, `/pricing` 200, `/refund-policy` 404, `/pricing.md` 404, `/account-deletion` 404 | BLOCKED |
 | Production API pricing | `/api/pricing` returned 503 `pricing_unavailable` | BLOCKED |
