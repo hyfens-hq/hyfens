@@ -915,6 +915,22 @@ void main() {
     );
   });
 
+  test('legacy human delivery enforces the approved sender policy', () {
+    expect(
+      () => KeplarsHumanMessageDelivery.fromEnvironment(<String, String>{
+        'KEPLARS_API_KEY': 'test-key',
+        'HYFENS_EMAIL_FROM': 'unapproved@example.com',
+      }),
+      throwsA(
+        isA<ArgumentError>().having(
+          (error) => error.message,
+          'message',
+          'HYFENS_EMAIL_FROM must be no-reply@hyfens.com or team@hyfens.com',
+        ),
+      ),
+    );
+  });
+
   test(
     'token-bearing notification keys require encrypted payload storage',
     () async {
