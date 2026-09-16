@@ -191,3 +191,7 @@ with a regression test.
   legacy Keplars human-delivery fallback. Added a regression test; source
   wiring is now verified, while managed provider delivery and mailbox
   monitoring remain external.
+- 2026-09-17: The private Cloud R2 policy control was deployed and verified
+  from the Platform Console. This closes the repository-controlled policy
+  management sub-gap only; backup scheduling, encrypted recovery, restore,
+  and deletion-tombstone replay remain external launch gates.
