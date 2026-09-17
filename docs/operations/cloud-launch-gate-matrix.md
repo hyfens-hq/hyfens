@@ -1,6 +1,6 @@
 # Hyfens Cloud launch gate matrix
 
-Status: NOT READY — reconciled 2026-09-15
+Status: NOT READY — reconciled 2026-09-17
 
 This is the current coordinator view of the Cloud launch blockers recovered
 from Tasks 259, 266, 269, and 271 and checked against the live public edge. It
@@ -26,7 +26,7 @@ for bypassing the existing fail-closed gates.
 | Transactional email | Hyfens-owned verification, recovery, and deletion paths are code-verified; managed mailbox/provider evidence is partial | MANAGED PARTIAL | Prove recovery/deletion completion and monitored owned-mailbox response |
 | Enterprise payment | Private contract-bound order/payment safeguards are code-verified; standard managed TEST passed, but Enterprise browser quote-to-activation evidence is not recorded | OPEN IF IN SCOPE | Run the private Cloud Enterprise TEST acceptance runbook, or explicitly defer Enterprise from launch copy/scope |
 | Personal and organization deletion | Organization grace/cancellation/staged completion is partially managed-verified; duplicate artifact references are now source-safe; personal deletion is blocked for sole owners pending ownership resolution | MANAGED PARTIAL | Resolve sole-owner product policy, run final personal/no-login acceptance, and prove object/tombstone behavior |
-| Backup and restore | Disposable directional DB/object rehearsal passed; no managed scheduled/off-host encrypted recovery, full backend/configuration scope, approved rotation/RPO/RTO, or tombstone replay proof | OPEN / CRITICAL | Provision the approved destination and schedule, exercise isolated restore, replay deletion tombstones, and record evidence |
+| Backup and restore | Private Cloud Platform Console now controls and verifies a private R2 bucket-lock/lifecycle policy for `operational/` objects at 30 days; no managed scheduled/off-host encrypted recovery, full backend/configuration scope, approved rotation/RPO/RTO, or tombstone replay proof | POLICY VERIFIED / RECOVERY OPEN | Provision the approved destination and schedule, exercise isolated restore, replay deletion tombstones, and record evidence |
 | Artifact retention and reconciliation | Managed timer is active and fail-closed smoke passed with no eligible rows | TRIGGER VERIFIED / PHYSICAL PURGE OPEN | Exercise disposable exclusive/shared object rows and reconcile results |
 | Operational ownership | Six roles are assigned to `admin@hyfens.com` in the registry | ASSIGNED / MONITORING UNPROVEN | Prove mailbox/alert monitoring and run bounded incident-response drills |
 | Tax and evidence retention | Tax treatment and financial/security/Enterprise/backup retention durations are intentionally not selected in code | EXTERNAL POLICY BLOCKER | Accountant/legal/security owners approve jurisdiction, records, durations, and legal holds |
@@ -74,18 +74,21 @@ preserved, but six `payment.dispute.*` subscriptions remain unsaved. This is a
 provider-console blocker, not a safe reason to alter source gates.
 
 The private operational runbook records only disposable DB/object recovery
-evidence. It has no managed off-host destination, encryption-key reference,
-approved schedule/retention, RPO/RTO owner, isolated restore target, or
-deletion-tombstone replay evidence. The private Enterprise acceptance runbook
-now defines the required tenant-bound contract, invoice, capture, callback,
-replay, refund, and negative-case evidence without performing a mutation.
+evidence. The Platform Console's R2 policy control is deployed and verified
+for the private `operational/` scope, but it has no managed backup job,
+encryption-key reference, approved schedule/retention beyond that policy,
+RPO/RTO owner, isolated restore target, or deletion-tombstone replay evidence.
+The private Enterprise acceptance runbook now defines the required tenant-bound
+contract, invoice, capture, callback, replay, refund, and negative-case
+evidence without performing a mutation.
 
 ## External closure checklist
 
 The following items cannot be closed by repository code alone:
 
 1. Configure and evidence encrypted, off-host backup coverage for the complete
-   recovery unit, including every data-bearing backend/configuration boundary.
+   recovery unit, including every data-bearing backend/configuration boundary;
+   the verified R2 policy control is not backup-job or restore evidence.
 2. Approve backup rotation, RPO/RTO, restore ownership, and the deletion
    tombstone replay procedure; run it against disposable managed data.
 3. Decide how a sole owner resolves ownership before personal deletion. The
