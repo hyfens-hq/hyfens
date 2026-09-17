@@ -85,6 +85,23 @@ services:
     ports:
       - "${HYFENS_BIND_ADDRESS:-127.0.0.1}:${HYFENS_CONTROL_PLANE_PORT:-18082}:18081"
 
+  cloud-backup:
+    # The one-shot backup client receives credentials only from the root host
+    # wrapper at invocation time. It is never part of the API container.
+    profiles: ["managed-backup"]
+    image: amazon/aws-cli:2.27.41@sha256:bc6b7bba44ce38f9604ede49c584824af919047ea03fbcc7c7610671fdef95d8
+    entrypoint: ["/usr/local/bin/aws"]
+    command: ["--version"]
+    network_mode: bridge
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
 volumes:
   public-control-plane-dev-postgres:
     # Preserve the existing dev database during this naming-only migration.

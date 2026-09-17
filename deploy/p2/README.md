@@ -408,6 +408,56 @@ HYFENS_ALLOW_RESTORE=1 \
 scripts/p2-dr-rehearsal.sh
 ```
 
+### Managed public control-plane backup
+
+The managed public deployment has a separate root-owned backup boundary for
+the PostgreSQL database and the digest-addressed R2 artifact bytes. It uses a
+pinned AWS CLI container that is not attached to the control-plane network and
+does not receive the application's artifact credentials through Compose. The
+host wrapper reads the protected environment, takes a database dump, copies
+all source objects except the reserved `operational/` prefix, writes a
+versioned manifest, uploads the pair below
+`operational/public-control-plane/<backup-id>/`, and verifies database and
+object read-back checksums.
+
+Add these values to the root-owned mode-`600`
+`/etc/hyfens/public-control-plane-dev.env` on a managed host. Use a dedicated
+read credential for the public artifact bucket and a dedicated read/write
+credential for `hyfens-cloud-backups` (the wrapper verifies read-back); do not
+reuse the R2 policy-management token:
+
+```text
+HYFENS_PUBLIC_BACKUP_SOURCE_ENDPOINT=https://<artifact-account>.r2.cloudflarestorage.com
+HYFENS_PUBLIC_BACKUP_SOURCE_BUCKET=<public-artifact-bucket>
+HYFENS_PUBLIC_BACKUP_SOURCE_ACCESS_KEY_ID=<read-only-source-key>
+HYFENS_PUBLIC_BACKUP_SOURCE_SECRET_ACCESS_KEY=<read-only-source-secret>
+HYFENS_PUBLIC_BACKUP_DEST_ENDPOINT=https://<backup-account>.r2.cloudflarestorage.com
+HYFENS_PUBLIC_BACKUP_DEST_BUCKET=hyfens-cloud-backups
+HYFENS_PUBLIC_BACKUP_DEST_ACCOUNT_ID=<32-lowercase-hex-account-id>
+HYFENS_PUBLIC_BACKUP_DEST_ACCESS_KEY_ID=<write-destination-key>
+HYFENS_PUBLIC_BACKUP_DEST_SECRET_ACCESS_KEY=<write-destination-secret>
+HYFENS_PUBLIC_BACKUP_MAX_AGE_SECONDS=108000
+```
+
+Stage the reviewed deployment files, including
+`install-public-control-plane-dev-backup.sh` and the five
+`hyfens-public-control-plane-dev-backup*` files, then run the one-time root
+installer:
+
+```sh
+sudo /home/hyfen/p2-deploy-stage/deploy/p2/install-public-control-plane-dev-backup.sh
+sudo systemctl start hyfens-public-control-plane-dev-backup.service
+sudo /usr/local/sbin/hyfens-public-control-plane-dev-backup check-freshness
+```
+
+The daily timer uses the fixed `operational/` policy boundary and the
+15-minute freshness timer enforces the explicit maximum age. The 30-day
+provider policy and the 30-hour freshness threshold are not an RPO, encryption
+approval, or legal-retention decision. The wrapper performs no restore or
+deletion mutation; after the first successful backup, use the managed
+acceptance runbook to restore only to an approved isolated target and replay a
+disposable deletion tombstone.
+
 ## Disposable two-instance rehearsal
 
 For provider-neutral local evidence only, the repository-controlled HA fixture
