@@ -67,7 +67,9 @@ Public control-plane engineering.
 - [x] Install the systemd units and protected configuration contract.
 - [x] Add focused contract validation and operator documentation.
 - [x] Review the combined diff and run the affected validation checks.
-- [*] Open one substantive PR for maintainer review and merge.
+- [x] Open one substantive PR for maintainer review and merge.
+- [*] Correct the POSIX-shell preflight comparison, reject reused token IDs,
+  and open a follow-up fix PR.
 
 ## Validation
 
@@ -81,6 +83,10 @@ Completed scoped validation:
 - Docker Compose model validation with synthetic non-secret values and the
   `managed-backup` profile — passed.
 - `git diff --check` — passed.
+- Direct `dash` execution of the destination endpoint comparison — passed after
+  the runtime fix.
+- Contract validation covers the fail-closed source/destination token-ID
+  separation guard.
 - No live R2 write, production restore, deletion, or customer mutation was
   performed.
 
@@ -94,9 +100,9 @@ shell/YAML/Node deployment package.
 
 ## Next Action
 
-Complete the implementation and open one substantive PR. After merge, the
-operator must install the protected source/destination credentials and run a
-controlled first backup before the managed restore/tombstone exercise.
+Merge the follow-up runtime fix and reinstall the managed runner. Then run a
+controlled first backup with the protected source/destination credentials
+before the managed restore/tombstone exercise.
 
 ## Blockers
 
@@ -106,9 +112,11 @@ RPO/RTO, and runs the isolated restore plus deletion-tombstone replay.
 
 ## Outcome
 
-Implementation and scoped validation are complete. The remaining review gate
-is one substantive PR; managed acceptance still requires protected credentials
-and the external isolated restore/tombstone exercise.
+The implementation PR (#18) is merged. A follow-up PR carries the POSIX-shell
+runtime fix and a fail-closed guard against reusing the source token for the
+destination after the first managed run exposed both operational issues.
+Managed acceptance still requires a successful protected first backup and the
+external isolated restore/tombstone exercise.
 
 ## References
 
@@ -130,3 +138,9 @@ and the external isolated restore/tombstone exercise.
   all scoped checks passed. Broader Dart validation remains non-green only for
   pre-existing Puro, package-configuration, analyzer-cache, and integration
   environment failures.
+- 2026-09-18: The first managed invocation exposed a `/bin/sh` runtime defect
+  in the destination endpoint comparison. Kept the comparison on one line,
+  added a contract regression check, and passed direct `dash` execution. The
+  protected host comparison also showed the source and destination token
+  records were identical, so the wrapper now rejects reused token IDs before
+  any R2 operation.
