@@ -116,6 +116,29 @@ process environment contains `HYFENS_DELETION_TEST_CLOCK=1` and
 the normal systemd timer never supplies it. This advances the service's
 persisted business-calendar evaluation without mutating deletion timestamps.
 
+To rehearse coupled restore plus deletion-tombstone replay in disposable local
+containers, opt in to the extended existing DR script:
+
+```sh
+HYFENS_ALLOW_RESTORE=1 \
+HYFENS_AUTH_ALLOW_INSECURE_HTTP=true \
+HYFENS_DR_TOMBSTONE_REHEARSAL=1 \
+HYFENS_DR_PROJECT=hyfens-dr-tombstone-<date> \
+HYFENS_DR_CONTROL_PORT=<free-control-port> \
+HYFENS_DR_POSTGRES_PORT=<free-postgres-port> \
+HYFENS_DR_OBJECT_PORT=<free-object-port> \
+scripts/p2-dr-rehearsal.sh
+```
+
+The opt-in path creates its own local Cloud-mode signing key and test owner,
+captures the database/object pair, destroys and restores the unique Compose
+volumes, then uses the real login, deletion request, and deterministic worker
+clock. A passing run proves only disposable directional behavior: the deleted
+organization is tombstoned, its customer access and tenant records are gone,
+and a shared content-addressed artifact remains fetchable from another
+disposable organization. It does not prove provider durability, managed
+encryption, RPO/RTO, or legal acceptance.
+
 The control plane is deliberately configured with customer/local signing
 authority. PostgreSQL and object storage persist and deliver bytes; they never
 verify or authorize runtime patches.
