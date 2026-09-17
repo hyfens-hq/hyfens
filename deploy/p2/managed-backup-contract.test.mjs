@@ -90,6 +90,14 @@ test("wrapper enforces the paired snapshot and verification boundary", () => {
   assert.match(wrapper, /check-freshness/);
   assert.match(wrapper, /freshness_min_age_seconds=900/);
   assert.match(wrapper, /freshness_max_age_limit_seconds=2592000/);
+  assert.match(
+    wrapper,
+    /\[ "\$source_access_key" = "\$destination_access_key" \]/,
+  );
+  assert.match(
+    wrapper,
+    /\[ "\$destination_endpoint" = "https:\/\/\$\{destination_account_id\}\.r2\.cloudflarestorage\.com" \] \|\| \{/,
+  );
   assert.match(wrapper, /flock -w 300 9/);
   assert.match(wrapper, /--network none/);
   assert.match(wrapper, /--profile managed-backup/);

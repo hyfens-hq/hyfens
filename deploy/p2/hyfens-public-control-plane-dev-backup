@@ -121,11 +121,13 @@ destination_access_key=$(setting HYFENS_PUBLIC_BACKUP_DEST_ACCESS_KEY_ID)
 destination_secret_key=$(setting HYFENS_PUBLIC_BACKUP_DEST_SECRET_ACCESS_KEY)
 max_age=$(setting HYFENS_PUBLIC_BACKUP_MAX_AGE_SECONDS)
 
+if [ "$source_access_key" = "$destination_access_key" ]; then
+  fail 'source and destination R2 credentials must be different bucket-scoped tokens'
+fi
 printf '%s\n' "$destination_account_id" | grep -Eq '^[a-f0-9]{32}$' || {
   fail 'destination R2 account ID is invalid'
 }
-[ "$destination_endpoint" =
-  "https://${destination_account_id}.r2.cloudflarestorage.com" ] || {
+[ "$destination_endpoint" = "https://${destination_account_id}.r2.cloudflarestorage.com" ] || {
   fail 'destination R2 S3 endpoint must match the configured account'
 }
 [ "$destination_bucket" = hyfens-cloud-backups ] || {
