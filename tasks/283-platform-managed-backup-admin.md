@@ -63,6 +63,9 @@ Completed:
 - `node --test deploy/p2/managed-backup-contract.test.mjs` (3 passed);
 - public capability catalogue test and focused human-auth/demo/staff tests
   (all passed);
+- the broader public package suite was also run and reported 27 unrelated
+  pre-existing failures in closure/reconciliation coverage; no affected
+  managed-backup capability or wrapper test failed;
 - broker protocol tests cover public freshness/preflight markers, duplicate
   source/destination rejection, and safe output boundaries;
 - `sh -n` on the public backup wrapper;
@@ -72,9 +75,9 @@ Completed:
 
 ## Next Action
 
-Open the public review PR together with the private Task 295 integration;
-after both are reviewed and merged, install the broker/wrapper package on the
-managed host and rerun the live preflight/freshness acceptance checks.
+Review and merge public PR #20 together with private Task 295 PR #39; then
+install the broker/wrapper package on the managed host and rerun the live
+preflight/freshness acceptance checks.
 
 ## Blockers
 
@@ -102,3 +105,4 @@ arbitrary bucket/endpoint/command controls were added.
 - 2026-09-18: Completed wrapper preflight, capability registration, contract
   tests, documentation, and scoped validation; linked to private Task 295 for
   the broker/API/Console integration.
+- 2026-09-18: Opened public review PR #20; private companion review is #39.
