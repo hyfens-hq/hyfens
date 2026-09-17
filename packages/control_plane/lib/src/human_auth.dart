@@ -60,6 +60,16 @@ const String platformStaffInviteCapability = 'platform:staff:invite';
 const String platformStaffReviewCapability = 'platform:staff:review';
 const String platformStaffManageCapability = 'platform:staff:manage';
 const String platformSessionsRevokeCapability = 'platform:sessions:revoke';
+const String platformManagedBackupReadCapability =
+    'platform:managed_backup:read';
+const String platformManagedBackupOperateCapability =
+    'platform:managed_backup:operate';
+const String platformManagedBackupConfigureCapability =
+    'platform:managed_backup:configure';
+const String platformManagedBackupRotateCapability =
+    'platform:managed_backup:rotate_credentials';
+const String platformManagedBackupRestoreCheckCapability =
+    'platform:managed_backup:restore_check';
 
 /// Roles that can be provisioned through the reviewed platform-staff seam.
 /// Bootstrap `owner` / `super-admin` access remains a separate protected path.
@@ -95,6 +105,9 @@ const Map<String, Set<String>> managedPlatformStaffRoleCapabilities =
         platformStaffReviewCapability,
         platformStaffManageCapability,
         platformSessionsRevokeCapability,
+        platformManagedBackupReadCapability,
+        platformManagedBackupOperateCapability,
+        platformManagedBackupConfigureCapability,
       },
       'support': <String>{
         platformOverviewCapability,
@@ -172,6 +185,11 @@ const Set<String> platformCapabilities = <String>{
   platformStaffReviewCapability,
   platformStaffManageCapability,
   platformSessionsRevokeCapability,
+  platformManagedBackupReadCapability,
+  platformManagedBackupOperateCapability,
+  platformManagedBackupConfigureCapability,
+  platformManagedBackupRotateCapability,
+  platformManagedBackupRestoreCheckCapability,
 };
 
 const Set<String> supportedPlatformCapabilities = platformCapabilities;

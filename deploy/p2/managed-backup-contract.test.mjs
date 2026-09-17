@@ -88,6 +88,14 @@ test("wrapper enforces the paired snapshot and verification boundary", () => {
   assert.match(wrapper, /operator_quiesced_pair_required/);
   assert.match(wrapper, /read-back checksum verification/);
   assert.match(wrapper, /check-freshness/);
+  assert.match(wrapper, /preflight/);
+  assert.match(wrapper, /head-bucket/);
+  assert.match(wrapper, /source and destination R2 credentials must be different/);
+  assert.match(wrapper, /source_endpoint/);
+  assert.match(wrapper, /destination_endpoint/);
+  assert.match(wrapper, /source_bucket_scope=PASS/);
+  assert.match(wrapper, /destination_bucket_scope=PASS/);
+  assert.match(wrapper, /managed_public_backup_freshness=PASS/);
   assert.match(wrapper, /freshness_min_age_seconds=900/);
   assert.match(wrapper, /freshness_max_age_limit_seconds=2592000/);
   assert.match(

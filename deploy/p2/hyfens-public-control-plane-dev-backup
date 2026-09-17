@@ -7,6 +7,7 @@ export PATH
 usage() {
   cat >&2 <<'EOF'
 Usage:
+  hyfens-public-control-plane-dev-backup preflight
   hyfens-public-control-plane-dev-backup create
   hyfens-public-control-plane-dev-backup list
   hyfens-public-control-plane-dev-backup check-freshness
@@ -152,7 +153,7 @@ require_command tr
 install -d -o root -g root -m 0755 /run/lock
 exec 9>/run/lock/hyfens-public-control-plane-dev-backup.lock
 case "$operation" in
-  check-freshness)
+  preflight|check-freshness)
     /usr/bin/flock -w 300 9 || fail 'another public backup operation did not finish in time'
     ;;
   create|list)
@@ -615,6 +616,16 @@ check_freshness() {
 }
 
 case "$operation" in
+  preflight)
+    new_work
+    run_aws source s3api head-bucket \
+      --bucket "$source_bucket" >/dev/null
+    run_aws destination s3api head-bucket \
+      --bucket "$destination_bucket" >/dev/null
+    echo 'managed_public_backup_preflight=PASS'
+    echo 'source_bucket_scope=PASS'
+    echo 'destination_bucket_scope=PASS'
+    ;;
   create) create_backup ;;
   list) list_backups ;;
   check-freshness) check_freshness ;;
