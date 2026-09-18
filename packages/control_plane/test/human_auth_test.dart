@@ -233,6 +233,37 @@ void main() {
     );
   });
 
+  test(
+    'managed platform content capability authorizes the CMS boundary',
+    () async {
+      await auth.createManagedPlatformStaff(
+        email: 'content-admin@example.com',
+        password: 'content-admin-password',
+        role: 'admin',
+      );
+      final login = await auth.login(
+        email: 'content-admin@example.com',
+        password: 'content-admin-password',
+        audience: platformAuthorizationAudience,
+      );
+
+      final entry = await service.createContent(
+        token: login.accessToken,
+        draft: ContentWrite(
+          kind: ContentKind.press,
+          title: 'Platform announcement',
+          slug: 'platform-announcement',
+          excerpt: 'A managed platform publication.',
+          body: '# Platform announcement\n\nThe content boundary is audited.',
+        ),
+        requestId: 'platform-content-create',
+      );
+
+      expect(entry.organizationId, 'platform');
+      expect(entry.kind, ContentKind.press);
+    },
+  );
+
   test('access token expires independently of the session', () async {
     final shortAuth = HumanAuthService(
       store: store,

@@ -14,6 +14,7 @@ void main() {
         platformManagedBackupConfigureCapability,
         platformManagedBackupRotateCapability,
         platformManagedBackupRestoreCheckCapability,
+        platformContentManageCapability,
       ]),
     );
 
@@ -25,6 +26,7 @@ void main() {
         platformManagedBackupReadCapability,
         platformManagedBackupOperateCapability,
         platformManagedBackupConfigureCapability,
+        platformContentManageCapability,
       ]),
     );
     expect(

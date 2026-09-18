@@ -1765,7 +1765,7 @@ final class ControlPlaneHttpServer {
     } on FormatException {
       throw const ControlPlaneException(
         'INVALID_CONTENT',
-        'Content kind must be blog, news, or policy',
+        'Content kind must be blog, article, press, news, or policy',
         statusCode: 422,
       );
     }

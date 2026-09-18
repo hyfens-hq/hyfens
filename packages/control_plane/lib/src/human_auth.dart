@@ -40,6 +40,7 @@ const String platformOperationsManageCapability = 'platform:operations:manage';
 const String platformAccountsReadCapability = 'platform:accounts:read';
 const String platformEntitlementsReadCapability = 'platform:entitlements:read';
 const String platformPlansManageCapability = 'platform:plans:manage';
+const String platformContentManageCapability = 'platform:content:manage';
 // These capabilities are consumed by the private Cloud commercial API. They
 // live in the control-plane identity catalogue so the same protected
 // Platform Console session can be authorized at both API boundaries.
@@ -94,6 +95,7 @@ const Map<String, Set<String>> managedPlatformStaffRoleCapabilities =
         platformAccountsReadCapability,
         platformEntitlementsReadCapability,
         platformPlansManageCapability,
+        platformContentManageCapability,
         platformCommercialReadCapability,
         platformPlansPublishCapability,
         platformPlansLegalReviewCapability,
@@ -172,6 +174,7 @@ const Set<String> platformCapabilities = <String>{
   platformAccountsReadCapability,
   platformEntitlementsReadCapability,
   platformPlansManageCapability,
+  platformContentManageCapability,
   platformCommercialReadCapability,
   platformPlansPublishCapability,
   platformPlansLegalReviewCapability,
@@ -3322,7 +3325,14 @@ final class HumanAuthService {
                 ? customerOwnerScopes
                 : controlScopes),
           }
-        : membership.capabilities;
+        : <String>{
+            ...membership.capabilities,
+            if (requiredAudience == platformAuthorizationAudience &&
+                membership.platformCapabilities.contains(
+                  platformContentManageCapability,
+                ))
+              contentAdminScope,
+          };
     if (!effectiveCapabilities.contains(requiredScope)) {
       throw const ControlPlaneException(
         'FORBIDDEN',
