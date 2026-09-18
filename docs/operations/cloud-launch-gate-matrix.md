@@ -1,6 +1,6 @@
 # Hyfens Cloud launch gate matrix
 
-Status: NOT READY — reconciled 2026-09-17
+Status: NOT READY — reconciled 2026-09-18
 
 This is the current coordinator view of the Cloud launch blockers recovered
 from Tasks 259, 266, 269, and 271 and checked against the live public edge. It
@@ -26,7 +26,7 @@ for bypassing the existing fail-closed gates.
 | Transactional email | Hyfens-owned verification, recovery, and deletion paths are code-verified; managed mailbox/provider evidence is partial | MANAGED PARTIAL | Prove recovery/deletion completion and monitored owned-mailbox response |
 | Enterprise payment | Private contract-bound order/payment safeguards are code-verified; standard managed TEST passed, but Enterprise browser quote-to-activation evidence is not recorded | OPEN IF IN SCOPE | Run the private Cloud Enterprise TEST acceptance runbook, or explicitly defer Enterprise from launch copy/scope |
 | Personal and organization deletion | Organization grace/cancellation/staged completion is partially managed-verified; duplicate artifact references are now source-safe; personal deletion is blocked for sole owners pending ownership resolution | MANAGED PARTIAL | Resolve sole-owner product policy, run final personal/no-login acceptance, and prove object/tombstone behavior |
-| Backup and restore | Private Cloud Platform Console now controls and verifies a private R2 bucket-lock/lifecycle policy for `operational/` objects at 30 days; no managed scheduled/off-host encrypted recovery, full backend/configuration scope, approved rotation/RPO/RTO, or tombstone replay proof | POLICY VERIFIED / RECOVERY OPEN | Provision the approved destination and schedule, exercise isolated restore, replay deletion tombstones, and record evidence |
+| Backup and restore | Managed host preflight passes with source `hyfens-dev` and distinct destination `hyfens-cloud-backups`; Task 284 restored backup `20260918T061844Z` into a disposable PostgreSQL/object pair, verified manifests/digests, replayed deletion tombstones, and cleaned up without changing live services. The destination has the 30-day `operational/` R2 lifecycle and lock. Both buckets are in the same account with default/APAC placement; provider durability/SLA and key custody/jurisdiction, approved rotation/RPO/RTO, account isolation, and end-to-end failover remain external | TECHNICAL RECOVERY VERIFIED / EXTERNAL ACCEPTANCE OPEN | Record the actual R2 jurisdiction and applicable terms, decide same-account versus separately isolated destination, decide provider-managed versus customer-controlled encryption, approve rotation/retention/RPO/RTO/owner, and repeat evidence after any material configuration change |
 | Artifact retention and reconciliation | Managed timer is active and fail-closed smoke passed with no eligible rows | TRIGGER VERIFIED / PHYSICAL PURGE OPEN | Exercise disposable exclusive/shared object rows and reconcile results |
 | Operational ownership | Six roles are assigned to `admin@hyfens.com` in the registry | ASSIGNED / MONITORING UNPROVEN | Prove mailbox/alert monitoring and run bounded incident-response drills |
 | Tax and evidence retention | Tax treatment and financial/security/Enterprise/backup retention durations are intentionally not selected in code | EXTERNAL POLICY BLOCKER | Accountant/legal/security owners approve jurisdiction, records, durations, and legal holds |
@@ -74,23 +74,27 @@ preserved, but six `payment.dispute.*` subscriptions remain unsaved. This is a
 provider-console blocker, not a safe reason to alter source gates.
 
 The private operational runbook records only disposable DB/object recovery
-evidence. The Platform Console's R2 policy control is deployed and verified
-for the private `operational/` scope, but it has no managed backup job,
-encryption-key reference, approved schedule/retention beyond that policy,
-RPO/RTO owner, isolated restore target, or deletion-tombstone replay evidence.
-The private Enterprise acceptance runbook now defines the required tenant-bound
-contract, invoice, capture, callback, replay, refund, and negative-case
-evidence without performing a mutation.
+evidence. The managed host runner and Task 284 rehearsal now add a sanitized
+managed restore, artifact reconciliation, deletion-tombstone replay, and
+cleanup proof. The Platform Console's R2 policy control remains a policy
+control for the private `operational/` scope; it does not by itself prove
+provider durability, key custody, jurisdiction, approved schedule/retention,
+RPO/RTO, or automatic failover. The private Enterprise acceptance runbook now
+defines the required tenant-bound contract, invoice, capture, callback, replay,
+refund, and negative-case evidence without performing a mutation.
 
 ## External closure checklist
 
 The following items cannot be closed by repository code alone:
 
-1. Configure and evidence encrypted, off-host backup coverage for the complete
-   recovery unit, including every data-bearing backend/configuration boundary;
-   the verified R2 policy control is not backup-job or restore evidence.
-2. Approve backup rotation, RPO/RTO, restore ownership, and the deletion
-   tombstone replay procedure; run it against disposable managed data.
+1. Record the complete recovery-unit coverage and the destination facts,
+   including the actual R2 jurisdiction, applicable terms/SLA, encryption/key
+   custody posture, token scope, and whether same-account placement is an
+   acceptable isolation boundary; the managed rehearsal is not a provider
+   durability or legal-compliance guarantee.
+2. Approve backup rotation, retention/legal holds, RPO/RTO, restore ownership,
+   and the deletion-tombstone replay procedure. The managed disposable replay
+   has passed; repeat it if those decisions materially change configuration.
 3. Decide how a sole owner resolves ownership before personal deletion. The
    current product correctly fails closed and does not invent silent transfer.
 4. Complete Enterprise TEST acceptance if Enterprise remains public launch
@@ -115,3 +119,6 @@ The following items cannot be closed by repository code alone:
 - [`Task 266`](../../tasks/266-enterprise-quote-contract-payment-lifecycle.md)
 - [`Task 269`](../../tasks/269-account-deletion-retention.md)
 - [`Task 271`](../../tasks/271-recover-managed-cloud-deployment-and-operational-wiring.md)
+- [`Task 284`](../../tasks/284-managed-public-recovery-rehearsal.md)
+- [`Task 285`](../../tasks/285-external-recovery-acceptance.md)
+- [`R2 recovery acceptance research`](r2-recovery-acceptance-research.md)
