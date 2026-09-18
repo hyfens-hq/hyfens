@@ -73,7 +73,8 @@ Candidate validation completed on 2026-09-19:
 - isolated root ref: `chore/oss-history-sanitized`;
 - candidate root commit: `6755c3dd5d30d558d1a5fc0db7bafb43f728a0fa`;
 - reachable commit count: `1`;
-- candidate tree matches the final cleanup branch tree;
+- candidate was built from the final cleanup source tree before this task file
+  recorded its own candidate hash; no source or deployment files differ;
 - current-tree boundary guard: passed;
 - reachable-history private-marker scan: passed; and
 - hosted-only path inventory: empty.
