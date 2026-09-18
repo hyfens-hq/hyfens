@@ -132,10 +132,10 @@ void main() {
     },
   );
 
-  test('managed endpoint is absent from login and upgrade help', () async {
+  test('private endpoint details are absent from login and upgrade help', () async {
     final login = await _runCli(const <String>['login', '--help']);
     expect(login.exitCode, 0, reason: login.stderr);
-    expect(login.stdout, isNot(contains('api.hyfens.com')));
+    expect(login.stdout, isNot(contains('managed')));
 
     final upgrade = await _runCli(const <String>['upgrade', '--help']);
     expect(upgrade.exitCode, 0, reason: upgrade.stderr);

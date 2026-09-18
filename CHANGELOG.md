@@ -6,21 +6,10 @@ not select a version or publish software.
 
 ## [Unreleased]
 
-### Added
-
-- Added an explicit managed Cloud signup and email-verification contract that
-  creates a customer-owned organization and owner session without changing
-  the legacy self-hosted client-access registration flow.
-
 ### Changed
 
-- Added managed Cloud onboarding handoff guidance for creating the first
-  application and environment and connecting the public CLI. Managed Cloud
-  deployments must enable the verification delivery configuration; signup is
-  fail-closed when it is unavailable.
-- Simplified the managed dashboard authentication surface by removing
-  non-action session/status copy and focusing the entry screen on sign-in,
-  account creation, and invitation access.
+- Kept the public release notes limited to the self-hosted OSS product
+  surface; deployment-specific onboarding remains outside this repository.
 
 ## [0.1.10] - 2026-09-08
 
@@ -78,8 +67,8 @@ brew upgrade hyfens
 
 - Adding or changing assets and fonts, native plugins or configuration, or the
   Flutter/Dart engine still requires a new base release.
-- Production trust settlement, managed Cloud acceptance, and Android project
-  signing remain separately gated workflows.
+- Production trust settlement and Android project signing remain separately
+  gated workflows.
 
 ### Upgrade
 

@@ -31,10 +31,7 @@ final class ArtifactReconciliationReport {
   final int quarantinedCount;
 
   bool get deliverable => items.every(
-    (item) =>
-        item.status == 'verified' ||
-        item.status == 'non_ready' ||
-        item.status == 'purged_metadata',
+    (item) => item.status == 'verified' || item.status == 'non_ready',
   );
 
   Map<String, Object?> toJson() => <String, Object?>{

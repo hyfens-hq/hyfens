@@ -125,16 +125,13 @@ class AuthStorage {
       legacy.endpoint,
       operation: 'stored profile',
     );
-    final managed =
-        controlPlaneEndpointKey(endpoint) ==
-        controlPlaneEndpointKey(Uri.parse(managedCloudApiBase));
     // A legacy ProfileScope name identifies a membership, not a control-plane
     // endpoint. Give migrated endpoint metadata a stable public profile name.
-    final name = managed ? managedCloudProfileName : 'self-hosted';
+    final name = defaultHyfensProfileName;
     final profile = CliProfile(
       name: name,
       endpoint: endpoint,
-      managed: managed,
+      managed: false,
       organizationId: legacy.organizationId,
       applicationId: legacy.applicationId,
       environmentId: legacy.environmentId,

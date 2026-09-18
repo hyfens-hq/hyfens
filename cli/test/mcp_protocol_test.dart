@@ -202,9 +202,9 @@ void main() {
       await storage.writeNamedProfile(beta, makeActive: false);
       await storage.writeNamedProfile(
         CliProfile(
-          name: managedCloudProfileName,
-          endpoint: Uri.parse(managedCloudApiBase),
-          managed: true,
+          name: 'gamma',
+          endpoint: Uri.parse('https://gamma.example/p2'),
+          managed: false,
         ),
         makeActive: false,
       );
@@ -239,7 +239,6 @@ void main() {
       final authResult = (alphaResult['auth']! as Map).cast<String, Object?>();
       expect(authResult['host_bound'], isTrue);
       expect(authResult['status'], 'LOGGED_IN');
-      expect(encoded, isNot(contains('api.hyfens.com')));
     },
   );
 

@@ -22,14 +22,6 @@ Future<void> main(List<String> arguments) async {
     final value = options[entry.key];
     if (value != null) values[entry.value] = value;
   }
-  final previewKey = options['preview-notification'];
-  if (previewKey != null) {
-    final rendered = NotificationPreview.render(key: previewKey);
-    stdout.writeln(rendered.html);
-    stdout.writeln('\n--- PLAIN TEXT ---\n');
-    stdout.writeln(rendered.text);
-    return;
-  }
   final config = ControlPlaneConfig.fromEnvironment(values);
   final taskRoleCredentials = config.artifactUseTaskRole
       ? EcsTaskRoleCredentialsProvider.fromEnvironment(environment: values)
@@ -46,199 +38,17 @@ Future<void> main(List<String> arguments) async {
           keyPrefix: config.artifactKeyPrefix,
           region: config.artifactRegion,
         );
-  final legacyEmailDelivery = KeplarsHumanMessageDelivery.fromEnvironment(
-    values,
-  );
   final store = config.databaseUrl == null
       ? FileControlPlaneStore(config.fileRoot)
       : PostgresControlPlaneStore(
           config.databaseUrl!,
           artifacts: artifactStore,
         );
-  final notifications = NotificationService.fromEnvironment(
-    store: store,
-    values: values,
-  );
-  final queuedEmailDelivery = notifications?.canQueueSensitiveMessages == true
-      ? notifications!.authMessageDelivery()
-      : null;
-  final HumanAuthMessageDelivery? authEmailDelivery =
-      queuedEmailDelivery ?? legacyEmailDelivery;
-  final HumanDeletionMessageDelivery? deletionEmailDelivery =
-      queuedEmailDelivery ?? legacyEmailDelivery;
   final auth = config.auth == null
       ? null
-      : HumanAuthService(
-          store: store,
-          config: config.auth!,
-          messageDelivery: authEmailDelivery,
-          deletionMessageDelivery: deletionEmailDelivery,
-        );
-  final configuredService = ControlPlaneService(
-    store: store,
-    humanAuth: auth,
-    deploymentModel: config.deploymentModel,
-    razorpayBilling: config.razorpayBilling,
-    billingProvider: config.billingProvider,
-    notifications: notifications,
-    deletionPolicy: config.deletionPolicy,
-  );
+      : HumanAuthService(store: store, config: config.auth!);
+  final configuredService = ControlPlaneService(store: store, humanAuth: auth);
   await configuredService.initialize();
-  if (options.containsKey('process-artifact-retention')) {
-    try {
-      if (options.containsKey('bootstrap') ||
-          options.containsKey('bootstrap-admin') ||
-          options.containsKey('bootstrap-owner') ||
-          options.containsKey('seed-demo') ||
-          options.containsKey('process-deletions') ||
-          options.containsKey('process-notifications')) {
-        throw ArgumentError(
-          '--process-artifact-retention cannot be combined with another '
-          'worker or bootstrap mode',
-        );
-      }
-      final limit = _artifactRetentionLimit(options);
-      final report = await configuredService.runArtifactRetentionCleanup(
-        limit: limit,
-      );
-      stdout.writeln(
-        'artifact_retention_worker_managed=${report.managed} '
-        'artifact_retention_worker_deletion_supported='
-        '${report.deletionSupported} '
-        'artifact_retention_worker_limit=$limit '
-        'artifact_retention_worker_considered=${report.consideredCount} '
-        'artifact_retention_worker_purged=${report.purgedCount} '
-        'artifact_retention_worker_skipped=${report.skippedCount} '
-        'artifact_retention_worker_failed=${report.failedCount}',
-      );
-      if (!report.managed) {
-        stderr.writeln(
-          '--process-artifact-retention requires a Cloud deployment',
-        );
-        exitCode = 1;
-      } else if (!report.deletionSupported) {
-        stderr.writeln(
-          '--process-artifact-retention requires an artifact store that '
-          'supports deletion',
-        );
-        exitCode = 1;
-      } else if (report.failedCount > 0) {
-        stderr.writeln(
-          'artifact retention worker completed with '
-          '${report.failedCount} failed item(s)',
-        );
-        exitCode = 1;
-      }
-    } finally {
-      await store.close();
-      taskRoleCredentials?.close();
-    }
-    return;
-  }
-  if (options.containsKey('process-deletions')) {
-    if (options.containsKey('bootstrap') ||
-        options.containsKey('bootstrap-admin') ||
-        options.containsKey('bootstrap-owner') ||
-        options.containsKey('seed-demo')) {
-      throw ArgumentError(
-        '--process-deletions cannot be combined with a bootstrap mode',
-      );
-    }
-    final deletion = configuredService.deletion;
-    if (deletion == null) {
-      throw StateError(
-        '--process-deletions requires human authentication and deletion '
-        'configuration',
-      );
-    }
-    try {
-      final processed = await deletion.processPendingDeletions(
-        now: _deletionWorkerNow(options, values),
-      );
-      final counts = <String, int>{};
-      for (final request in processed) {
-        final status = request['status'];
-        if (status is String) {
-          counts[status] = (counts[status] ?? 0) + 1;
-        }
-      }
-      stdout.write('deletion_worker_processed=${processed.length}');
-      final entries = counts.entries.toList()
-        ..sort((left, right) => left.key.compareTo(right.key));
-      for (final entry in entries) {
-        stdout.write(' ${entry.key}=${entry.value}');
-      }
-      stdout.writeln();
-    } finally {
-      await store.close();
-      taskRoleCredentials?.close();
-    }
-    return;
-  }
-  if (options.containsKey('process-notifications')) {
-    if (options.containsKey('bootstrap') ||
-        options.containsKey('bootstrap-admin') ||
-        options.containsKey('bootstrap-owner') ||
-        options.containsKey('seed-demo') ||
-        options.containsKey('process-deletions')) {
-      throw ArgumentError(
-        '--process-notifications cannot be combined with another worker or bootstrap mode',
-      );
-    }
-    final configuredNotifications = configuredService.notifications;
-    if (configuredNotifications == null) {
-      throw StateError(
-        '--process-notifications requires a configured notification provider',
-      );
-    }
-    try {
-      final processed = await configuredNotifications.dispatchPending();
-      stdout.writeln('notification_worker_processed=$processed');
-    } finally {
-      await store.close();
-      taskRoleCredentials?.close();
-    }
-    return;
-  }
-  if (options.containsKey('seed-demo')) {
-    if (options.containsKey('bootstrap') ||
-        options.containsKey('bootstrap-admin') ||
-        options.containsKey('bootstrap-owner')) {
-      throw ArgumentError(
-        '--seed-demo cannot be combined with another bootstrap mode',
-      );
-    }
-    if (!options.containsKey('password-stdin')) {
-      throw ArgumentError('--seed-demo requires --password-stdin');
-    }
-    final configuredAuth = configuredService.humanAuth;
-    if (configuredAuth == null) {
-      throw ArgumentError(
-        '--seed-demo requires human authentication to be configured',
-      );
-    }
-    final password = stdin.readLineSync();
-    if (password == null) {
-      throw ArgumentError(
-        '--password-stdin requires one password line on stdin',
-      );
-    }
-    final result = await DemoAccountSeeder(
-      store: store,
-      auth: configuredAuth,
-      billingService: configuredService.billing,
-    ).seed(password: password);
-    stdout.writeln('seed=local-demo');
-    stdout.writeln('organization_id=${result.organization.id}');
-    stdout.writeln('application_id=${result.application.id}');
-    stdout.writeln('environment_id=${result.environment.id}');
-    stdout.writeln('human_owner_id=${result.owner.id}');
-    stdout.writeln('human_owner_email=${result.owner.email}');
-    stdout.writeln('human_owner_profile=$demoOwnerProfileName');
-    await store.close();
-    taskRoleCredentials?.close();
-    return;
-  }
   if (options.containsKey('bootstrap-admin')) {
     if (options.containsKey('bootstrap') ||
         options.containsKey('bootstrap-owner')) {
@@ -323,21 +133,6 @@ Future<void> main(List<String> arguments) async {
   final server = ControlPlaneHttpServer(
     configuredService,
     discovery: config.discovery,
-    enterpriseInquiryNotifier: config.auth?.platformAdminEmails.isEmpty != false
-        ? null
-        : notifications != null
-        ? (inquiry) => notifications
-              .enqueueEnterpriseInquiry(
-                recipients: config.auth!.platformAdminEmails,
-                inquiry: inquiry,
-              )
-              .then((_) {})
-        : legacyEmailDelivery == null
-        ? null
-        : (inquiry) => legacyEmailDelivery.sendEnterpriseInquiryNotification(
-            recipients: config.auth!.platformAdminEmails,
-            inquiry: inquiry,
-          ),
     limits: ControlPlaneHttpLimits(
       maxJsonBodyBytes: config.maxJsonBodyBytes,
       maxArtifactBytes: config.maxArtifactBytes,
@@ -345,7 +140,6 @@ Future<void> main(List<String> arguments) async {
     ),
     auditRetentionDays: config.auditRetentionDays,
     allowInsecureAuth: config.allowInsecureAuth,
-    notificationProviderWebhookSecret: values['KEPLARS_WEBHOOK_SECRET'],
   );
   final bound = await server.bind(host: config.host, port: config.port);
   stdout.writeln(
@@ -366,40 +160,6 @@ Future<void> main(List<String> arguments) async {
   taskRoleCredentials?.close();
 }
 
-DateTime? _deletionWorkerNow(
-  Map<String, String> options,
-  Map<String, String> values,
-) {
-  final raw = options['process-deletions-at'];
-  if (raw == null) return null;
-  if (values['HYFENS_DELETION_TEST_CLOCK'] != '1' ||
-      values['RAZORPAY_MODE'] != 'test') {
-    throw StateError(
-      '--process-deletions-at is available only with '
-      'HYFENS_DELETION_TEST_CLOCK=1 and RAZORPAY_MODE=test',
-    );
-  }
-  final parsed = DateTime.tryParse(raw);
-  if (parsed == null || !parsed.isUtc) {
-    throw ArgumentError(
-      '--process-deletions-at must be an ISO-8601 UTC timestamp ending in Z',
-    );
-  }
-  return parsed;
-}
-
-int _artifactRetentionLimit(Map<String, String> options) {
-  final raw = options['artifact-retention-limit'];
-  if (raw == null) return 100;
-  final limit = int.tryParse(raw);
-  if (limit == null || limit < 1 || limit > 1000) {
-    throw ArgumentError(
-      '--artifact-retention-limit must be an integer between 1 and 1000',
-    );
-  }
-  return limit;
-}
-
 Map<String, String> _options(List<String> arguments) {
   final result = <String, String>{};
   for (var index = 0; index < arguments.length; index++) {
@@ -409,11 +169,7 @@ Map<String, String> _options(List<String> arguments) {
       if (argument == '--bootstrap-only') result['bootstrap-only'] = 'true';
       continue;
     }
-    if (argument == '--process-deletions' ||
-        argument == '--process-artifact-retention' ||
-        argument == '--process-notifications' ||
-        argument == '--seed-demo' ||
-        argument == '--bootstrap-admin' ||
+    if (argument == '--bootstrap-admin' ||
         argument == '--bootstrap-owner' ||
         argument == '--password-stdin') {
       result[argument.substring(2)] = 'true';

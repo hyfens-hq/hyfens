@@ -3,10 +3,8 @@ import 'dart:io';
 
 import 'diagnostics.dart';
 
-const managedCloudApiBase = 'https://api.hyfens.com/p2/';
-const defaultHyfensProfileName = 'hyfens-cloud';
-const managedCloudProfileName = defaultHyfensProfileName;
-const managedCloudDisplayName = 'Hyfens Cloud (managed)';
+const defaultControlPlaneApiBase = 'http://127.0.0.1:8080/';
+const defaultHyfensProfileName = 'self-hosted';
 
 /// Normalize a control-plane API base without dropping its API path.
 ///
@@ -60,52 +58,11 @@ bool isExplicitLoopbackEndpoint(Uri endpoint) {
   return address?.isLoopback ?? false;
 }
 
-/// Returns whether [endpoint] is the internal managed Cloud control-plane
-/// endpoint. This comparison is kept separate from display formatting so the
-/// exact URL remains available to request and credential-storage code without
-/// being emitted in normal CLI or MCP output.
-bool isManagedCloudEndpoint(Uri endpoint) =>
-    controlPlaneEndpointKey(endpoint) ==
-    controlPlaneEndpointKey(Uri.parse(managedCloudApiBase));
-
 /// Returns a safe user-facing endpoint label.
-///
-/// Self-hosted endpoints remain visible because users need to identify the
-/// server they selected. The managed Cloud route is represented by its
-/// product name instead of exposing an implementation URL.
-String displayControlPlaneEndpoint(Uri endpoint) =>
-    isManagedCloudEndpoint(endpoint)
-    ? managedCloudDisplayName
-    : endpoint.toString();
+String displayControlPlaneEndpoint(Uri endpoint) => endpoint.toString();
 
 /// Returns a safe user-facing label for a control-plane request URI.
-///
-/// Request URIs include resource paths below the configured API base, so the
-/// exact-profile comparison in [isManagedCloudEndpoint] is not sufficient for
-/// failure diagnostics. Managed request paths remain an implementation detail;
-/// self-hosted request URIs remain visible for operator troubleshooting.
-String displayControlPlaneUri(Uri uri) {
-  final managed = Uri.parse(managedCloudApiBase);
-  final managedPath = managed.path.endsWith('/')
-      ? managed.path
-      : '${managed.path}/';
-  final path = uri.path.isEmpty ? '/' : uri.path;
-  final sameAuthority =
-      uri.scheme.toLowerCase() == managed.scheme &&
-      uri.host.toLowerCase() == managed.host.toLowerCase() &&
-      _effectivePort(uri) == _effectivePort(managed);
-  if (sameAuthority &&
-      (path == managedPath.substring(0, managedPath.length - 1) ||
-          path.startsWith(managedPath))) {
-    return managedCloudDisplayName;
-  }
-  return uri.toString();
-}
-
-int _effectivePort(Uri uri) {
-  if (uri.hasPort) return uri.port;
-  return uri.scheme.toLowerCase() == 'https' ? 443 : 80;
-}
+String displayControlPlaneUri(Uri uri) => uri.toString();
 
 /// Enforce the credential-bearing transport policy at every CLI boundary.
 Uri validateControlPlaneEndpoint(Uri endpoint, {String operation = 'request'}) {
@@ -213,8 +170,7 @@ final class Profile {
   String? get organizationName => _organizationName;
   List<ProfileScope> get memberships => profiles;
   String? get profileName => profiles.isEmpty ? null : profiles.first.name;
-  bool? get managed =>
-      endpoint.scheme == 'https' && isManagedCloudEndpoint(endpoint);
+  bool? get managed => false;
   String? get applicationId =>
       profiles.isEmpty ? null : profiles.first.applicationId;
   String? get environmentId =>
@@ -295,7 +251,7 @@ final class Profile {
 
   /// Public, non-secret projection for CLI, MCP, and diagnostic output.
   ///
-  /// Unlike [toJson], this never emits the internal managed Cloud URL.
+  /// This projection contains only non-secret identity and endpoint metadata.
   Map<String, Object?> toPublicJson() => <String, Object?>{
     'endpoint': displayControlPlaneEndpoint(endpoint),
     if (userId != null) 'user_id': userId,
@@ -474,10 +430,9 @@ final class ProfileSet {
     return null;
   }
 
-  /// Returns the selected entry, or a stable fallback when the catalog has no
-  /// explicit selection. The managed default is only used for a new,
-  /// unconfigured installation; an existing catalog must continue to resolve
-  /// to one of its persisted profiles.
+  /// Returns the selected entry, or a stable local fallback when the catalog
+  /// has no explicit selection. Existing catalogs continue to resolve to one
+  /// of their persisted profiles.
   ControlPlaneProfile get active {
     final selected = current;
     if (selected != null) return selected;
@@ -486,8 +441,8 @@ final class ProfileSet {
     }
     return ControlPlaneProfile(
       name: defaultHyfensProfileName,
-      endpoint: Uri.parse(managedCloudApiBase),
-      managed: true,
+      endpoint: Uri.parse(defaultControlPlaneApiBase),
+      managed: false,
     );
   }
 

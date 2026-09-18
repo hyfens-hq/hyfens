@@ -77,11 +77,11 @@ Completed validation:
 
 - `dart format` for changed control-plane source/export/tests — passed.
 - `cd packages/control_plane && dart analyze --fatal-infos .` — passed.
-- `cd packages/control_plane && HYFENS_TEST_POSTGRES_URL='postgresql://hyfens:hyfens-p2-db@127.0.0.1:55433/hyfens?sslmode=disable' dart test test/p3e_persistence_test.dart`
+- `cd packages/control_plane && HYFENS_TEST_POSTGRES_URL='postgresql://hyfens:hyfens-test-db@127.0.0.1:55433/hyfens?sslmode=disable' dart test test/p3e_persistence_test.dart`
   — 8 tests passed.
 - `cd packages/control_plane && dart test test/migration_test.dart` — 1 test
   passed.
-- `cd packages/control_plane && HYFENS_TEST_POSTGRES_URL='postgresql://hyfens:hyfens-p2-db@127.0.0.1:55433/hyfens?sslmode=disable' dart test`
+- `cd packages/control_plane && HYFENS_TEST_POSTGRES_URL='postgresql://hyfens:hyfens-test-db@127.0.0.1:55433/hyfens?sslmode=disable' dart test`
   — 79 tests passed; one MinIO integration skipped because its environment
   variables were not configured.
 - Fresh disposable PostgreSQL database migration/bootstrap plus P3E-2 and

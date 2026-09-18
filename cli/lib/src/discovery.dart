@@ -136,9 +136,8 @@ final class DiscoveryDocument {
 
   /// Public projection for diagnostics and agent-facing responses.
   ///
-  /// Managed Cloud authorization routes are implementation details and are
-  /// omitted from output. Self-hosted routes remain available so operators can
-  /// inspect their selected control plane.
+  /// Authorization routes can be redacted from output when a caller only needs
+  /// the compatibility and capability projection.
   Map<String, Object?> toPublicJson({
     bool redactEndpoints = false,
   }) => <String, Object?>{
@@ -249,7 +248,7 @@ final class DiscoveryClient {
         code: 'D1005',
         summary: 'Control-plane endpoint is not compatible',
         detail: error.message,
-        action: 'Use the managed Cloud API base or an HTTPS/self-hosted loopback API base.',
+        action: 'Use an HTTPS API base or an explicit loopback HTTP API base.',
       );
     } on Object catch (error) {
       throw ToolFailure.single(

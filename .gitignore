@@ -32,3 +32,6 @@ fixtures/.hyfens-physical-acceptance.*/
 docs/research/
 **/docs/research/
 experiments/**/results/
+
+# Local infrastructure state is never part of the OSS source tree.
+deploy/aws/**/.terraform/

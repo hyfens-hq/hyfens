@@ -7,9 +7,9 @@ Status: `APPROVED DESIGN — BOUNDED LOCAL IMPLEMENTATION IN PROGRESS`
 
 The control plane is the product module that turns immutable, locally verified
 Flutter release and patch artifacts into tenant-scoped delivery decisions. It
-does not execute patch code, replace the runtime trust boundary, or imply a
-hosted service exists today. The first implementation is the standard-library
-single-node package in [`packages/control_plane`](../../packages/control_plane)
+does not execute patch code or replace the runtime trust boundary. The first
+implementation is the standard-library
+single-node package in [`packages/control_plane`](../../packages/control_plane/)
 and intentionally covers only the bounded Task 41 local slice.
 
 ## 1. Topology and responsibility
@@ -18,7 +18,7 @@ and intentionally covers only the bounded Task 41 local slice.
 Developer / CI
       │
       ▼
-CLI ── local compiler/instrumenter ── local or managed signing boundary
+CLI ── local compiler/instrumenter ── local or organization signing boundary
       │                         │
       │ exact release/patch     │ signed Patch Format v1 bytes
       ▼                         ▼
@@ -36,7 +36,7 @@ The seams are deliberately narrow:
 
 | Module/interface | Owns | Must not own |
 | --- | --- | --- |
-| CLI/build interface | Source discovery, release baseline, patch compilation, local verification, machine-readable commands | Hosted authorization or a different patch protocol |
+| CLI/build interface | Source discovery, release baseline, patch compilation, local verification, machine-readable commands | External authorization or a different patch protocol |
 | Signing interface | Developer, organization, offline, or managed-provider signing choice | Making an unsigned or wrongly bound artifact valid |
 | Control-plane domain interface | Tenant ownership, resource lifecycle, RBAC, policy, registration, rollout eligibility, audit, and observation intake | Executing a patch or selecting executable runtime state |
 | Distribution interface | Authenticated lookup, immutable byte delivery, content digest, caching, and import/export transport | Trusting CDN/HTTP headers or changing artifact bytes |
@@ -48,8 +48,8 @@ versioned set of exact identities, platform, environment, installation
 pseudonym, and high-water; rollout, policy, cohort, revocation, and filtering
 complexity remain behind that interface. The interface returns a decision and
 immutable references, not executable authority. Storage, queue, CDN, and KMS
-implementations are adapters at these seams and can vary between local,
-self-hosted, and managed deployments.
+implementations are adapters at these seams and can vary between local and
+self-hosted deployments.
 
 ## 2. Control-plane responsibilities
 
@@ -265,14 +265,14 @@ authority and never asks the runtime to reset or lower its high-water.
 | --- | --- | --- | --- |
 | Developer-managed | Local workstation or CI secret manager | Register public key and verify metadata | Release embeds/initializes the corresponding trust anchor |
 | Organization-managed | Customer-controlled CI/KMS/HSM | Store provider reference and approval/audit metadata | Same release-bound public-key and lifecycle checks |
-| Managed signing | Explicit opt-in provider/HSM boundary | Submit a digest/bytes for signing; never expose private key material | Artifact still carries v1 signature metadata and passes runtime checks |
+| Organization signing | Explicit opt-in signer or HSM boundary | Submit a digest/bytes for signing; never expose private key material | Artifact still carries v1 signature metadata and passes runtime checks |
 | Offline/self-hosted | Offline signer and export/import bundle | Validate manifest, digest, signature, and import provenance | Private/offline trust state remains release-owned |
-| Air-gapped | Customer signer and private distribution | No mandatory cloud dependency; import/export is revalidated | Runtime accepts only exact signed, release-compatible bytes |
+| Air-gapped | Customer signer and private distribution | No mandatory network dependency; import/export is revalidated | Runtime accepts only exact signed, release-compatible bytes |
 
-The hosted control plane must not silently become a key escrow service. If
-managed signing is offered, it is a distinct, explicitly authorized boundary
-with provider isolation, key-use audit, rotation/recovery procedures, and no
-API response containing private key material.
+The control plane must not silently become a key escrow service. If an
+external signing service is used, it is a distinct, explicitly authorized
+boundary with key-use audit, rotation/recovery procedures, and no API response
+containing private key material.
 
 ## 8. Rollout and delivery evaluation
 
@@ -351,10 +351,10 @@ cross a configured threshold, but the signal is incomplete and non-authoritative
   release/high-water bound; and
 - all automated pauses and operator overrides create AuditEvents.
 
-`tool status` remains a developer-local toolchain surface. The hosted control
-plane does not assume unauthenticated remote introspection of a running app.
+`tool status` remains a developer-local toolchain surface. The control plane
+does not assume unauthenticated remote introspection of a running app.
 
-## 11. Self-hosted and managed shape
+## 11. Deployment shape
 
 The same domain interface supports a progression:
 
@@ -363,13 +363,13 @@ The same domain interface supports a progression:
 2. production self-hosted containers with external PostgreSQL,
    S3-compatible storage, optional Redis/Valkey, customer TLS, and customer
    signing; and
-3. managed cloud with isolated tenant controls, managed distribution, and an
-   explicitly selected managed KMS/HSM adapter.
+3. additional self-hosted deployments with isolated tenant controls,
+   distribution, and an explicitly selected external KMS/HSM adapter.
 
 Air-gapped operation uses offline release registration, local build/sign,
 export of an immutable manifest/artifact bundle, import-time revalidation,
-and private HTTP/object distribution. Cloud availability is never required
-for an already installed runtime to remain safe.
+and private HTTP/object distribution. An already installed runtime remains
+safe when its control plane is unavailable.
 
 ## 12. Design stop conditions
 
@@ -379,42 +379,8 @@ would:
 - change Patch Format v1 or capability v1 to carry SaaS metadata;
 - make the server or CDN replace runtime signature/release/high-water checks;
 - lower/reset high-water for rollback, cleanup, recovery, or rollout;
-- make cloud connectivity mandatory for local/runtime correctness;
+- make network connectivity mandatory for local/runtime correctness;
 - permit a downloaded key or product policy to self-authorize runtime trust;
-- require customer private keys to traverse the hosted control plane without
-  an explicit managed-signing decision; or
+- require customer private keys to traverse the control plane without an
+  explicit signing decision; or
 - turn incomplete observations into claims of runtime health or activation.
-
-## 13. P2 hosted-like foundation (implemented, not production)
-
-The bounded P2 adapter keeps the same authority split while replacing only
-the persistence and artifact adapters:
-
-```text
-tool deploy
-    │ exact locally verified Patch Format v1 bytes
-    ▼
-dart:io control plane ── PostgreSQL metadata/migrations
-    │                    └─ tenant-scoped immutable records,
-    │                       idempotency, promotion, audit hash chain
-    └─ S3-compatible object store ── digest-addressed exact bytes
-                 │
-                 ▼
-        read-only runtime delivery
-                 │
-                 ▼
-        E1 re-verification and state-v4 activation
-```
-
-`PostgresControlPlaneStore` and `S3CompatibleArtifactStore` implement the
-existing interfaces; the filesystem adapter remains available for local and
-self-hosted use. The hosted-like Compose stack is deliberately a bounded
-single-node reference with PostgreSQL, MinIO, and one non-root Dart process.
-It is not HA, internet-scale capacity, or production hardening evidence.
-
-The service exposes liveness (`/healthz`), dependency/migration readiness
-(`/readyz`), and process-local aggregate operator metrics (`/metrics`). The
-metrics endpoint reports request counts, status classes, update decisions, and
-duration totals/maxima only. It is not runtime telemetry and cannot alter
-delivery or runtime state. TLS termination and trusted-proxy behavior remain
-an ingress responsibility documented in `deploy/p2/nginx.conf.example`.

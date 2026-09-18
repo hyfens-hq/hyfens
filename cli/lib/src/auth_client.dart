@@ -553,9 +553,7 @@ final class AuthClient {
     final metadata = CliProfile(
       name: name,
       endpoint: endpoint,
-      managed:
-          controlPlaneEndpointKey(endpoint) ==
-          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase)),
+      managed: false,
       organizationId: profile.organizationId,
       applicationId: profile.applicationId,
       environmentId: profile.environmentId,
@@ -852,10 +850,7 @@ void _validateToken(String token, String field) {
 }
 
 String _defaultProfileName(Uri endpoint) {
-  return controlPlaneEndpointKey(endpoint) ==
-          controlPlaneEndpointKey(Uri.parse(managedCloudApiBase))
-      ? managedCloudProfileName
-      : 'self-hosted';
+  return defaultHyfensProfileName;
 }
 
 ToolFailure _unsupportedAuthMethod({

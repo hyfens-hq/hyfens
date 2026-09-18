@@ -32,8 +32,6 @@ Coordinator. No commit is authorized. Stop at the P3A maintainer-review gate.
 
 ## Dependencies
 
-- `tasks/49-p2-exit-p3-design.md`;
-- `docs/P2_EXIT_REVIEW.md`;
 - `docs/P3_ROLLOUT_OBSERVABILITY_DESIGN.md`;
 - existing `packages/control_plane` domain, persistence, auth, audit, and
   runtime update-check implementation;
@@ -141,8 +139,6 @@ store-backed slice and remains a prerequisite for distributed rollout writes.
 ## References
 
 - `docs/P3_ROLLOUT_OBSERVABILITY_DESIGN.md`;
-- `docs/P2_EXIT_REVIEW.md`;
-- `tasks/49-p2-exit-p3-design.md`;
 - maintainer authorization supplied on 2026-08-23.
 
 ## History

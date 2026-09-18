@@ -1,7 +1,7 @@
 # Hyfens OSS dashboard deployment
 
 This directory deploys the public OSS dashboard in `dashboard/`. It contains
-no marketing website, CMS, editorial content, or Cloud-only web code.
+only the self-hosted dashboard deployment helper.
 
 The dashboard is a dependency-free static client for the Hyfens control plane.
 It keeps human session material in memory, renders authoritative read-only
@@ -30,9 +30,9 @@ discovery, human-auth, device-auth, and read-only overview routes.
 /var/www/hyfens/dashboard
 ```
 
-The local Nginx target is `app.hyfens.com` on loopback port `18083`. The
-dashboard deployment does not modify PostgreSQL, R2, control-plane images,
-signing keys, or the marketing site.
+The local Nginx target is a loopback listener on port `18083`. The dashboard
+deployment does not modify the database, object store, control-plane images,
+or signing keys.
 
 After the one-time root setup, stage only the dashboard tree and run the fixed
 wrapper:
@@ -42,7 +42,7 @@ rsync -a --delete \
   --exclude '__pycache__/' \
   --exclude '.DS_Store' \
   dashboard/ \
-  hyfens-server:/home/hyfen/p2-deploy-stage/dashboard/
+  hyfens-server:/home/hyfen/hyfens-deploy-stage/dashboard/
 
 ssh hyfens-server 'sudo -n /usr/local/sbin/hyfens-dashboard-deploy'
 ```
@@ -50,12 +50,6 @@ ssh hyfens-server 'sudo -n /usr/local/sbin/hyfens-dashboard-deploy'
 The wrapper accepts no arguments and only installs the fixed dashboard file
 allowlist. It cannot run arbitrary root commands.
 
-## One-time host setup
-
-`install-dashboard-deploy-access.sh` is a root-only setup input. It installs
-the fixed wrapper, Nginx site, and narrow sudo rule. It does not add SSH keys,
-change SSH policy, or grant the deployment user Docker access.
-
-The private Cloud web repository owns the separate marketing/CMS deployment;
-those sources and deployment files are intentionally absent from this OSS
-directory.
+The fixed wrapper is intentionally limited to the dashboard file allowlist.
+Configure the host's web server and deployment permissions separately for
+each self-hosted installation.

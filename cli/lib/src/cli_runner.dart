@@ -934,14 +934,9 @@ final class RollbackCommand extends _ToolCommand {
         defaultsTo: 'base',
         help: 'Rollback target; only the trusted store-installed AOT base is supported.',
       )
-      ..addFlag(
-        'cloud',
-        help: 'Request rollback from the authenticated managed Cloud environment.',
-        negatable: false,
-      )
       ..addOption(
         'endpoint',
-        help: 'Cloud or self-hosted control-plane URL or HYFENS_CONTROL_PLANE_URL.',
+        help: 'Control-plane URL or HYFENS_CONTROL_PLANE_URL.',
       )
       ..addOption(
         'token',
@@ -974,7 +969,7 @@ final class RollbackCommand extends _ToolCommand {
 
   @override
   String get description =>
-      'Rollback locally or request a trusted base rollback from managed Cloud.';
+      'Rollback locally or request a trusted base rollback from a control plane.';
 
   @override
   Future<void> run() async {
@@ -984,15 +979,12 @@ final class RollbackCommand extends _ToolCommand {
       'endpoint',
       'HYFENS_CONTROL_PLANE_URL',
     );
-    final profile = endpointValue == null || argResults!['cloud'] == true
+    final profile = endpointValue == null
         ? await runner.authClient.readProfile()
         : null;
-    final cloudRequested =
-        argResults!['cloud'] == true ||
-        endpointValue != null ||
-        profile?.managed == true;
-    if (cloudRequested) {
-      await _runCloudRollback(endpointValue: endpointValue, profile: profile);
+    final remoteRequested = endpointValue != null || profile != null;
+    if (remoteRequested) {
+      await _runRemoteRollback(endpointValue: endpointValue, profile: profile);
       return;
     }
 
@@ -1026,16 +1018,14 @@ final class RollbackCommand extends _ToolCommand {
     runner.write('  Patch files and sequence evidence were preserved.');
   }
 
-  Future<void> _runCloudRollback({
+  Future<void> _runRemoteRollback({
     required String? endpointValue,
     required Profile? profile,
   }) async {
     final auth = await _resolveControlPlaneRequest(
       runner: runner,
       endpoint: endpointValue == null
-          ? profile?.managed == true
-                ? profile!.endpoint
-                : Uri.parse(managedCloudApiBase)
+          ? profile?.endpoint ?? Uri.parse(defaultControlPlaneApiBase)
           : _rolloutEndpoint(endpointValue, usage),
       token: _rolloutOptionOrEnvironment(
         argResults,
@@ -1061,7 +1051,7 @@ final class RollbackCommand extends _ToolCommand {
         'environment-id',
         'HYFENS_ENVIRONMENT_ID',
       ),
-      missingSummary: 'Cloud rollback configuration is incomplete',
+      missingSummary: 'Remote rollback configuration is incomplete',
       missingCode: 'R8901',
       requireApplication: true,
       requireEnvironment: true,
@@ -1107,13 +1097,13 @@ final class RollbackCommand extends _ToolCommand {
       'releaseId': command.releaseId,
       'highWaterSequence': command.highWaterSequence,
       'keyId': command.keyId,
-      'mode': 'managed_cloud',
+      'mode': 'remote',
     };
     if (jsonMode) {
       runner.writeJson(result);
       return;
     }
-    runner.write('Cloud rollback requested');
+    runner.write('Remote rollback requested');
     runner.write('  Organization: ${auth.organizationId}');
     runner.write('  Application:  ${auth.applicationId}');
     runner.write('  Environment:  ${auth.environmentId}');
@@ -1127,7 +1117,7 @@ final class RollbackCommand extends _ToolCommand {
       '  Signature:    verified by the release trust key ${command.keyId}',
     );
     runner.write(
-      '  Runtime:      will apply the directive on its next Cloud poll.',
+      '  Runtime:      will apply the directive on its next control-plane poll.',
     );
   }
 }
@@ -1926,7 +1916,7 @@ final class DeployCommand extends _ToolCommand {
     final endpointValue =
         _optionOrEnvironment('endpoint', 'HYFENS_CONTROL_PLANE_URL') ??
         profile?.endpoint.toString() ??
-        managedCloudApiBase;
+        defaultControlPlaneApiBase;
     final endpoint = _deployEndpoint(endpointValue);
     final profileScope = _profileScopeForEndpoint(profile, endpoint);
     final explicitToken = _optionOrEnvironment('token', 'HYFENS_TOKEN');
@@ -2193,7 +2183,7 @@ Future<_ResolvedControlPlaneRequest> _resolveControlPlaneRequest({
 }) async {
   final profile = await runner.authClient.readProfile();
   final resolvedEndpoint = validateControlPlaneEndpoint(
-    endpoint ?? profile?.endpoint ?? Uri.parse(managedCloudApiBase),
+    endpoint ?? profile?.endpoint ?? Uri.parse(defaultControlPlaneApiBase),
     operation: 'control-plane request',
   );
   final profileScope = _profileScopeForEndpoint(profile, resolvedEndpoint);

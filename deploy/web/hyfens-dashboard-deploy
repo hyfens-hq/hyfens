@@ -6,7 +6,7 @@ set -eu
   exit 2
 }
 
-stage=/home/hyfen/p2-deploy-stage/dashboard
+stage=/home/hyfen/hyfens-deploy-stage/dashboard
 target=/var/www/hyfens/dashboard
 nginx_site=/etc/nginx/sites-available/hyfens-dashboard-local.conf
 

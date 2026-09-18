@@ -800,7 +800,7 @@ Map<String, Object?> _selfCheckReport() {
     'transport': 'usb',
     'deviceUdid': '000080200015288E03002E',
     'coreDeviceId': 'CC5119BA-1DBD-54D2-AD8C-1F15FC5E5B6F',
-    'developmentTeam': 'CYT7A4VAZ3',
+    'developmentTeam': 'TEAMID12345',
     'sourceSha256': List<String>.filled(64, 'a').join(),
     'patchSha256': List<String>.filled(64, 'b').join(),
     'patchSequence': 1,

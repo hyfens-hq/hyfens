@@ -19,17 +19,6 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         if self.path == "/.well-known/hyfens":
             self._json(200, {"product": "hyfens", "apiVersion": "v1"})
             return
-        if urllib.parse.urlparse(self.path).path == "/v1/platform/metrics":
-            self._json(200, {"readOnly": True, "scope": "platform"})
-            return
-        if urllib.parse.urlparse(self.path).path.startswith(
-            "/v1/platform/organizations"
-        ) or urllib.parse.urlparse(self.path).path == "/v1/platform/audit":
-            self._json(200, {"readOnly": True, "scope": "platform"})
-            return
-        if urllib.parse.urlparse(self.path).path == "/v1/platform/commercial/catalog":
-            self._json(200, {"schema_version": 1, "catalogs": []})
-            return
         if self.path.startswith("/v1/organizations/"):
             self._json(200, {"readOnly": True, "source": "upstream"})
             return
@@ -50,25 +39,8 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         if self.path == "/auth/authorize":
             self._json(200, {"code": "hfc_demo", "state": "state_demo", "redirect_uri": "http://127.0.0.1:43127/callback"})
             return
-        if self.path == "/v1/public/cloud/register":
-            self._json(202, {"status": "verification_required"})
-            return
-        if self.path in {
-            "/v1/public/cloud/verify",
-            "/v1/public/cloud/verification/resend",
-            "/v1/public/cloud/recovery",
-            "/v1/public/cloud/recovery/complete",
-        }:
-            self._json(200, {"status": "accepted"})
-            return
-        if self.path == "/v1/organizations":
-            self._json(201, {"status": "created"})
-            return
         if self.path in {"/v1/public/register", "/v1/public/waitlist", "/v1/public/newsletter"}:
             self._json(200, {"status": "accepted", "request_id": "request_demo"})
-            return
-        if urllib.parse.urlparse(self.path).path.endswith("/legal-approve"):
-            self._json(200, {"status": "approved"})
             return
         if self.path in {"/auth/token", "/auth/device/code", "/auth/device/token", "/auth/device/approve"}:
             self._json(200, {"status": "accepted"})
@@ -207,63 +179,6 @@ class ProxyRouteTest(unittest.TestCase):
         self.assertEqual(_UpstreamHandler.calls[2][2], "Bearer memory-access")
         self.assertNotIn(b"not-in-url", body)
 
-    def test_platform_metrics_proxy_requires_auth_and_allows_only_profile_query(self):
-        status, _ = self.request("GET", "/v1/platform/metrics")
-        self.assertEqual(status, 401)
-        self.assertEqual(_UpstreamHandler.calls, [])
-
-        status, body = self.request(
-            "GET",
-            "/v1/platform/metrics",
-            headers={"Authorization": "Bearer memory-access"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["scope"], "platform")
-
-        status, _ = self.request(
-            "GET",
-            "/v1/platform/metrics?profile=super-admin",
-            headers={"Authorization": "Bearer memory-access"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(
-            _UpstreamHandler.calls[-1][0:3],
-            ("GET", "/v1/platform/metrics?profile=super-admin", "Bearer memory-access"),
-        )
-
-        status, _ = self.request(
-            "GET",
-            "/v1/platform/metrics?organization_id=secret",
-            headers={"Authorization": "Bearer memory-access"},
-        )
-        self.assertEqual(status, 400)
-        self.assertEqual(len(_UpstreamHandler.calls), 2)
-
-    def test_platform_projection_proxy_forwards_bounded_queries(self):
-        headers = {"Authorization": "Bearer memory-access"}
-        requests = (
-            "/v1/platform/organizations?profile=super-admin&q=acme",
-            "/v1/platform/organizations/org_demo?profile=super-admin",
-            "/v1/platform/audit?profile=super-admin&organization_id=org_demo",
-        )
-        for path in requests:
-            with self.subTest(path=path):
-                status, body = self.request("GET", path, headers=headers)
-                self.assertEqual(status, 200)
-                self.assertEqual(json.loads(body)["scope"], "platform")
-
-        self.assertEqual(
-            [call[1] for call in _UpstreamHandler.calls],
-            list(requests),
-        )
-        status, _ = self.request(
-            "GET",
-            "/v1/platform/organizations?profile=super-admin&token=secret",
-            headers=headers,
-        )
-        self.assertEqual(status, 400)
-        self.assertEqual(len(_UpstreamHandler.calls), len(requests))
-
     def test_proxy_forwards_browser_and_device_auth_routes_without_query_secrets(self):
         query = urllib.parse.urlencode(
             {
@@ -319,32 +234,6 @@ class ProxyRouteTest(unittest.TestCase):
         )
         self.assertEqual([authorization for _, _, authorization, _ in _UpstreamHandler.calls], [None, None, None])
 
-    def test_proxy_forwards_cloud_customer_onboarding_and_owner_scope(self):
-        public_routes = (
-            ("/v1/public/cloud/register", {"email": "new@example.com", "password": "not-in-url"}),
-            ("/v1/public/cloud/verify", {"token": "verification-code"}),
-        )
-        for path, body in public_routes:
-            with self.subTest(path=path):
-                status, _ = self.request("POST", path, body)
-                self.assertIn(status, (200, 202))
-
-        status, _ = self.request(
-            "POST",
-            "/v1/organizations",
-            {"name": "Customer workspace"},
-            headers={
-                "Authorization": "Bearer customer-access",
-                "Idempotency-Key": "first-workspace",
-            },
-        )
-        self.assertEqual(status, 201)
-        self.assertEqual(_UpstreamHandler.calls[-1][0:3], ("POST", "/v1/organizations", "Bearer customer-access"))
-        self.assertEqual(
-            _UpstreamHandler.calls[-1][3],
-            b'{"name": "Customer workspace"}',
-        )
-
     def test_public_onboarding_routes_reject_query_data_and_unknown_paths(self):
         status, _ = self.request("POST", "/v1/public/waitlist?email=secret@example.com", {"email": "visitor@example.com"})
         self.assertEqual(status, 400)
@@ -353,54 +242,6 @@ class ProxyRouteTest(unittest.TestCase):
         status, _ = self.request("POST", "/v1/public/unknown", {"email": "visitor@example.com"})
         self.assertEqual(status, 405)
         self.assertEqual(_UpstreamHandler.calls, [])
-
-    def test_platform_commercial_review_proxy_forwards_safe_reads_and_approval(self):
-        status, _ = self.request("GET", "/v1/platform/commercial/catalog")
-        self.assertEqual(status, 401)
-        self.assertEqual(_UpstreamHandler.calls, [])
-
-        status, body = self.request(
-            "GET",
-            "/v1/platform/commercial/catalog?profile=super-admin&include_internal=true",
-            headers={"Authorization": "Bearer memory-access"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["schema_version"], 1)
-        self.assertEqual(
-            _UpstreamHandler.calls[-1][0:3],
-            (
-                "GET",
-                "/v1/platform/commercial/catalog?profile=super-admin&include_internal=true",
-                "Bearer memory-access",
-            ),
-        )
-
-        status, _ = self.request(
-            "GET",
-            "/v1/platform/commercial/catalog?token=secret",
-            headers={"Authorization": "Bearer memory-access"},
-        )
-        self.assertEqual(status, 400)
-
-        status, body = self.request(
-            "POST",
-            "/v1/platform/commercial/catalog/catalog_demo/legal-approve?profile=super-admin",
-            {},
-            headers={
-                "Authorization": "Bearer memory-access",
-                "Idempotency-Key": "approval-demo-1",
-            },
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["status"], "approved")
-        self.assertEqual(
-            _UpstreamHandler.calls[-1][0:3],
-            (
-                "POST",
-                "/v1/platform/commercial/catalog/catalog_demo/legal-approve?profile=super-admin",
-                "Bearer memory-access",
-            ),
-        )
 
     def test_auth_pages_are_served_as_static_same_origin_routes(self):
         for path in ("/cli/authorize/", "/device/"):
@@ -432,34 +273,11 @@ class ProxyRouteTest(unittest.TestCase):
                 self.assertLess(runtime_index, auth_index)
 
     def test_clean_dashboard_view_paths_serve_the_index(self):
-        for path in (
-            "/",
-            "/overview",
-            "/applications",
-            "/platform",
-            "/platform/organizations",
-            "/platform/organizations/org_demo",
-            "/platform/audit",
-            "/platform/operations",
-            "/platform/settings",
-            "/settings",
-        ):
+        for path in ("/", "/overview", "/applications", "/settings"):
             with self.subTest(path=path):
                 status, body = self.request("GET", path)
                 self.assertEqual(status, 200)
                 self.assertIn(b"Hyfens | Developer control plane", body)
-        self.assertEqual(_UpstreamHandler.calls, [])
-
-    def test_platform_host_routes_serve_the_platform_shell_index(self):
-        for path in ("/", "/organizations", "/organizations/org_demo", "/audit"):
-            with self.subTest(path=path):
-                status, body = self.request(
-                    "GET",
-                    path,
-                    headers={"Host": "platform.hyfens.com"},
-                )
-                self.assertEqual(status, 200)
-                self.assertIn(b"Platform Console", body)
         self.assertEqual(_UpstreamHandler.calls, [])
 
     def test_protected_routes_require_bearer_and_query_data_is_rejected(self):
@@ -486,26 +304,6 @@ class ProxyRouteTest(unittest.TestCase):
 
 
 class DashboardContractTest(unittest.TestCase):
-    def test_platform_entitlements_exposes_audited_commercial_approval_workflow(self):
-        root = Path(__file__).resolve().parent
-        app_source = (root / "app.js").read_text(encoding="utf-8")
-        styles = (root / "styles.css").read_text(encoding="utf-8")
-
-        self.assertIn("v1/platform/commercial/catalog", app_source)
-        self.assertIn("include_internal", app_source)
-        self.assertIn("legal-approve", app_source)
-        self.assertIn("platform:commercial:read", app_source)
-        self.assertIn("platform:plans:legal_review", app_source)
-        self.assertIn("data-platform-action", app_source)
-        self.assertIn("expected_etag", app_source)
-        self.assertIn("commercial-catalog-legal-approve", app_source)
-        task_text = (
-            root.parent / "tasks" / "279-platform-commercial-approval-console.md"
-        ).read_text(encoding="utf-8")
-        self.assertIn("no automatic legal approval", task_text.lower())
-        self.assertIn("commercial-catalog-card", styles)
-        self.assertIn("commercial-approval-warning", styles)
-
     def test_auth_forms_use_a_stable_interruptible_transition_stage(self):
         root = Path(__file__).resolve().parent
         markup = (root / "index.html").read_text(encoding="utf-8")
@@ -520,25 +318,22 @@ class DashboardContractTest(unittest.TestCase):
         self.assertIn("inert", markup)
         self.assertIn(".auth-form-stage {", styles)
         stage_rule = styles.split(".auth-form-stage {", 1)[1].split("}", 1)[0]
-        self.assertIn("display: block;", stage_rule)
-        self.assertIn("position: relative;", stage_rule)
+        self.assertIn("display: grid;", stage_rule)
         self.assertIn(".auth-form-stage > .auth-form {", styles)
         transition_rule = styles.split(
             ".auth-form-stage > .auth-form {", 1
         )[1].split("}", 1)[0]
-        self.assertIn("position: relative;", transition_rule)
         self.assertIn("transition: opacity", transition_rule)
         self.assertIn("transform", transition_rule)
         self.assertIn("visibility", transition_rule)
         self.assertIn(".auth-form-stage > .auth-form[aria-hidden=\"true\"]", styles)
-        self.assertIn("position: absolute;", styles)
         self.assertIn("opacity: 0;", styles)
         self.assertIn("transform: translateY(8px);", styles)
         self.assertIn("prefers-reduced-motion: reduce", styles)
         self.assertIn("setAttribute('aria-hidden'", app_source)
         self.assertIn("form.inert", app_source)
 
-    def test_auth_shell_is_focused_single_panel_and_keeps_onboarding_out(self):
+    def test_auth_shell_is_two_pane_bounded_and_keeps_onboarding_out(self):
         root = Path(__file__).resolve().parent
         markup = (root / "index.html").read_text(encoding="utf-8")
         styles = (root / "styles.css").read_text(encoding="utf-8")
@@ -547,42 +342,20 @@ class DashboardContractTest(unittest.TestCase):
         auth_panel_rule = styles.split(".auth-panel {", 1)[1].split("}", 1)[0]
         auth_focus_marker = ".auth-form input:focus,\n.auth-form input:focus-visible {"
 
-        self.assertIn('href="styles.css?v=238"', markup)
-        self.assertIn('src="app.js?v=234"', markup)
-        self.assertIn("min-height: 100dvh;", auth_layout_rule)
-        self.assertIn("place-items: center;", auth_layout_rule)
-        self.assertIn("padding:", auth_layout_rule)
-        self.assertIn("width: min(100%, 540px);", auth_panel_rule)
-        self.assertIn("height: auto;", auth_panel_rule)
-        self.assertIn("border: 1px solid var(--line);", auth_panel_rule)
-        self.assertIn("border-radius: var(--radius-panel);", auth_panel_rule)
-        self.assertIn("overflow: clip;", auth_panel_rule)
+        self.assertIn('href="styles.css?v=234"', markup)
+        self.assertIn('src="app.js?v=229"', markup)
+        self.assertIn("height: 100dvh;", auth_layout_rule)
+        self.assertIn("overflow: hidden;", auth_layout_rule)
+        self.assertIn("width: 100%;", auth_panel_rule)
+        self.assertIn("min-height: 0;", auth_panel_rule)
+        self.assertIn("height: 100%;", auth_panel_rule)
+        self.assertIn("overflow-y: auto;", auth_panel_rule)
         self.assertIn(auth_focus_marker, styles)
         auth_focus_rule = styles.split(auth_focus_marker, 1)[1].split("}", 1)[0]
         self.assertNotIn("onboarding-intake", markup)
         self.assertNotIn("data-intake-kind", markup)
         self.assertNotIn("Join the waitlist", markup)
         self.assertNotIn("Get product updates", markup)
-        self.assertNotIn("app.hyfens.com", markup)
-        self.assertNotIn("auth-rail", markup)
-        self.assertNotIn("Human session", markup)
-        self.assertNotIn("Live session", markup)
-        self.assertNotIn("Session material", markup)
-        self.assertNotIn("Traceable by design", markup)
-        self.assertNotIn("discovery-callout", markup)
-        self.assertNotIn("auth-footnote", markup)
-        self.assertNotIn("form-kicker", markup)
-        self.assertNotIn("form-badge", markup)
-        self.assertNotIn("field-help", markup)
-        self.assertIn("Welcome back.", markup)
-        self.assertIn("Sign in to your Hyfens workspace.", markup)
-        self.assertIn('id="invitation-form"', markup)
-        self.assertIn("error.status === 401 && error.path === 'auth/login'", app_source)
-        self.assertIn("return 'Your session expired. Sign in again.';", app_source)
-        self.assertIn("return 'Sign-in is not available on this control plane.';", app_source)
-        self.assertIn("return 'Account creation is not available on this control plane.';", app_source)
-        self.assertIn("function loginErrorMessage(error, { restoring = false } = {})", app_source)
-        self.assertIn("if (restoring) return 'Your saved session could not be restored. Sign in again.';", app_source)
         self.assertIn("nodes.intakeForm?.addEventListener", app_source)
         self.assertIn("if (nodes.intakeForm) showIntakeMode", app_source)
         self.assertNotIn("box-shadow", auth_focus_rule)
@@ -604,9 +377,9 @@ class DashboardContractTest(unittest.TestCase):
             "--hyfens-font-primary: var(--hyfens-font-ui);",
             tokens,
         )
-        self.assertIn('href="tokens.css?v=223"', markup)
-        self.assertIn('href="styles.css?v=238"', markup)
-        self.assertIn('src="app.js?v=234"', markup)
+        self.assertIn('href="tokens.css?v=222"', markup)
+        self.assertIn('href="styles.css?v=234"', markup)
+        self.assertIn('src="app.js?v=229"', markup)
         self.assertGreaterEqual(
             styles.count("font-family: var(--hyfens-font-display);"),
             2,
@@ -731,28 +504,6 @@ class DashboardContractTest(unittest.TestCase):
         self.assertIn("renderCurrentPage({ transition: true });", app_source)
         self.assertIn("data-page-transition", app_source)
         self.assertIn("requestAnimationFrame", app_source)
-
-    def test_dashboard_has_explicit_customer_and_platform_shell_contracts(self):
-        root = Path(__file__).resolve().parent
-        markup = (root / "index.html").read_text(encoding="utf-8")
-        app_source = (root / "app.js").read_text(encoding="utf-8")
-
-        self.assertIn('id="app-view" class="app-view" data-shell="customer"', markup)
-        self.assertIn('id="platform-sidebar"', markup)
-        self.assertIn('id="customer-context-bar"', markup)
-        self.assertIn('id="platform-context-bar"', markup)
-        self.assertIn('href="/applications"', markup)
-        self.assertIn('href="/platform/organizations"', markup)
-        self.assertIn('displayApiBase', (root / "auth-flow.js").read_text(encoding="utf-8"))
-        self.assertIn("const PLATFORM_HOSTNAMES = new Set", app_source)
-        self.assertIn("const PLATFORM_AUTHORIZATION_AUDIENCE = 'platform'", app_source)
-        self.assertIn("function requestedLoginAudience", app_source)
-        self.assertIn("authorizationAudience", app_source)
-        self.assertIn("function applyShellMode()", app_source)
-        self.assertIn("function customerProfileList()", app_source)
-        self.assertIn("function platformCapabilityForView", app_source)
-        self.assertIn("function renderPlatformOrganizationsPage", app_source)
-        self.assertIn("function renderSettingsPage", app_source)
 
     def test_dashboard_navigation_motion_is_fast_transform_only_and_reduced_safe(self):
         root = Path(__file__).resolve().parent

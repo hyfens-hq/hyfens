@@ -5,31 +5,30 @@ import 'package:hyfens_tool/tool.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('managed endpoint is hidden only in public profile projections', () {
+  test('profile projections contain only the selected endpoint metadata', () {
     final profile = CliProfile(
-      name: managedCloudProfileName,
-      endpoint: Uri.parse(managedCloudApiBase),
-      managed: true,
+      name: 'self-hosted',
+      endpoint: Uri.parse('https://self-host.example/p2/'),
+      managed: false,
     );
     final publicMetadata = profile.toPublicMetadataJson();
 
-    expect(profile.toMetadataJson()['endpoint'], managedCloudApiBase);
-    expect(publicMetadata['endpoint'], managedCloudDisplayName);
-    expect(publicMetadata['endpoint'], isNot(contains('api.hyfens.com')));
+    expect(profile.toMetadataJson()['endpoint'], 'https://self-host.example/p2/');
+    expect(publicMetadata['endpoint'], 'https://self-host.example/p2/');
     expect(
       displayControlPlaneUri(
-        Uri.parse('https://api.hyfens.com/p2/v1/organizations/org_1'),
+        Uri.parse('https://self-host.example/p2/v1/organizations/org_1'),
       ),
-      managedCloudDisplayName,
+      'https://self-host.example/p2/v1/organizations/org_1',
     );
     expect(
       displayControlPlaneUri(Uri.parse('https://self-host.example/p2/v1')),
       'https://self-host.example/p2/v1',
     );
     expect(
-      Profile(endpoint: Uri.parse(managedCloudApiBase))
+      Profile(endpoint: Uri.parse('https://self-host.example/p2/'))
           .toPublicJson()['endpoint'],
-      managedCloudDisplayName,
+      'https://self-host.example/p2/',
     );
   });
 
@@ -108,7 +107,7 @@ void main() {
   );
 
   test(
-    'profile list exposes the managed Cloud default without writing secrets',
+    'profile list exposes the local default without writing secrets',
     () async {
       final root = await Directory.systemTemp.createTemp('hyfens-profile-cli-');
       addTearDown(() => root.delete(recursive: true));
@@ -133,13 +132,12 @@ void main() {
       }
       final result =
           jsonDecode(await outputFile.readAsString()) as Map<String, Object?>;
-      expect(result['active_profile'], 'hyfens-cloud');
+      expect(result['active_profile'], 'self-hosted');
       final profiles = result['profiles']! as List<Object?>;
       final firstProfile = profiles.single as Map<String, Object?>;
-      expect(firstProfile['endpoint'], managedCloudDisplayName);
-      expect(firstProfile['endpoint'], isNot(contains('api.hyfens.com')));
+      expect(firstProfile['endpoint'], 'http://127.0.0.1:8080/');
       final persisted = await storage.readProfileCatalog();
-      expect(persisted.active.toJson()['endpoint'], managedCloudApiBase);
+      expect(persisted.active.toJson()['endpoint'], 'http://127.0.0.1:8080/');
       expect(File('${root.path}/credentials').existsSync(), isFalse);
     },
   );

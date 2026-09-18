@@ -12,7 +12,7 @@ server. The checked-in configuration is restored to loopback.
 
 ## Local iOS signing
 
-The generated iOS host uses the local development team `CYT7A4VAZ3` for
+The generated iOS host uses the local development team `TEAMID12345` for
 `dev.hyfens.hyfensToolchainApp`. A device Release build requires the matching
 Apple Development identity and an installed device development profile; the
 bounded audit used the existing wildcard profile and did not pass

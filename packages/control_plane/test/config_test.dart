@@ -13,99 +13,6 @@ void main() {
     expect(config.artifactAuthorization, isNull);
     expect(config.fileRoot, isA<Directory>());
     expect(config.auth, isNull);
-    expect(config.deploymentModel, DeploymentModel.selfHosted);
-    expect(config.billingProvider, isNull);
-  });
-
-  test('empty optional billing environment remains disabled', () {
-    final config = ControlPlaneConfig.fromEnvironment(<String, String>{
-      'HYFENS_BILLING_PROVIDER_TOKEN_HASH': '',
-      'HYFENS_RAZORPAY_STARTER_PLAN_ID': '',
-      'HYFENS_RAZORPAY_TEAM_PLAN_ID': '',
-      'HYFENS_RAZORPAY_WEBHOOK_SECRET': '',
-      'HYFENS_RAZORPAY_CURRENCY': '',
-      'HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR': '',
-      'HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR': '',
-    });
-    expect(config.billingProvider, isNull);
-    expect(config.razorpayBilling, isNull);
-  });
-
-  test('billing provider bridge uses a hashed deployment credential', () {
-    const token = 'billing-bridge-test-token';
-    final hash = CredentialService.tokenHash(token);
-    final bridge = BillingProviderBridgeConfig.fromEnvironment(<String, String>{
-      'HYFENS_BILLING_PROVIDER_TOKEN_HASH': hash,
-    });
-    expect(bridge, isNotNull);
-    expect(bridge!.matches(token), isTrue);
-    expect(bridge.matches('another-token'), isFalse);
-    expect(bridge.principal.id, 'billing-provider');
-    expect(bridge.principal.scopes, contains(billingProviderScope));
-    expect(
-      () => BillingProviderBridgeConfig.fromEnvironment(<String, String>{
-        'HYFENS_BILLING_PROVIDER_TOKEN_HASH': 'not-a-sha256',
-      }),
-      throwsArgumentError,
-    );
-  });
-
-  test('Cloud deployment mode is explicit and bounded', () {
-    final config = ControlPlaneConfig.fromEnvironment(<String, String>{
-      'HYFENS_DEPLOYMENT_MODEL': 'cloud',
-    });
-    expect(config.deploymentModel, DeploymentModel.cloud);
-    expect(
-      () => ControlPlaneConfig.fromEnvironment(<String, String>{
-        'HYFENS_DEPLOYMENT_MODEL': 'self-hosted',
-      }),
-      throwsArgumentError,
-    );
-  });
-
-  test('Razorpay checkout requires explicit currency configuration', () {
-    expect(
-      () => RazorpayBillingConfig.fromEnvironment(<String, String>{
-        'HYFENS_RAZORPAY_STARTER_PLAN_ID': 'rzp_plan_starter',
-        'HYFENS_RAZORPAY_TEAM_PLAN_ID': 'rzp_plan_team',
-        'HYFENS_RAZORPAY_WEBHOOK_SECRET': 'secret',
-      }),
-      throwsArgumentError,
-    );
-    final config = RazorpayBillingConfig.fromEnvironment(<String, String>{
-      'HYFENS_RAZORPAY_STARTER_PLAN_ID': 'rzp_plan_starter',
-      'HYFENS_RAZORPAY_TEAM_PLAN_ID': 'rzp_plan_team',
-      'HYFENS_RAZORPAY_WEBHOOK_SECRET': 'secret',
-      'HYFENS_RAZORPAY_CURRENCY': 'USD',
-      'HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR': '4900',
-      'HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR': '19900',
-    });
-    expect(config, isNotNull);
-    expect(config!.currency, 'USD');
-    expect(config.starterAmountMinor, 4900);
-    expect(config.teamAmountMinor, 19900);
-    expect(
-      () => RazorpayBillingConfig.fromEnvironment(<String, String>{
-        'HYFENS_RAZORPAY_STARTER_PLAN_ID': 'rzp_plan_starter',
-        'HYFENS_RAZORPAY_TEAM_PLAN_ID': 'rzp_plan_team',
-        'HYFENS_RAZORPAY_WEBHOOK_SECRET': 'secret',
-        'HYFENS_RAZORPAY_CURRENCY': 'INR',
-        'HYFENS_RAZORPAY_STARTER_AMOUNT_MINOR': '4900',
-        'HYFENS_RAZORPAY_TEAM_AMOUNT_MINOR': '19900',
-      }),
-      throwsArgumentError,
-    );
-    expect(
-      () => RazorpayBillingConfig(
-        starterPlanId: 'rzp_plan_starter',
-        teamPlanId: 'rzp_plan_team',
-        webhookSecret: 'secret',
-        currency: 'INR',
-        starterAmountMinor: 4900,
-        teamAmountMinor: 19900,
-      ),
-      throwsArgumentError,
-    );
   });
 
   test('human auth configuration is explicit and bounded', () {
@@ -158,17 +65,22 @@ void main() {
     final config = ControlPlaneConfig.fromEnvironment(<String, String>{
       'HYFENS_AUTH_SIGNING_KEY': base64.encode(List<int>.filled(32, 8)),
       'HYFENS_AUTH_AUTHORIZATION_ENDPOINT':
-          'https://app.hyfens.com/cli/authorize',
-      'HYFENS_AUTH_DEVICE_VERIFICATION_URI': 'https://app.hyfens.com/device',
-      'HYFENS_WEB_ORIGINS': 'https://app.hyfens.com, http://localhost:8080',
+          'https://dashboard.example.invalid/cli/authorize',
+      'HYFENS_AUTH_DEVICE_VERIFICATION_URI':
+          'https://dashboard.example.invalid/device',
+      'HYFENS_WEB_ORIGINS':
+          'https://dashboard.example.invalid, http://localhost:8080',
     });
     expect(
       config.discovery.authorizationEndpoint,
-      Uri.parse('https://app.hyfens.com/cli/authorize'),
+      Uri.parse('https://dashboard.example.invalid/cli/authorize'),
     );
     expect(
       config.discovery.webOrigins,
-      containsAll(<String>{'https://app.hyfens.com', 'http://localhost:8080'}),
+      containsAll(<String>{
+        'https://dashboard.example.invalid',
+        'http://localhost:8080',
+      }),
     );
     final discovery = config.discovery.toJson(
       humanAuthConfigured: true,
@@ -176,17 +88,17 @@ void main() {
     );
     expect(
       discovery['authorization_endpoint'],
-      'https://app.hyfens.com/cli/authorize',
+      'https://dashboard.example.invalid/cli/authorize',
     );
     expect(discovery['authorization_api_endpoint'], '/auth/authorize');
     expect(
       discovery['device_verification_uri'],
-      'https://app.hyfens.com/device',
+      'https://dashboard.example.invalid/device',
     );
     expect(
       () => ControlPlaneConfig.fromEnvironment(<String, String>{
         'HYFENS_AUTH_SIGNING_KEY': base64.encode(List<int>.filled(32, 8)),
-        'HYFENS_WEB_ORIGINS': 'https://app.hyfens.com/path',
+        'HYFENS_WEB_ORIGINS': 'https://dashboard.example.invalid/path',
       }),
       throwsArgumentError,
     );
@@ -241,7 +153,7 @@ void main() {
 
   test('task-role object authentication is explicit and exclusive', () {
     final config = ControlPlaneConfig.fromEnvironment(<String, String>{
-      'HYFENS_ARTIFACT_ENDPOINT': 'https://s3.ap-south-1.amazonaws.com/',
+      'HYFENS_ARTIFACT_ENDPOINT': 'https://object-store.example.invalid/',
       'HYFENS_ARTIFACT_USE_TASK_ROLE': 'true',
     });
     expect(config.artifactUseTaskRole, isTrue);

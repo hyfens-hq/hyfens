@@ -14,16 +14,13 @@ hyfens login → profile → hyfens init → release → patch → deploy
 ## Repository boundary
 
 This public OSS repository contains the reusable runtime, CLI, self-hosted
-control plane, and client dashboard under `dashboard/`. Managed marketing,
-editorial, and hosted operations are outside this source tree and its release
-archives. See the
-[OSS/Cloud source boundary](docs/OSS_CLOUD_SOURCE_BOUNDARY.md) for the
-deployment topology and the
-[Cloud commercial boundary](docs/HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md) for the
-managed-service model.
+control plane, and client dashboard under `dashboard/`. It is intentionally
+limited to the local and self-hosted product surface; deployment-specific
+services, credentials, operator procedures, and commercial implementation
+remain outside this tree.
 
-The [developer platform contract](docs/HYFENS_DEVELOPER_PLATFORM_CONTRACT.md)
-is the source of truth for this command surface and its security boundaries.
+The documentation under `docs/` is the source of truth for the public command
+surface and its security boundaries.
 
 ## License and editions
 
@@ -34,37 +31,24 @@ path. Third-party components retain their own licenses; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and
 [docs/ASSET_PROVENANCE.md](docs/ASSET_PROVENANCE.md).
 
-[Hyfens Cloud](docs/HYFENS_CLOUD_COMMERCIAL_BOUNDARY.md) is the managed
-commercial service. Its value is hosted infrastructure, upgrades, monitoring,
-backups, availability, security maintenance, team collaboration, advanced
-rollout controls, enterprise governance, and support. The OSS and Cloud
-products use the same CLI and core protocol; Cloud does not hide baseline
-self-host functionality. Hyfens names and brand assets are governed separately
-by [TRADEMARKS.md](TRADEMARKS.md).
+Hosted services and other commercial editions are separate products and are
+not part of this source distribution. The OSS edition remains self-hostable;
+Hyfens names and brand assets are governed separately by
+[TRADEMARKS.md](TRADEMARKS.md).
 
 ## Dashboard surfaces
 
-The authenticated web product has two explicit surfaces over the same
-authentication, API transport, and UI system:
+The authenticated web product provides one tenant-scoped workspace over the
+same authentication, API transport, and UI system:
 
-- **Customer Workspace** — the tenant-scoped developer workspace for an
-  organization’s applications, environments, delivery records, audit, team,
-  credentials, and settings.
-- **Platform Console** — the privileged Hyfens operator surface for platform
-  metrics, the bounded organization directory, organization inspection, and
-  platform-audience audit/operations views.
+- **Workspace** — the tenant-scoped developer workspace for an organization’s
+  applications, environments, delivery records, audit, credentials, and
+  settings.
 
-The intended managed hosts are `app.hyfens.com` for the Customer Workspace and
-`platform.hyfens.com` for the Platform Console. Local development exposes the
-same split as `/` and `/platform`; a self-hosted instance exposes the Customer
-Workspace on its own instance origin. DNS and production routing remain
-deployment configuration, not a requirement for the shared static bundle.
-
-The customer organization selector contains only organizations the signed-in
-user belongs to. It is not a platform-wide directory. Platform routes use an
-explicit platform audience and server-side capability checks. See the
-[dashboard separation architecture](docs/architecture/dashboard-separation.md)
-for the route and authorization contract.
+The dashboard uses the selected instance origin. DNS and production routing
+remain deployment configuration, not a requirement for the shared static
+bundle. The organization selector contains only organizations the signed-in
+user belongs to.
 
 ## Quick start
 
@@ -122,12 +106,11 @@ The currently tested toolchain family is Flutter `3.47.x` with Dart `3.13.x`.
 Other versions are outside the declared evidence boundary until separately
 validated.
 
-## Managed and self-hosted control planes
+## Self-hosted control planes
 
-With no host override, `hyfens login` uses the built-in Hyfens Cloud profile.
-The managed service endpoint is intentionally kept out of public CLI examples
-and display output; it is an implementation detail of that profile. Use the
-self-hosted form below when selecting an explicit server.
+`hyfens login` uses the local development endpoint when no host is supplied.
+For a deployed instance, select the endpoint explicitly and keep it in a named
+profile.
 
 For a self-hosted instance, select the endpoint once at login and keep it in a
 named profile:
@@ -204,8 +187,7 @@ The server reuses the selected Hyfens profile/session and exposes structured
 project, release, patch, verification, deploy, rollback, and profile tools; it
 does not pass raw credentials to the agent. The generic client process mapping
 is `command: hyfens` with `args: [mcp]`. See the [MCP documentation](docs/mcp.md)
-for self-hosted profiles, isolation details, the exact tool catalog, and
-troubleshooting.
+for the local transport, profile isolation, tool catalog, and troubleshooting.
 
 ## What the workflow proves
 
@@ -228,8 +210,8 @@ For a single-node installation from published versioned images, use the
 [self-hosted release package](deploy/self-hosted/README.md). It includes
 PostgreSQL, MinIO, the control plane, the dashboard, first-owner bootstrap
 steps, and the required host-level TLS reverse-proxy boundary. It binds the
-application ports to loopback by default and does not claim HA or managed
-backups.
+application ports to loopback by default and does not claim high availability
+or backup automation.
 
 ## Migration from `tool`
 

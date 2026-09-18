@@ -57,7 +57,7 @@ final class LoginCommand extends _AuthCommand {
     argParser
       ..addOption(
         'host',
-        help: 'Self-hosted control-plane URL. Omit to use managed Cloud.',
+        help: 'Control-plane URL. Omit to use the local development endpoint.',
       )
       ..addOption('profile', help: 'Named profile to create or activate.')
       ..addFlag(
@@ -76,8 +76,7 @@ final class LoginCommand extends _AuthCommand {
   String get name => 'login';
 
   @override
-  String get description =>
-      'Sign in to managed Cloud or an explicit self-hosted control plane.';
+  String get description => 'Sign in to an explicit control plane.';
 
   @override
   Future<void> run() async {
@@ -102,7 +101,7 @@ final class LoginCommand extends _AuthCommand {
     final hostValue =
         configuredHost ??
         namedProfile?.endpoint.toString() ??
-        managedCloudApiBase;
+        defaultControlPlaneApiBase;
     final target = endpoint(hostValue, operation: 'login');
     final caCertPath = optionOrEnvironment('ca-cert', 'HYFENS_TLS_CA_CERT');
     late final AuthLoginResult result;
@@ -221,14 +220,14 @@ abstract base class _ProfileCommand extends Command<void> {
   Future<ProfileSet> catalogForDisplay() async {
     final catalog = await storage.readProfileCatalog();
     if (catalog.profiles.isNotEmpty) return catalog;
-    final cloud = ControlPlaneProfile(
-      name: managedCloudProfileName,
-      endpoint: Uri.parse(managedCloudApiBase),
-      managed: true,
+    final local = ControlPlaneProfile(
+      name: defaultHyfensProfileName,
+      endpoint: Uri.parse(defaultControlPlaneApiBase),
+      managed: false,
     );
     return ProfileSet(
-      activeProfile: cloud.name,
-      profiles: <ControlPlaneProfile>[cloud],
+      activeProfile: local.name,
+      profiles: <ControlPlaneProfile>[local],
     );
   }
 
@@ -382,7 +381,7 @@ final class ProfileBindCommand extends _ProfileCommand {
     final name = _optionalValue('profile') ?? catalog.active.name;
     final current =
         catalog.byName(name) ??
-        (catalog.profiles.isEmpty && name == managedCloudProfileName
+        (catalog.profiles.isEmpty && name == defaultHyfensProfileName
             ? catalog.active
             : null);
     if (current == null) {
@@ -435,18 +434,7 @@ final class ProfileUseCommand extends _ProfileCommand {
   @override
   Future<void> run() async {
     final name = requiredName();
-    final catalog = await storage.readProfileCatalog();
-    if (catalog.profiles.isEmpty && name == managedCloudProfileName) {
-      await storage.writeNamedProfile(
-        ControlPlaneProfile(
-          name: managedCloudProfileName,
-          endpoint: Uri.parse(managedCloudApiBase),
-          managed: true,
-        ),
-      );
-    } else {
-      await storage.useProfile(name);
-    }
+    await storage.useProfile(name);
     if (jsonMode) {
       runner.writeJson(<String, Object?>{
         'result': 'PROFILE_SELECTED',
@@ -470,16 +458,6 @@ final class ProfileRemoveCommand extends _ProfileCommand {
   @override
   Future<void> run() async {
     final name = requiredName();
-    final catalog = await storage.readProfileCatalog();
-    if (catalog.profiles.isEmpty && name == managedCloudProfileName) {
-      throw ToolFailure.single(
-        exitCode: ToolExitCode.usage,
-        code: 'A1028',
-        summary: 'The managed Cloud default is implicit',
-        detail: 'There is no persisted profile named $name to remove.',
-        action: 'Remove a persisted profile created with --profile.',
-      );
-    }
     await storage.removeNamedProfile(name);
     if (jsonMode) {
       runner.writeJson(<String, Object?>{

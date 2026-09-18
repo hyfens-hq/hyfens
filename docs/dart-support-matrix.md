@@ -66,7 +66,7 @@ never changes `NOT TESTED` to `SUPPORTED`.
 | Platform | Status | Verified boundary | Missing evidence |
 | --- | --- | --- | --- |
 | Android arm64 physical release | PARTIAL | Tasks 23 current-source Wi-Fi runs: one Release APK install; signed business, capability-mediated async, widget, Riverpod, invalid-signature retention, rollback, two restart groups, persistence, and unchanged package timestamps passed | Broader Dart/Flutter coverage, device performance, and production transport remain unexecuted |
-| iOS arm64 release/profile | PARTIAL | Tasks 24–25 current-source AUVANA-signed USB runs: arm64 Release/AOT install with no kernel/dill, business/async/UI/Riverpod, invalid signature, rollback, two restarts, and persistence passed | Broader iOS semantics, production transport, App Store review, and device performance remain unexecuted |
+| iOS arm64 release/profile | PARTIAL | Current-source signed USB runs: arm64 Release/AOT install with no kernel/dill, business/async/UI/Riverpod, invalid signature, rollback, two restarts, and persistence passed | Broader iOS semantics, production transport, App Store review, and device performance remain unexecuted |
 
 ## Identity and compatibility
 
@@ -98,9 +98,8 @@ never changes `NOT TESTED` to `SUPPORTED`.
 - 2026-08-22: Added Task 21's package-preserving explicit-unit local native-AOT and hosted JIT evidence; this is not yet a transitive dependency build system.
 - 2026-08-22: Added Task 22's corrected host-AOT dispatch, activation, size, RSS, and selective-instrumentation evidence; no device performance claim was inferred.
 - 2026-08-22: Task 23's expanded physical Android sequence remains blocked because no Android device is connected; Phase 0's earlier narrow device result is preserved separately.
-- 2026-08-22: Task 24 advanced iOS only to a transformed unsigned Release/AOT arm64 compile. Signing and every physical runtime scenario remain blocked by unavailable matching provisioning.
 - 2026-08-22: Current-source Android narrow and broad physical runs passed on the Wi-Fi device; async/UI/Riverpod/restart/rollback evidence is now recorded.
-- 2026-08-22: AUVANA-signed current-source iOS narrow and broad USB runs passed on the physical iPhone; no kernel/dill payload was present in the arm64 Release artifact.
+- 2026-08-22: Current-source signed iOS narrow and broad USB runs passed on a physical iPhone; no kernel/dill payload was present in the arm64 Release artifact.
 
 ## Phase 1A delta
 

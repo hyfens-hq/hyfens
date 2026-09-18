@@ -83,7 +83,7 @@ Completed validation:
 - focused evaluator/API tests without PostgreSQL — 11 passed, one
   environment-gated PostgreSQL test skipped;
 - focused evaluator/API tests with
-  `HYFENS_TEST_POSTGRES_URL='postgresql://hyfens:hyfens-p2-db@127.0.0.1:55433/hyfens?sslmode=disable'`
+  `HYFENS_TEST_POSTGRES_URL='postgresql://hyfens:hyfens-test-db@127.0.0.1:55433/hyfens?sslmode=disable'`
   — 12 passed, including two-service concurrency;
 - the same configured PostgreSQL URL with the full control-plane suite — 91
   passed, one MinIO integration skipped because `HYFENS_TEST_S3_*` was not

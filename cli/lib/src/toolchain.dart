@@ -2139,7 +2139,7 @@ final class HyfensToolchain {
 
   /// Signs the same release-bound base rollback control used by the local
   /// rollback command without changing the local rollback journal or control
-  /// file. Managed Cloud sends these bytes to the authenticated environment;
+  /// file. A remote control plane sends these bytes to the authenticated environment;
   /// the runtime still performs the trusted state transition locally.
   Future<RollbackControlCommand> signRollbackControl({
     String? projectPath,

@@ -86,7 +86,7 @@ Completed validation:
 - `cd packages/control_plane && dart analyze --fatal-infos .` — passed.
 - `cd packages/control_plane && dart test test/aggregation_test.dart` — 19
   tests passed.
-- `cd packages/control_plane && HYFENS_TEST_POSTGRES_URL='postgresql://hyfens:hyfens-p2-db@127.0.0.1:55433/hyfens?sslmode=disable' dart test`
+- `cd packages/control_plane && HYFENS_TEST_POSTGRES_URL='postgresql://hyfens:hyfens-test-db@127.0.0.1:55433/hyfens?sslmode=disable' dart test`
   — 72 tests passed; one MinIO integration skipped because its environment
   variables were not configured.
 - `dart analyze .` — passed.

@@ -114,11 +114,11 @@ control when one is eligible, and optionally submit observations.
 
 | Topology | Intended use | Benefits | Required trust posture |
 | --- | --- | --- | --- |
-| Object storage plus CDN | Managed cloud and public OSS distribution | High cacheability and geographic delivery | Cache is an untrusted byte source; use digest-addressed objects, immutable cache headers, TLS, origin access control, and runtime verification |
+| Object storage plus CDN | Public and self-hosted distribution | High cacheability and geographic delivery | Cache is an untrusted byte source; use digest-addressed objects, immutable cache headers, TLS, origin access control, and runtime verification |
 | Authenticated update endpoint plus object storage | Small deployments or private applications | Lookup authorization and tenant policy stay together | Authentication controls who receives a hint, not whether the artifact is valid; artifact fetch may use a short-lived signed URL |
 | Self-hosted HTTP/object storage | Community, on-prem, and private-network deployments | Customer controls data, keys, network, and retention | Secure defaults, customer TLS, scoped service credentials, object immutability, backups, and an explicit operator threat model are required |
 | Private enterprise CDN | Restricted networks with existing edge infrastructure | Fits customer egress and locality controls | CDN configuration is customer-controlled and remains untrusted; origin and runtime digest/signature checks still apply |
-| Air-gapped transfer | Offline production networks | No runtime-to-cloud dependency | Build and sign outside or inside the gap, export an inventory plus exact bytes, verify at import, record the import, and retain replay/high-water state |
+| Air-gapped transfer | Offline production networks | No mandatory network dependency | Build and sign outside or inside the gap, export an inventory plus exact bytes, verify at import, record the import, and retain replay/high-water state |
 
 CDN invalidation or object deletion is an availability and distribution action,
 not revocation at the runtime. To stop a bad artifact, pause eligibility,

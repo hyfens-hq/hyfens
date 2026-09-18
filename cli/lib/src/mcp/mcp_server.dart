@@ -633,9 +633,7 @@ final class HyfensMcpAdapter {
     final document = await _discoveryClient.discover(profile.endpoint);
     return <String, Object?>{
       'profile': await _profileJson(profile),
-      'discovery': document.toPublicJson(
-        redactEndpoints: isManagedCloudEndpoint(profile.endpoint),
-      ),
+      'discovery': document.toPublicJson(),
     };
   }
 
