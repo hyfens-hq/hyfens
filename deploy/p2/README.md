@@ -139,6 +139,27 @@ and a shared content-addressed artifact remains fetchable from another
 disposable organization. It does not prove provider durability, managed
 encryption, RPO/RTO, or legal acceptance.
 
+After a managed backup has passed its freshness check, the same rehearsal can
+restore one explicit managed pair into a new disposable project on the managed
+host. Run it only against the approved isolated target; the project name is
+derived from the backup ID and the command refuses a custom Compose file:
+
+```sh
+sudo env \
+  HYFENS_ALLOW_RESTORE=1 \
+  HYFENS_AUTH_ALLOW_INSECURE_HTTP=true \
+  HYFENS_DR_TOMBSTONE_REHEARSAL=1 \
+  HYFENS_DR_MANAGED_BACKUP_ID=20260918T061844Z \
+  scripts/p2-dr-rehearsal.sh
+```
+
+The managed branch downloads the selected pair with the destination
+credential from the protected host environment, verifies the 30-day manifest
+policy and all checksums, restores only disposable PostgreSQL/object-store
+volumes, and runs the deletion-tombstone assertions. Its output is still
+technical acceptance evidence only; it does not establish provider
+durability, encryption/key custody, approved RPO/RTO, or legal acceptance.
+
 The control plane is deliberately configured with customer/local signing
 authority. PostgreSQL and object storage persist and deliver bytes; they never
 verify or authorize runtime patches.
