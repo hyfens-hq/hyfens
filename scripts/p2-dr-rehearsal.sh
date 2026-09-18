@@ -8,9 +8,15 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="${HYFENS_DR_COMPOSE_FILE:-$repo_root/deploy/p2/docker-compose.yml}"
 tombstone_rehearsal="${HYFENS_DR_TOMBSTONE_REHEARSAL:-0}"
+managed_backup_id="${HYFENS_DR_MANAGED_BACKUP_ID:-}"
+managed_env_file=/etc/hyfens/public-control-plane-dev.env
+managed_aws_image='amazon/aws-cli:2.27.41@sha256:bc6b7bba44ce38f9604ede49c584824af919047ea03fbcc7c7610671fdef95d8'
 default_project=hyfens-p2-dr-${PPID}-$$
 if [[ "$tombstone_rehearsal" == 1 ]]; then
   default_project=hyfens-dr-tombstone-${PPID}-$$
+fi
+if [[ -n "$managed_backup_id" ]]; then
+  default_project=hyfens-dr-managed-${managed_backup_id}
 fi
 project="${HYFENS_DR_PROJECT:-$default_project}"
 control_port="${HYFENS_DR_CONTROL_PORT:-18084}"
@@ -38,8 +44,20 @@ if [[ "$tombstone_rehearsal" == 1 && -n "${HYFENS_DR_COMPOSE_FILE:-}" ]]; then
   echo 'The tombstone rehearsal uses the repository disposable Compose file and does not accept HYFENS_DR_COMPOSE_FILE.' >&2
   exit 2
 fi
-if [[ "$tombstone_rehearsal" == 1 && ! "$project" =~ ^hyfens-dr-tombstone-[A-Za-z0-9_-]+$ ]]; then
+if [[ "$tombstone_rehearsal" == 1 && -z "$managed_backup_id" && ! "$project" =~ ^hyfens-dr-tombstone-[A-Za-z0-9_-]+$ ]]; then
   echo 'HYFENS_DR_PROJECT must start with hyfens-dr-tombstone- for the extended rehearsal.' >&2
+  exit 2
+fi
+if [[ -n "$managed_backup_id" && "$tombstone_rehearsal" != 1 ]]; then
+  echo 'HYFENS_DR_MANAGED_BACKUP_ID requires HYFENS_DR_TOMBSTONE_REHEARSAL=1.' >&2
+  exit 2
+fi
+if [[ -n "$managed_backup_id" && -n "${HYFENS_DR_COMPOSE_FILE:-}" ]]; then
+  echo 'The managed rehearsal uses the repository disposable Compose file and does not accept HYFENS_DR_COMPOSE_FILE.' >&2
+  exit 2
+fi
+if [[ -n "$managed_backup_id" && ! "$project" =~ ^hyfens-dr-managed-[0-9]{8}T[0-9]{6}Z$ ]]; then
+  echo 'HYFENS_DR_PROJECT must be hyfens-dr-managed-<backup-id> for a managed rehearsal.' >&2
   exit 2
 fi
 
@@ -62,6 +80,53 @@ require_command docker
 require_command curl
 require_command python3
 require_command shasum
+
+read_managed_setting() {
+  local name="$1" value
+  value="$(sed -n "s/^[[:space:]]*$name[[:space:]]*=[[:space:]]*//p" "$managed_env_file" | head -n 1)"
+  [[ -n "$value" && "$value" != *[[:space:]]* ]] || {
+    echo "managed backup setting is missing or contains whitespace: $name" >&2
+    exit 2
+  }
+  printf '%s' "$value"
+}
+
+if [[ -n "$managed_backup_id" ]]; then
+  [[ "$(id -u)" == 0 ]] || {
+    echo 'managed backup rehearsal must run as root' >&2
+    exit 2
+  }
+  [[ -f "$managed_env_file" ]] || {
+    echo 'managed public backup environment is missing' >&2
+    exit 2
+  }
+  managed_destination_endpoint="$(read_managed_setting HYFENS_PUBLIC_BACKUP_DEST_ENDPOINT)"
+  managed_destination_bucket="$(read_managed_setting HYFENS_PUBLIC_BACKUP_DEST_BUCKET)"
+  managed_destination_account_id="$(read_managed_setting HYFENS_PUBLIC_BACKUP_DEST_ACCOUNT_ID)"
+  managed_destination_access_key="$(read_managed_setting HYFENS_PUBLIC_BACKUP_DEST_ACCESS_KEY_ID)"
+  managed_destination_secret_key="$(read_managed_setting HYFENS_PUBLIC_BACKUP_DEST_SECRET_ACCESS_KEY)"
+  managed_max_age="$(read_managed_setting HYFENS_PUBLIC_BACKUP_MAX_AGE_SECONDS)"
+  [[ "$managed_destination_account_id" =~ ^[a-f0-9]{32}$ ]] || {
+    echo 'managed backup destination account ID is invalid' >&2
+    exit 2
+  }
+  [[ "$managed_destination_endpoint" == "https://${managed_destination_account_id}.r2.cloudflarestorage.com" ]] || {
+    echo 'managed backup destination endpoint does not match its account' >&2
+    exit 2
+  }
+  [[ "$managed_destination_bucket" == hyfens-cloud-backups ]] || {
+    echo 'managed backup destination bucket is not approved' >&2
+    exit 2
+  }
+  [[ "$managed_backup_id" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || {
+    echo 'HYFENS_DR_MANAGED_BACKUP_ID is invalid' >&2
+    exit 2
+  }
+  [[ "$managed_max_age" =~ ^[1-9][0-9]*$ ]] || {
+    echo 'managed backup freshness age is invalid' >&2
+    exit 2
+  }
+fi
 
 if [[ "$tombstone_rehearsal" == 1 ]]; then
   # Never inherit operator credentials into the extended fixture. All state
@@ -103,6 +168,29 @@ PY
     echo 'The disposable tombstone Compose project already exists; choose a new HYFENS_DR_PROJECT.' >&2
     exit 2
   fi
+fi
+if [[ -n "$managed_backup_id" ]]; then
+  export HYFENS_CONTROL_PLANE_IMAGE="${HYFENS_CONTROL_PLANE_IMAGE:-hyfens-public-control-plane:current}"
+  managed_destination_aws_env="$work/managed-destination-aws.env"
+  managed_object_store_aws_env="$work/managed-object-store-aws.env"
+  umask 077
+  {
+    printf 'AWS_ACCESS_KEY_ID=%s\n' "$managed_destination_access_key"
+    printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$managed_destination_secret_key"
+    printf 'AWS_DEFAULT_REGION=auto\n'
+    printf 'AWS_REGION=auto\n'
+    printf 'AWS_PAGER=\n'
+    printf 'AWS_EC2_METADATA_DISABLED=true\n'
+  } >"$managed_destination_aws_env"
+  {
+    printf 'AWS_ACCESS_KEY_ID=%s\n' "$HYFENS_S3_ACCESS_KEY"
+    printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$HYFENS_S3_SECRET_KEY"
+    printf 'AWS_DEFAULT_REGION=us-east-1\n'
+    printf 'AWS_REGION=us-east-1\n'
+    printf 'AWS_PAGER=\n'
+    printf 'AWS_EC2_METADATA_DISABLED=true\n'
+  } >"$managed_object_store_aws_env"
+  chmod 600 "$managed_destination_aws_env" "$managed_object_store_aws_env"
 fi
 db_url="postgresql://hyfens:${HYFENS_POSTGRES_PASSWORD}@127.0.0.1:${postgres_port}/hyfens?sslmode=disable"
 network="$project"_default
@@ -196,15 +284,194 @@ dart_fixture() {
     run /opt/hyfens/experiments/patch_loading/bin/ha_make_artifact.dart "$@"
 }
 
+managed_aws() {
+  docker run --rm --network bridge --log-driver none \
+    --volume "$work:/backup:rw" \
+    --user 0:0 \
+    --env-file "$managed_destination_aws_env" \
+    --entrypoint /usr/local/bin/aws \
+    "$managed_aws_image" "$@" \
+    --endpoint-url "$managed_destination_endpoint" --region auto
+}
+
+managed_object_store_aws() {
+  docker run --rm --network "$network" --log-driver none \
+    --volume "$work:/backup:ro" \
+    --user 0:0 \
+    --env-file "$managed_object_store_aws_env" \
+    --entrypoint /usr/local/bin/aws \
+    "$managed_aws_image" "$@" \
+    --endpoint-url http://object-store:9000/ --region us-east-1
+}
+
+verify_managed_download() {
+  python3 - "$work" "$managed_backup_id" "$managed_max_age" <<'PY'
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import sys
+
+work, expected_id, max_age_text = sys.argv[1:]
+try:
+    max_age = int(max_age_text)
+    with open(os.path.join(work, 'managed-manifest.json'), encoding='utf-8') as source:
+        manifest = json.load(source)
+    if (manifest.get('schema_version') != 1 or
+        manifest.get('backup_id') != expected_id or
+        manifest.get('policy_prefix') != 'operational/' or
+        manifest.get('retention_days') != 30 or
+        manifest.get('consistency') != 'operator_quiesced_pair_required'):
+        raise ValueError('manifest identity')
+    created_at = manifest.get('created_at')
+    if not isinstance(created_at, str) or not re.fullmatch(
+        r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z',
+        created_at,
+    ):
+        raise ValueError('manifest timestamp')
+    created = dt.datetime.fromisoformat(created_at[:-1] + '+00:00')
+    age = int((dt.datetime.now(dt.timezone.utc) - created).total_seconds())
+    if age < 0 or age > max_age:
+        raise ValueError('manifest freshness')
+
+    database = manifest.get('database')
+    objects = manifest.get('objects')
+    expected_database_key = f'operational/public-control-plane/{expected_id}/postgres.dump'
+    expected_objects_key = f'operational/public-control-plane/{expected_id}/objects/manifest.json'
+    if (not isinstance(database, dict) or database.get('key') != expected_database_key or
+        not isinstance(objects, dict) or objects.get('manifest_key') != expected_objects_key):
+        raise ValueError('manifest keys')
+
+    def digest(path):
+        value = hashlib.sha256()
+        with open(path, 'rb') as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                value.update(chunk)
+        return value.hexdigest()
+
+    database_path = os.path.join(work, 'managed-postgres.dump')
+    objects_manifest_path = os.path.join(work, 'managed-objects-manifest.json')
+    if database.get('sha256') != 'sha256:' + digest(database_path):
+        raise ValueError('database checksum')
+    if objects.get('manifest_sha256') != 'sha256:' + digest(objects_manifest_path):
+        raise ValueError('object manifest checksum')
+    if (database.get('size_bytes') != os.path.getsize(database_path) or
+        objects.get('manifest_size_bytes') != os.path.getsize(objects_manifest_path)):
+        raise ValueError('backup sizes')
+
+    with open(objects_manifest_path, encoding='utf-8') as source:
+        object_manifest = json.load(source)
+    if (object_manifest.get('schema_version') != 1 or
+        not isinstance(object_manifest.get('objects'), list)):
+        raise ValueError('object manifest')
+    expected = {}
+    for item in object_manifest['objects']:
+        key = item.get('key')
+        sha = item.get('sha256')
+        size = item.get('size_bytes')
+        if (not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9._/-]+', key) or
+            key.startswith('../') or key == '..' or
+            any(part in ('', '.', '..') for part in key.split('/')) or
+            not isinstance(sha, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', sha) or
+            not isinstance(size, int) or size < 0 or key in expected):
+            raise ValueError('object manifest entry')
+        expected[key] = (sha[7:], size)
+    actual = {}
+    object_root = os.path.join(work, 'managed-objects')
+    for directory, directories, files in os.walk(object_root):
+        directories.sort()
+        for name in sorted(files):
+            path = os.path.join(directory, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                raise ValueError('object file')
+            key = os.path.relpath(path, object_root).replace(os.sep, '/')
+            actual[key] = (digest(path), os.path.getsize(path))
+    if actual != expected:
+        raise ValueError('object checksum')
+    if objects.get('count') != len(expected):
+        raise ValueError('object count')
+    print('managed_backup_manifest=PASS')
+    print(f'managed_backup_age_seconds={age}')
+    print(f'managed_restored_object_count={len(expected)}')
+except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+    raise SystemExit('managed backup manifest validation failed')
+PY
+}
+
+restore_managed_pair() {
+  local prefix="operational/public-control-plane/$managed_backup_id"
+  install -d -m 0700 "$work/managed-objects"
+  managed_aws s3 cp "s3://$managed_destination_bucket/$prefix/postgres.dump" \
+    /backup/managed-postgres.dump --only-show-errors \
+    >"$work/aws.stdout" 2>"$work/aws.stderr" || {
+      echo 'managed backup database download failed' >&2
+      exit 1
+    }
+  managed_aws s3 cp "s3://$managed_destination_bucket/$prefix/objects/manifest.json" \
+    /backup/managed-objects-manifest.json --only-show-errors \
+    >>"$work/aws.stdout" 2>>"$work/aws.stderr" || {
+      echo 'managed backup object manifest download failed' >&2
+      exit 1
+    }
+  managed_aws s3 cp "s3://$managed_destination_bucket/$prefix/manifest.json" \
+    /backup/managed-manifest.json --only-show-errors \
+    >>"$work/aws.stdout" 2>>"$work/aws.stderr" || {
+      echo 'managed backup manifest download failed' >&2
+      exit 1
+    }
+  managed_aws s3 sync "s3://$managed_destination_bucket/$prefix/objects/data/" \
+    /backup/managed-objects --only-show-errors \
+    >>"$work/aws.stdout" 2>>"$work/aws.stderr" || {
+      echo 'managed backup object download failed' >&2
+      exit 1
+    }
+  verify_managed_download
+  cat "$work/managed-postgres.dump" | "${compose[@]}" exec -T postgres \
+    pg_restore --list >/dev/null 2>/dev/null || {
+    echo 'managed PostgreSQL dump failed pg_restore validation' >&2
+    exit 1
+  }
+  cat "$work/managed-postgres.dump" | "${compose[@]}" exec -T postgres \
+    pg_restore --exit-on-error --clean --if-exists --no-owner \
+    -U hyfens -d hyfens >/dev/null 2>"$work/postgres-restore.stderr" || {
+      echo 'managed PostgreSQL restore failed' >&2
+      exit 1
+    }
+  managed_object_store_aws s3 sync /backup/managed-objects \
+    "s3://$HYFENS_S3_BUCKET" --only-show-errors \
+    >"$work/object-restore.stdout" 2>"$work/object-restore.stderr" || {
+      echo 'managed object-store restore failed' >&2
+      exit 1
+    }
+  echo 'managed_backup_restore=PASS'
+}
+
 echo "dr_project=$project"
 echo "dr_endpoint=$endpoint"
 start="$(now_ms)"
 "${compose[@]}" config >/dev/null
-"${compose[@]}" up -d --build >/dev/null
 started=1
+if [[ -n "$managed_backup_id" ]]; then
+  "${compose[@]}" up -d --no-build postgres object-store >/dev/null
+else
+  "${compose[@]}" up -d --build >/dev/null
+fi
 record_timing compose_up "$start" "$(now_ms)"
-wait_status /healthz 200
-wait_status /readyz 200
+if [[ -n "$managed_backup_id" ]]; then
+  wait_service_healthy postgres
+  wait_service_healthy object-store
+  "${compose[@]}" run --rm object-bootstrap >/dev/null
+  managed_restore_start="$(now_ms)"
+  restore_managed_pair
+  record_timing managed_pair_restore "$managed_restore_start" "$(now_ms)"
+  "${compose[@]}" up -d --no-build control-plane >/dev/null
+  wait_status /healthz 200
+  wait_status /readyz 200
+else
+  wait_status /healthz 200
+  wait_status /readyz 200
+fi
 "${compose[@]}" run --rm control-plane --bootstrap --bootstrap-only \
   --application dr_fixture_app --platform android-arm64-release \
   --environment development >"$work/bootstrap.txt"
@@ -387,45 +654,51 @@ PY
   assert_status "$status" '200' shared_promotion
 fi
 
-start="$(now_ms)"
-(
-  cd "$work"
-  HYFENS_DATABASE_URL="$db_url" "$repo_root/scripts/p2-postgres-backup.sh" database.dump
-  HYFENS_OBJECT_ENDPOINT='http://object-store:9000/' \
-  HYFENS_S3_BUCKET="$HYFENS_S3_BUCKET" \
-  HYFENS_S3_ACCESS_KEY="$HYFENS_S3_ACCESS_KEY" \
-  HYFENS_S3_SECRET_KEY="$HYFENS_S3_SECRET_KEY" \
-  HYFENS_S3_DOCKER_NETWORK="$network" \
-  "$repo_root/scripts/p2-object-backup.sh" object-backup
-)
 cp "$work/artifact.bin" "$work/source-artifact.bin"
 source_digest="$artifact_digest"
-backup_digest="$(shasum -a 256 "$work/database.dump" "$work/object-backup/manifest.sha256" | shasum -a 256 | awk '{print $1}')"
-record_timing backup_and_manifest "$start" "$(now_ms)"
+if [[ -n "$managed_backup_id" ]]; then
+  backup_digest="$(shasum -a 256 \
+    "$work/managed-manifest.json" "$work/managed-objects-manifest.json" \
+    | shasum -a 256 | awk '{print $1}')"
+else
+  start="$(now_ms)"
+  (
+    cd "$work"
+    HYFENS_DATABASE_URL="$db_url" "$repo_root/scripts/p2-postgres-backup.sh" database.dump
+    HYFENS_OBJECT_ENDPOINT='http://object-store:9000/' \
+    HYFENS_S3_BUCKET="$HYFENS_S3_BUCKET" \
+    HYFENS_S3_ACCESS_KEY="$HYFENS_S3_ACCESS_KEY" \
+    HYFENS_S3_SECRET_KEY="$HYFENS_S3_SECRET_KEY" \
+    HYFENS_S3_DOCKER_NETWORK="$network" \
+    "$repo_root/scripts/p2-object-backup.sh" object-backup
+  )
+  backup_digest="$(shasum -a 256 "$work/database.dump" "$work/object-backup/manifest.sha256" | shasum -a 256 | awk '{print $1}')"
+  record_timing backup_and_manifest "$start" "$(now_ms)"
 
-"${compose[@]}" down -v --remove-orphans >/dev/null
-started=0
-start="$(now_ms)"
-"${compose[@]}" up -d postgres object-store >/dev/null
-started=1
-wait_service_healthy postgres
-wait_service_healthy object-store
-"${compose[@]}" run --rm object-bootstrap >/dev/null
-(
-  cd "$work"
-  HYFENS_ALLOW_RESTORE=1 HYFENS_DATABASE_URL="$db_url" \
-    "$repo_root/scripts/p2-postgres-restore.sh" database.dump
-  HYFENS_ALLOW_RESTORE=1 HYFENS_OBJECT_ENDPOINT='http://object-store:9000/' \
-  HYFENS_S3_BUCKET="$HYFENS_S3_BUCKET" \
-  HYFENS_S3_ACCESS_KEY="$HYFENS_S3_ACCESS_KEY" \
-  HYFENS_S3_SECRET_KEY="$HYFENS_S3_SECRET_KEY" \
-  HYFENS_S3_DOCKER_NETWORK="$network" \
-    "$repo_root/scripts/p2-object-restore.sh" object-backup
-)
-"${compose[@]}" up -d control-plane >/dev/null
-wait_status /healthz 200
-wait_status /readyz 200
-record_timing destroy_recreate_restore "$start" "$(now_ms)"
+  "${compose[@]}" down -v --remove-orphans >/dev/null
+  started=0
+  start="$(now_ms)"
+  "${compose[@]}" up -d postgres object-store >/dev/null
+  started=1
+  wait_service_healthy postgres
+  wait_service_healthy object-store
+  "${compose[@]}" run --rm object-bootstrap >/dev/null
+  (
+    cd "$work"
+    HYFENS_ALLOW_RESTORE=1 HYFENS_DATABASE_URL="$db_url" \
+      "$repo_root/scripts/p2-postgres-restore.sh" database.dump
+    HYFENS_ALLOW_RESTORE=1 HYFENS_OBJECT_ENDPOINT='http://object-store:9000/' \
+    HYFENS_S3_BUCKET="$HYFENS_S3_BUCKET" \
+    HYFENS_S3_ACCESS_KEY="$HYFENS_S3_ACCESS_KEY" \
+    HYFENS_S3_SECRET_KEY="$HYFENS_S3_SECRET_KEY" \
+    HYFENS_S3_DOCKER_NETWORK="$network" \
+      "$repo_root/scripts/p2-object-restore.sh" object-backup
+  )
+  "${compose[@]}" up -d control-plane >/dev/null
+  wait_status /healthz 200
+  wait_status /readyz 200
+  record_timing destroy_recreate_restore "$start" "$(now_ms)"
+fi
 
 status="$(api_json POST "/v1/organizations/$organization_id/artifact-reconciliation" "$control_token" - "$work/response")"
 assert_status "$status" '200' reconciliation
