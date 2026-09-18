@@ -1,6 +1,6 @@
 # Task 284 — Managed public recovery rehearsal
 
-Status: [*] In Progress
+Status: [x] Completed — managed backup restore and coupled tombstone replay passed; provider/legal gates remain external
 
 ## Goal
 
@@ -45,8 +45,8 @@ Public control-plane engineering and platform operations.
 
 - [x] Add an explicit managed-backup restore branch to the disposable DR rehearsal.
 - [x] Validate the managed branch and fail-closed target/credential boundaries.
-- [ ] Run the selected managed backup restore and tombstone rehearsal.
-- [ ] Record sanitized evidence and close the external recovery gate.
+- [x] Run the selected managed backup restore and tombstone rehearsal.
+- [x] Record sanitized evidence and close the technical recovery gate.
 
 ## Validation
 
@@ -58,6 +58,17 @@ Expected:
 - Local extended disposable rehearsal (passed): coupled restore, deletion
   tombstone replay, denied deleted-tenant access, zero retained tenant
   records/memberships, shared-object preservation, and project cleanup.
+- Managed host rehearsal (passed) with backup `20260918T061844Z`, disposable
+  ports `28084/25543/25910`, and the host-cached Quay MinIO images:
+  `managed_backup_age_seconds=17556`,
+  `managed_restored_object_count=2`, `managed_backup_restore=PASS`,
+  `managed_reconciliation=PASS orphan_object_count=2`,
+  `deletion_tombstone_replay=PASS`,
+  `deleted_tenant_records=0`, `deleted_customer_memberships=0`, and
+  matching source/restored/shared artifact digest
+  `sha256:2aaba1e9f807edb65a59c62f834a0d040c60ffc5ad557232a08f0ef45f4ac1d6`.
+- Cleanup verification found no managed recovery containers, volumes, or
+  networks; the live public/private services remained running and unchanged.
 - Dart package tests were not rerun because the local Dart launcher exits with
   `Bad CPU type in executable`; the existing Task 281 run remains the focused
   Dart evidence for unchanged control-plane code.
@@ -66,16 +77,23 @@ Expected:
 
 ## Next Action
 
-Review and merge the implementation PR, deploy the reviewed script to the
-managed host, then run it with backup `20260918T061844Z`.
+Retain the sanitized evidence and keep the separate provider durability,
+encryption/key-custody, approved RPO/RTO, and legal launch decisions open.
 
 ## Blockers
 
-Provider durability, encryption/key evidence, approved RPO/RTO, and legal/launch acceptance remain separate decisions even after the technical rehearsal passes.
+Technical managed coupled recovery is closed. Provider durability, encryption/
+key evidence, approved RPO/RTO, and legal/launch acceptance remain external
+launch gates.
 
 ## Outcome
 
-Implementation and local validation are complete; managed execution is pending.
+The merged rehearsal restored the selected managed PostgreSQL/object pair into
+disposable volumes, verified the manifest and checksums, preserved the
+restored object inventory, completed the real deletion worker, retained the
+organization tombstone, denied deleted-tenant access, removed tenant
+records/memberships, preserved the shared artifact, and cleaned up all
+disposable resources. This closes the technical managed recovery blocker only.
 
 ## References
 
@@ -102,3 +120,7 @@ Implementation and local validation are complete; managed execution is pending.
   now requires the disposable fixture to be verified and fetchable while
   preserving those restored bytes; the local rehearsal keeps its stricter
   zero-orphan `deliverable` assertion.
+- 2026-09-18: Final managed rehearsal passed with manifest/checksum restore,
+  fixture reconciliation, deletion-tombstone replay, zero deleted tenant
+  records/memberships, shared-byte preservation, and exact disposable
+  resource cleanup. No live service was restarted or mutated.
