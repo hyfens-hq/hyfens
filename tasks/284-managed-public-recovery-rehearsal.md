@@ -96,3 +96,9 @@ Implementation and local validation are complete; managed execution is pending.
   because Docker Compose rejects uppercase `T`/`Z` in project names; the
   derived disposable project slug is now lowercase while the R2 backup ID
   remains unchanged for object paths and manifest identity.
+- 2026-09-18: Managed restore and object verification passed on the host, but
+  the existing organization-scoped reconciliation also reported two
+  pre-existing restored bucket objects as `orphan_object`. The managed branch
+  now requires the disposable fixture to be verified and fetchable while
+  preserving those restored bytes; the local rehearsal keeps its stricter
+  zero-orphan `deliverable` assertion.

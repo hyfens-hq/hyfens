@@ -268,6 +268,30 @@ assert_json() {
   actual="$(json_value "$1" "$2")"
   [[ "$actual" == "$3" ]] || { echo "expected $2=$3, got $actual" >&2; cat "$1" >&2; exit 1; }
 }
+assert_managed_reconciliation() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+body = json.load(open(sys.argv[1], encoding='utf-8'))
+if body.get('inventoryAvailable') is not True:
+    raise SystemExit('managed artifact inventory is unavailable')
+if body.get('quarantinedCount') != 0:
+    raise SystemExit('managed fixture reconciliation quarantined an artifact')
+items = body.get('items')
+if not isinstance(items, list):
+    raise SystemExit('managed artifact reconciliation items are invalid')
+fixture = [item for item in items if item.get('artifactId') == 'artifact_dr_1']
+if len(fixture) != 1 or fixture[0].get('status') != 'verified':
+    raise SystemExit('managed fixture artifact was not verified')
+allowed = {'verified', 'orphan_object', 'non_ready', 'purged_metadata'}
+unexpected = sorted({item.get('status') for item in items} - allowed)
+if unexpected:
+    raise SystemExit('managed artifact reconciliation found an unexpected status')
+orphans = sum(item.get('status') == 'orphan_object' for item in items)
+print(f'managed_reconciliation=PASS orphan_object_count={orphans}')
+PY
+}
 valid_fixture_id() {
   [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || {
     echo 'fixture identifier contains unsupported characters' >&2
@@ -704,7 +728,11 @@ fi
 
 status="$(api_json POST "/v1/organizations/$organization_id/artifact-reconciliation" "$control_token" - "$work/response")"
 assert_status "$status" '200' reconciliation
-assert_json "$work/response" deliverable True
+if [[ -n "$managed_backup_id" ]]; then
+  assert_managed_reconciliation "$work/response"
+else
+  assert_json "$work/response" deliverable True
+fi
 status="$(api_json GET "/v1/organizations/$organization_id/audit" "$control_token" - "$work/response")"
 assert_status "$status" '200' audit_export
 assert_json "$work/response" verification.valid True
