@@ -25,6 +25,8 @@ Non-goals:
 - no credential rotation without evidence of an exposed credential;
 - no attempt to preserve private implementation history in a public ref; and
 - no force-push to the public default branch from this worktree.
+- no assumption that rewriting only the default branch removes old public
+  branches, tags, pull-request refs, or already-cloned objects.
 
 ## Owner
 
@@ -83,6 +85,10 @@ Recovery references before any remote operation are `origin/main` at
 
 Create the isolated candidate history and report its exact ref, commit count,
 scan results, and recovery procedure for maintainer review.
+
+The remote operation must inventory every public branch and tag, freeze writes,
+replace or remove old refs, and account for pull-request refs and provider-side
+object retention. A new clean branch alone does not remove the old history.
 
 ## Blockers
 
