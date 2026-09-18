@@ -78,8 +78,8 @@ Candidate validation completed on 2026-09-19:
 - hosted-only path inventory: empty.
 
 Recovery references before any remote operation are `origin/main` at
-`82f92d66966d369cc27907d6d3b26abf82ca40d5` and the cleanup tip at
-`af7859187c8df6ba9d4024a564168586269854a9`.
+`c5be072ce986e4c4c6852486d35cd344ef76934a` and the cleanup tip at
+`df26eda8e42b29b4e9e432a21e2036ba796b65bb`.
 
 ## Next Action
 
@@ -115,3 +115,6 @@ no remote history has been rewritten.
   history. Candidate history work is isolated from the cleanup branch.
 - 2026-09-19: Built and scanned a fresh-root candidate in an isolated clone;
   remote refs remain unchanged pending maintainer recovery-plan approval.
+- 2026-09-19: Merged the current `main` tip into the cleanup branch to resolve
+  the review conflict while retaining the sanitized public tree; updated the
+  recovery references and kept remote history unchanged.
