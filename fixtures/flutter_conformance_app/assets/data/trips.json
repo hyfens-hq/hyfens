@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-demo",
+  "trips": [
+    {
+      "id": "kyoto-notes",
+      "title": "Kyoto field notes",
+      "destination": "Kyoto, Japan",
+      "dateRange": "14–19 Apr 2027",
+      "durationLabel": "5 nights",
+      "coverLabel": "Temples, tea, and quiet lanes",
+      "imageAsset": "assets/images/waypoint/kyoto.svg",
+      "accent": "#D98267",
+      "progress": 0.62,
+      "itinerary": [
+        {"time": "09:30", "title": "Philosopher's Path", "detail": "A slow walk beside the canal", "category": "walk", "done": true},
+        {"time": "13:00", "title": "Tea house reservation", "detail": "A small room in Gion", "category": "food", "done": false},
+        {"time": "18:40", "title": "Lanterns at Yasaka", "detail": "Golden hour in the old quarter", "category": "culture", "done": false}
+      ],
+      "checklist": [
+        {"title": "Reserve rail pass", "detail": "Compare flexible options", "done": true},
+        {"title": "Save a tea house", "detail": "Choose a quiet evening slot", "done": false},
+        {"title": "Share arrival note", "detail": "Send the plan to your travel group", "done": false}
+      ],
+      "documents": [
+        {"name": "Kyoto itinerary.pdf", "kind": "Itinerary", "sizeLabel": "248 KB", "icon": "route"},
+        {"name": "Rail pass note.txt", "kind": "Travel note", "sizeLabel": "12 KB", "icon": "note"}
+      ]
+    },
+    {
+      "id": "lisbon-light",
+      "title": "Lisbon in soft light",
+      "destination": "Lisbon, Portugal",
+      "dateRange": "02–06 Jun 2027",
+      "durationLabel": "4 nights",
+      "coverLabel": "Hills, tiles, and late dinners",
+      "imageAsset": "assets/images/waypoint/lisbon.svg",
+      "accent": "#E6A24F",
+      "progress": 0.18,
+      "itinerary": [
+        {"time": "10:00", "title": "Alfama photo walk", "detail": "Start before the streets warm up", "category": "walk", "done": false},
+        {"time": "16:30", "title": "Riverside check-in", "detail": "Drop bags near the water", "category": "stay", "done": false}
+      ],
+      "checklist": [
+        {"title": "Pick a neighbourhood", "detail": "Keep the first day walkable", "done": false}
+      ],
+      "documents": []
+    },
+    {
+      "id": "reykjavik-open-skies",
+      "title": "Open skies",
+      "destination": "Reykjavík, Iceland",
+      "dateRange": "08–12 Sep 2027",
+      "durationLabel": "4 nights",
+      "coverLabel": "Wind, water, and winter light",
+      "imageAsset": "assets/images/waypoint/reykjavik.svg",
+      "accent": "#5EB9A1",
+      "progress": 0.04,
+      "itinerary": [],
+      "checklist": [],
+      "documents": []
+    }
+  ]
+}

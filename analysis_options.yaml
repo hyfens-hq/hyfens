@@ -1,0 +1,19 @@
+analyzer:
+  exclude:
+    - .dart_tool/**
+    # Patch inputs are compiled against the release overlay/Flutter fixture,
+    # not as standalone files in this pure-Dart research package.
+    - experiments/patch_loading/patches/**
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
+
+linter:
+  rules:
+    - avoid_dynamic_calls
+    - directives_ordering
+    - prefer_final_locals

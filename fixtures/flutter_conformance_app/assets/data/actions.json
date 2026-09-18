@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-demo",
+  "actions": [
+    {
+      "id": "open_planner",
+      "type": "bottom_sheet",
+      "title": "Start a small plan",
+      "subtitle": "Choose a place, a pace, and a few open days.",
+      "submitLabel": "Show ideas",
+      "fields": [
+        {"id": "destination", "label": "Where to?", "type": "text", "placeholder": "City, coast, or countryside", "required": true},
+        {"id": "dates", "label": "When?", "type": "date_range", "placeholder": "Pick flexible dates", "required": true},
+        {"id": "travellers", "label": "Travellers", "type": "stepper", "initialValue": 2, "min": 1, "max": 6, "required": true}
+      ]
+    },
+    {
+      "id": "watch_route_preview",
+      "type": "video",
+      "title": "Preview the route",
+      "asset": "assets/video/waypoint-route-preview.mp4",
+      "actionLabel": "Play preview"
+    },
+    {
+      "id": "share_trip_note",
+      "type": "form",
+      "title": "Add a travel note",
+      "subtitle": "Keep one small thought with the plan.",
+      "submitLabel": "Save note",
+      "fields": [
+        {"id": "note", "label": "Your note", "type": "multiline", "placeholder": "A place to return to…", "required": true}
+      ]
+    }
+  ],
+  "permissions": [
+    {"id": "location", "permission": "locationWhenInUse", "label": "Use my location", "reason": "To suggest nearby places while you explore."},
+    {"id": "notifications", "permission": "notification", "label": "Trip reminders", "reason": "To remind you about saved plans and departures."},
+    {"id": "camera", "permission": "camera", "label": "Capture a travel note", "reason": "To attach a photo to a local demo note."},
+    {"id": "photos", "permission": "photos", "label": "Choose from library", "reason": "To add a saved image to a local demo note."}
+  ]
+}

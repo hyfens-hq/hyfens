@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" role="img" aria-labelledby="title desc">
+  <title id="title">Jaipur morning</title>
+  <desc id="desc">An original vector illustration of a rose-colored courtyard and palace domes.</desc>
+  <defs>
+    <linearGradient id="rose" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F2B58B"/>
+      <stop offset="1" stop-color="#F3D29D"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#rose)"/>
+  <circle cx="647" cy="120" r="58" fill="#FFF0BE"/>
+  <path d="M0 374C132 325 268 352 382 395C515 445 642 397 800 343V600H0Z" fill="#C46868"/>
+  <path d="M0 437C203 397 351 448 486 478C608 505 705 465 800 425V600H0Z" fill="#954B59"/>
+  <g transform="translate(101 238)">
+    <path d="M0 85H598V287H0Z" fill="#D98278"/>
+    <path d="M-21 89L22 52H576L619 89Z" fill="#A84F5A"/>
+    <path d="M55 52L90 14H508L543 52Z" fill="#E3A087"/>
+    <path d="M85 14L107 -13H190L212 14M387 14L409 -13H492L514 14" fill="#B85B62"/>
+    <g fill="#F6D2A3">
+      <path d="M51 112C51 79 100 79 100 112V172H51Z"/><path d="M132 112C132 79 181 79 181 112V172H132Z"/>
+      <path d="M213 112C213 79 262 79 262 112V172H213Z"/><path d="M294 112C294 79 343 79 343 112V172H294Z"/>
+      <path d="M375 112C375 79 424 79 424 112V172H375Z"/><path d="M456 112C456 79 505 79 505 112V172H456Z"/>
+    </g>
+    <g fill="#874650">
+      <rect x="70" y="192" width="26" height="38"/><rect x="151" y="192" width="26" height="38"/>
+      <rect x="232" y="192" width="26" height="38"/><rect x="313" y="192" width="26" height="38"/>
+      <rect x="394" y="192" width="26" height="38"/><rect x="475" y="192" width="26" height="38"/>
+    </g>
+  </g>
+  <path d="M84 518H716" stroke="#F8D8A4" stroke-width="11" stroke-linecap="round" opacity="0.85"/>
+  <circle cx="400" cy="517" r="20" fill="#E6A45F"/>
+</svg>

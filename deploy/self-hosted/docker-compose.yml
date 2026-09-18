@@ -1,0 +1,120 @@
+name: hyfens-self-hosted
+
+services:
+  postgres:
+    image: ${HYFENS_POSTGRES_IMAGE:-postgres:17-alpine}
+    environment:
+      POSTGRES_DB: hyfens
+      POSTGRES_USER: hyfens
+      POSTGRES_PASSWORD: ${HYFENS_POSTGRES_PASSWORD:?set HYFENS_POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hyfens -d hyfens"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - hyfens-self-hosted-postgres:/var/lib/postgresql/data
+
+  object-store:
+    image: ${HYFENS_OBJECT_STORE_IMAGE:-minio/minio:latest}
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${HYFENS_S3_ACCESS_KEY:?set HYFENS_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${HYFENS_S3_SECRET_KEY:?set HYFENS_S3_SECRET_KEY}
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - hyfens-self-hosted-objects:/data
+
+  object-bootstrap:
+    image: ${HYFENS_OBJECT_STORE_CLIENT_IMAGE:-minio/mc:latest}
+    entrypoint: ["/bin/sh", "-c"]
+    command: >-
+      "mc alias set local http://object-store:9000
+      $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/$${HYFENS_S3_BUCKET}"
+    environment:
+      MINIO_ROOT_USER: ${HYFENS_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${HYFENS_S3_SECRET_KEY}
+      HYFENS_S3_BUCKET: ${HYFENS_S3_BUCKET:-hyfens-artifacts}
+    depends_on:
+      object-store:
+        condition: service_healthy
+
+  control-plane:
+    image: ${HYFENS_CONTROL_PLANE_IMAGE:-ghcr.io/hyfens-hq/hyfens-control-plane}:${HYFENS_VERSION:?set HYFENS_VERSION}
+    environment:
+      HYFENS_HOST: 0.0.0.0
+      HYFENS_PORT: 18081
+      HYFENS_DATABASE_URL: postgresql://hyfens:${HYFENS_POSTGRES_PASSWORD}@postgres:5432/hyfens?sslmode=disable
+      HYFENS_ARTIFACT_ENDPOINT: http://object-store:9000/
+      HYFENS_ARTIFACT_BUCKET: ${HYFENS_S3_BUCKET:-hyfens-artifacts}
+      HYFENS_ARTIFACT_ACCESS_KEY: ${HYFENS_S3_ACCESS_KEY}
+      HYFENS_ARTIFACT_SECRET_KEY: ${HYFENS_S3_SECRET_KEY}
+      HYFENS_ARTIFACT_REGION: ${HYFENS_S3_REGION:-us-east-1}
+      HYFENS_API_BASE_PATH: ${HYFENS_API_BASE_PATH:-/}
+      HYFENS_DISCOVERY_PRODUCT: ${HYFENS_DISCOVERY_PRODUCT:-hyfens}
+      HYFENS_DISCOVERY_PRODUCT_VERSION: ${HYFENS_VERSION}
+      HYFENS_DISCOVERY_API_VERSION: ${HYFENS_DISCOVERY_API_VERSION:-v1}
+      HYFENS_AUTH_DEVICE_VERIFICATION_URI: ${HYFENS_AUTH_DEVICE_VERIFICATION_URI:-}
+      HYFENS_AUTH_AUTHORIZATION_ENDPOINT: ${HYFENS_AUTH_AUTHORIZATION_ENDPOINT:-}
+      HYFENS_WEB_ORIGINS: ${HYFENS_WEB_ORIGINS:?set HYFENS_WEB_ORIGINS}
+      HYFENS_PUBLIC_CONTENT_ORGANIZATION_ID: ${HYFENS_PUBLIC_CONTENT_ORGANIZATION_ID:-}
+      HYFENS_PUBLIC_REGISTRATION_ORGANIZATION_ID: ${HYFENS_PUBLIC_REGISTRATION_ORGANIZATION_ID:-}
+      HYFENS_AUTH_ISSUER: ${HYFENS_AUTH_ISSUER:-}
+      HYFENS_AUTH_AUDIENCE: ${HYFENS_AUTH_AUDIENCE:-}
+      HYFENS_AUTH_SIGNING_KEY: ${HYFENS_AUTH_SIGNING_KEY:?set HYFENS_AUTH_SIGNING_KEY}
+      HYFENS_AUTH_SIGNING_KEY_ID: ${HYFENS_AUTH_SIGNING_KEY_ID:-}
+      HYFENS_AUTH_VERIFY_KEYS: ${HYFENS_AUTH_VERIFY_KEYS:-}
+      HYFENS_AUTH_ACCESS_TTL: ${HYFENS_AUTH_ACCESS_TTL:-15m}
+      HYFENS_AUTH_SESSION_TTL: ${HYFENS_AUTH_SESSION_TTL:-30d}
+      HYFENS_AUTH_CODE_TTL: ${HYFENS_AUTH_CODE_TTL:-1m}
+      HYFENS_AUTH_DEVICE_TTL: ${HYFENS_AUTH_DEVICE_TTL:-10m}
+      HYFENS_AUTH_DEVICE_POLL_INTERVAL: ${HYFENS_AUTH_DEVICE_POLL_INTERVAL:-5s}
+      HYFENS_AUTH_DEVICE_MAX_ATTEMPTS: ${HYFENS_AUTH_DEVICE_MAX_ATTEMPTS:-30}
+      HYFENS_AUTH_DEVICE_ATTEMPTS_PER_MINUTE: ${HYFENS_AUTH_DEVICE_ATTEMPTS_PER_MINUTE:-10}
+      HYFENS_AUTH_ALLOWED_REDIRECT_URIS: ${HYFENS_AUTH_ALLOWED_REDIRECT_URIS:-[]}
+      HYFENS_AUTH_ALLOW_INSECURE_HTTP: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:18081/healthz >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      object-store:
+        condition: service_healthy
+      object-bootstrap:
+        condition: service_completed_successfully
+    ports:
+      - "${HYFENS_BIND_ADDRESS:-127.0.0.1}:${HYFENS_CONTROL_PLANE_PORT:-18082}:18081"
+
+  dashboard:
+    image: ${HYFENS_DASHBOARD_IMAGE:-ghcr.io/hyfens-hq/hyfens-dashboard}:${HYFENS_VERSION:?set HYFENS_VERSION}
+    environment:
+      HYFENS_API_BASE: ${HYFENS_DASHBOARD_API_BASE:?set HYFENS_DASHBOARD_API_BASE}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    ports:
+      - "${HYFENS_BIND_ADDRESS:-127.0.0.1}:${HYFENS_DASHBOARD_PORT:-18083}:80"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+
+volumes:
+  hyfens-self-hosted-postgres:
+  hyfens-self-hosted-objects:

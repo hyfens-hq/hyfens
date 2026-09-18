@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" role="img" aria-labelledby="title desc">
+  <title id="title">Lisbon hillside</title>
+  <desc id="desc">An original vector illustration of a pastel hillside street above the river.</desc>
+  <defs>
+    <linearGradient id="day" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9FD4E1"/>
+      <stop offset="1" stop-color="#F5D19A"/>
+    </linearGradient>
+    <linearGradient id="river" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4C9EB3"/>
+      <stop offset="1" stop-color="#80C5C3"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#day)"/>
+  <circle cx="152" cy="112" r="47" fill="#F9B75E"/>
+  <path d="M0 318C138 253 232 276 328 350C424 424 531 372 612 316C677 271 737 281 800 319V600H0Z" fill="#E9A26D"/>
+  <path d="M0 396C178 332 279 381 382 444C494 512 588 458 800 361V600H0Z" fill="url(#river)"/>
+  <path d="M0 505C191 452 334 523 477 540C606 556 696 503 800 470V600H0Z" fill="#2D7285" opacity="0.6"/>
+  <g transform="translate(83 250) skewY(-10)">
+    <rect x="0" y="0" width="128" height="184" fill="#F2C38C"/>
+    <rect x="128" y="17" width="130" height="168" fill="#D86F62"/>
+    <rect x="258" y="37" width="122" height="148" fill="#F6D9A5"/>
+    <rect x="380" y="49" width="138" height="136" fill="#C85C55"/>
+    <g fill="#3D6571">
+      <rect x="24" y="30" width="29" height="38"/><rect x="76" y="30" width="29" height="38"/>
+      <rect x="153" y="49" width="29" height="38"/><rect x="205" y="49" width="29" height="38"/>
+      <rect x="282" y="66" width="29" height="38"/><rect x="330" y="66" width="29" height="38"/>
+      <rect x="408" y="80" width="29" height="38"/><rect x="460" y="80" width="29" height="38"/>
+    </g>
+    <g fill="#F5E8C8">
+      <rect x="52" y="111" width="35" height="73"/><rect x="180" y="123" width="35" height="62"/>
+      <rect x="304" y="130" width="35" height="55"/><rect x="438" y="138" width="35" height="47"/>
+    </g>
+  </g>
+  <path d="M50 456H744" stroke="#F2D6A6" stroke-width="12" stroke-linecap="round" opacity="0.8"/>
+  <g transform="translate(347 399)">
+    <rect x="0" y="0" width="90" height="66" rx="7" fill="#F4C149"/>
+    <rect x="12" y="13" width="22" height="25" fill="#3D6571"/>
+    <rect x="56" y="13" width="22" height="25" fill="#3D6571"/>
+    <path d="M15 66V80M75 66V80" stroke="#4A4B52" stroke-width="8" stroke-linecap="round"/>
+    <path d="M0 47H90" stroke="#D66B42" stroke-width="6"/>
+  </g>
+</svg>

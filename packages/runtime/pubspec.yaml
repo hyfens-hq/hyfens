@@ -1,0 +1,14 @@
+name: hyfens_runtime
+description: Stable Phase 1 runtime contracts and capability authority.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  hyfens_patch_format:
+    path: ../patch_format
+
+dev_dependencies:
+  test: ^1.26.0

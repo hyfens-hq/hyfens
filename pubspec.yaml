@@ -1,0 +1,13 @@
+name: hyfens_workspace
+description: Open-source Hyfens Flutter live-update workspace.
+version: 0.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dev_dependencies:
+  cryptography: ^2.9.0
+  patch_loading_e1:
+    path: experiments/patch_loading
+  test: ^1.26.0
