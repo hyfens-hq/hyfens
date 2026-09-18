@@ -11,12 +11,14 @@ tombstone_rehearsal="${HYFENS_DR_TOMBSTONE_REHEARSAL:-0}"
 managed_backup_id="${HYFENS_DR_MANAGED_BACKUP_ID:-}"
 managed_env_file=/etc/hyfens/public-control-plane-dev.env
 managed_aws_image='amazon/aws-cli:2.27.41@sha256:bc6b7bba44ce38f9604ede49c584824af919047ea03fbcc7c7610671fdef95d8'
+managed_project=''
 default_project=hyfens-p2-dr-${PPID}-$$
 if [[ "$tombstone_rehearsal" == 1 ]]; then
   default_project=hyfens-dr-tombstone-${PPID}-$$
 fi
 if [[ -n "$managed_backup_id" ]]; then
-  default_project=hyfens-dr-managed-${managed_backup_id}
+  managed_project="hyfens-dr-managed-$(printf '%s' "$managed_backup_id" | tr '[:upper:]' '[:lower:]')"
+  default_project="$managed_project"
 fi
 project="${HYFENS_DR_PROJECT:-$default_project}"
 control_port="${HYFENS_DR_CONTROL_PORT:-18084}"
@@ -56,8 +58,8 @@ if [[ -n "$managed_backup_id" && -n "${HYFENS_DR_COMPOSE_FILE:-}" ]]; then
   echo 'The managed rehearsal uses the repository disposable Compose file and does not accept HYFENS_DR_COMPOSE_FILE.' >&2
   exit 2
 fi
-if [[ -n "$managed_backup_id" && ! "$project" =~ ^hyfens-dr-managed-[0-9]{8}T[0-9]{6}Z$ ]]; then
-  echo 'HYFENS_DR_PROJECT must be hyfens-dr-managed-<backup-id> for a managed rehearsal.' >&2
+if [[ -n "$managed_backup_id" && "$project" != "$managed_project" ]]; then
+  echo 'HYFENS_DR_PROJECT must be the lowercase derived managed backup project name.' >&2
   exit 2
 fi
 

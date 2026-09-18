@@ -92,3 +92,7 @@ Implementation and local validation are complete; managed execution is pending.
   checksum verification, protected temporary credential env files, disposable
   Compose image selection, operator command, and local coupled tombstone
   regression evidence.
+- 2026-09-18: The first managed-host attempt stopped before container creation
+  because Docker Compose rejects uppercase `T`/`Z` in project names; the
+  derived disposable project slug is now lowercase while the R2 backup ID
+  remains unchanged for object paths and manifest identity.
