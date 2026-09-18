@@ -49,9 +49,9 @@ Coordinator: Hyfens engineering.
 ## Work Items
 
 - [x] Scan all reachable refs for private markers and credential-like material.
-- [ ] Build an isolated sanitized-history ref without changing the working
+- [x] Build an isolated sanitized-history ref without changing the working
   branch or remote default branch.
-- [ ] Scan every commit reachable from the isolated ref.
+- [x] Scan every commit reachable from the isolated ref.
 - [ ] Review the rewritten tree, tags, release automation, and clone migration
   instructions.
 - [ ] Obtain maintainer approval and execute any remote replacement separately.
@@ -66,6 +66,19 @@ Planned:
 - the current-tree scoped validation from Task 287 remains green; and
 - the original ref is recoverable before any remote mutation.
 
+Candidate validation completed on 2026-09-19:
+
+- isolated root ref: `chore/oss-history-sanitized`;
+- candidate root commit: `70d06850e5c0603f1d52cfa9c6ecbf157a8522dc`;
+- reachable commit count: `1`;
+- current-tree boundary guard: passed;
+- reachable-history private-marker scan: passed; and
+- hosted-only path inventory: empty.
+
+Recovery references before any remote operation are `origin/main` at
+`82f92d66966d369cc27907d6d3b26abf82ca40d5` and the cleanup tip at
+`af7859187c8df6ba9d4024a564168586269854a9`.
+
 ## Next Action
 
 Create the isolated candidate history and report its exact ref, commit count,
@@ -79,17 +92,20 @@ branches.
 
 ## Outcome
 
-History replacement is required by the scan. No remote history has been
-rewritten.
+History replacement is required by the scan. The candidate is verified, but
+no remote history has been rewritten.
 
 ## References
 
 - `tasks/287-oss-source-boundary-cleanup.md`
 - `scripts/check-oss-boundary.sh`
 - public reachable-ref scan performed on 2026-09-19
+- isolated candidate `70d06850e5c0603f1d52cfa9c6ecbf157a8522dc`
 
 ## History
 
 - 2026-09-19: Reserved after the current-tree cleanup confirmed that a normal
   pull request cannot remove private markers already published in reachable
   history. Candidate history work is isolated from the cleanup branch.
+- 2026-09-19: Built and scanned a fresh-root candidate in an isolated clone;
+  remote refs remain unchanged pending maintainer recovery-plan approval.
