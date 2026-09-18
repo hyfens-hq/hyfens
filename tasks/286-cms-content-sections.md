@@ -1,6 +1,6 @@
 # CMS content sections
 
-Status: [*] In Progress
+Status: [x] Completed
 
 ## Goal
 
@@ -41,7 +41,7 @@ Control-plane content service
 - [x] Extend content kinds and error contract.
 - [x] Add platform CMS capability bridge without widening customer scopes.
 - [x] Add focused tests and run the required control-plane validation.
-- [*] Open a reviewable pull request.
+- [x] Open a reviewable pull request.
 
 ## Validation
 
@@ -53,7 +53,7 @@ Completed:
 
 ## Next Action
 
-Commit, push, and open the reviewable control-plane pull request.
+Review and merge PR #26.
 
 ## Blockers
 
@@ -61,7 +61,7 @@ None currently.
 
 ## Outcome
 
-Pending.
+PR #26 is open for review.
 
 ## References
 
@@ -75,3 +75,4 @@ Pending.
 
 - 2026-09-18: Reserved task 286 on `feat/cms-content-sections` after confirming the existing API only accepts blog/news/policy.
 - 2026-09-18: Added article/press kinds, platform CMS capability mapping, customer-scope preservation, focused authorization/content tests, and updated the public deployment note for all editorial kinds.
+- 2026-09-18: Opened [PR #26](https://github.com/hyfens-hq/hyfens/pull/26); merge it before deploying the private CMS UI.
