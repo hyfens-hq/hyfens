@@ -71,8 +71,9 @@ Planned:
 Candidate validation completed on 2026-09-19:
 
 - isolated root ref: `chore/oss-history-sanitized`;
-- candidate root commit: `70d06850e5c0603f1d52cfa9c6ecbf157a8522dc`;
+- candidate root commit: `6755c3dd5d30d558d1a5fc0db7bafb43f728a0fa`;
 - reachable commit count: `1`;
+- candidate tree matches the final cleanup branch tree;
 - current-tree boundary guard: passed;
 - reachable-history private-marker scan: passed; and
 - hosted-only path inventory: empty.
@@ -118,3 +119,6 @@ no remote history has been rewritten.
 - 2026-09-19: Merged the current `main` tip into the cleanup branch to resolve
   the review conflict while retaining the sanitized public tree; updated the
   recovery references and kept remote history unchanged.
+- 2026-09-19: Rebuilt the isolated candidate after the recovery-reference
+  documentation update; candidate root is `6755c3dd5d30d558d1a5fc0db7bafb43f728a0fa`
+  and matches the final cleanup tree.
