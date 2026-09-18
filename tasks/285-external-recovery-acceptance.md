@@ -136,3 +136,4 @@ wiring issue is closed: the sanitized host configuration and preflight show
   confirmed distinct source/destination buckets, the destination's 30-day
   lifecycle/lock, and same-account APAC/default placement; no provider setting
   was changed.
+- 2026-09-18: Opened public review PR #25.
