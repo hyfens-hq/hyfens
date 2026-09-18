@@ -79,4 +79,35 @@ void main() {
       ]),
     );
   });
+
+  test('article and press content kinds are accepted', () async {
+    expect(parseContentKind('article'), ContentKind.article);
+    expect(parseContentKind('press'), ContentKind.press);
+
+    for (final kind in <ContentKind>[ContentKind.article, ContentKind.press]) {
+      final entry = await service.createContent(
+        token: bootstrap.controlCredential.token,
+        draft: ContentWrite(
+          kind: kind,
+          title: kind == ContentKind.article
+              ? 'Product article'
+              : 'Press release',
+          slug: kind == ContentKind.article
+              ? 'product-article'
+              : 'press-release',
+          excerpt: 'A published editorial entry.',
+          body: '# Editorial entry\n\nThe publication body is reviewed before release.',
+        ),
+        requestId: '${kind.name}-create-request',
+      );
+      expect(entry.kind, kind);
+
+      final published = await service.publishContent(
+        token: bootstrap.controlCredential.token,
+        contentId: entry.id,
+        requestId: '${kind.name}-publish-request',
+      );
+      expect(published.status, ContentStatus.published);
+    }
+  });
 }

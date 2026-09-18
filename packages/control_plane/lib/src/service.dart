@@ -5813,14 +5813,23 @@ final class ControlPlaneService {
           statusCode: 403,
         );
       }
-      final actor = await auth.authorizeAccessToken(
-        token: token,
-        requiredScope: scope,
-        kind: kind ?? CredentialKind.control,
-        organizationId: organizationId,
-        applicationId: applicationId,
-        environmentId: environmentId,
-      );
+      final actor = scope == contentAdminScope
+          ? await _authorizeContentHumanToken(
+              auth,
+              token: token,
+              kind: kind ?? CredentialKind.control,
+              organizationId: organizationId,
+              applicationId: applicationId,
+              environmentId: environmentId,
+            )
+          : await auth.authorizeAccessToken(
+              token: token,
+              requiredScope: scope,
+              kind: kind ?? CredentialKind.control,
+              organizationId: organizationId,
+              applicationId: applicationId,
+              environmentId: environmentId,
+            );
       final deletionStatusRead = _isDeletionStatusReadScope(scope);
       await _enforcePendingAccountDeletion(
         actor,
@@ -5857,6 +5866,37 @@ final class ControlPlaneService {
     );
     await _enforceCloudEntitlement(actor: actor, scope: scope);
     return actor;
+  }
+
+  Future<CredentialRecord> _authorizeContentHumanToken(
+    HumanAuthService auth, {
+    required String token,
+    required CredentialKind kind,
+    required String? organizationId,
+    required String? applicationId,
+    required String? environmentId,
+  }) async {
+    try {
+      return await auth.authorizeAccessToken(
+        token: token,
+        requiredScope: contentAdminScope,
+        kind: kind,
+        organizationId: organizationId,
+        applicationId: applicationId,
+        environmentId: environmentId,
+      );
+    } on ControlPlaneException catch (error) {
+      if (error.code != 'FORBIDDEN') rethrow;
+      return auth.authorizeAccessToken(
+        token: token,
+        requiredScope: contentAdminScope,
+        kind: kind,
+        organizationId: organizationId,
+        applicationId: applicationId,
+        environmentId: environmentId,
+        requiredAudience: platformAuthorizationAudience,
+      );
+    }
   }
 
   Future<void> _enforceCloudEntitlement({

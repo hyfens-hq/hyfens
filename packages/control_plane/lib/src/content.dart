@@ -9,12 +9,14 @@ import 'encoding.dart';
 const String contentCollection = 'content';
 const int contentMarkdownMaxBytes = 64 * 1024;
 
-enum ContentKind { blog, news, policy }
+enum ContentKind { blog, article, press, news, policy }
 
 enum ContentStatus { draft, published, archived }
 
 ContentKind parseContentKind(String value) => switch (value) {
   'blog' => ContentKind.blog,
+  'article' => ContentKind.article,
+  'press' => ContentKind.press,
   'news' => ContentKind.news,
   'policy' => ContentKind.policy,
   _ => throw const FormatException('Invalid content kind'),

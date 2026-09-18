@@ -346,8 +346,9 @@ read-only and reports counts, recent activity windows, active sessions, and
 process-local service signals; it does not expose records or credentials.
 
 Set `HYFENS_PUBLIC_CONTENT_ORGANIZATION_ID` only when this instance should
-publish one organization’s released blog/news records through the unauthenticated
-`/content` endpoints. Leaving it empty publishes no CMS records.
+publish one organization’s released blog, article, press, or news records
+through the unauthenticated `/content` endpoints. Leaving it empty publishes
+no CMS records.
 
 ## Run
 
