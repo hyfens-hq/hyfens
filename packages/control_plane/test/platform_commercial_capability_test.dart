@@ -9,6 +9,11 @@ void main() {
         platformCommercialReadCapability,
         platformPlansPublishCapability,
         platformPlansLegalReviewCapability,
+        platformManagedBackupReadCapability,
+        platformManagedBackupOperateCapability,
+        platformManagedBackupConfigureCapability,
+        platformManagedBackupRotateCapability,
+        platformManagedBackupRestoreCheckCapability,
       ]),
     );
 
@@ -17,7 +22,18 @@ void main() {
       containsAll(<String>[
         platformCommercialReadCapability,
         platformPlansLegalReviewCapability,
+        platformManagedBackupReadCapability,
+        platformManagedBackupOperateCapability,
+        platformManagedBackupConfigureCapability,
       ]),
+    );
+    expect(
+      managedPlatformStaffRoleCapabilities['admin'],
+      isNot(contains(platformManagedBackupRotateCapability)),
+    );
+    expect(
+      managedPlatformStaffRoleCapabilities['admin'],
+      isNot(contains(platformManagedBackupRestoreCheckCapability)),
     );
     expect(
       managedPlatformStaffRoleCapabilities['commercial'],
