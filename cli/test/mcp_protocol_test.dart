@@ -286,7 +286,29 @@ void main() {
         'MCP_INVALID_PATH',
       );
 
-      final shutdown = await harness.request(3, 'shutdown');
+      var escapedRequestId = 3;
+      for (final path in <String>[
+        Directory.current.absolute.path,
+        '../outside-project',
+      ]) {
+        final escaped = await harness.request(
+          escapedRequestId++,
+          'tools/call',
+          params: <String, Object?>{
+            'name': 'status',
+            'arguments': <String, Object?>{'project_path': path},
+          },
+        );
+        final escapedResult = (escaped['result']! as Map).cast<String, Object?>();
+        final escapedStructured =
+            (escapedResult['structuredContent']! as Map).cast<String, Object?>();
+        expect(
+          ((escapedStructured['error']! as Map).cast<String, Object?>())['code'],
+          'MCP_INVALID_PATH',
+        );
+      }
+
+      final shutdown = await harness.request(escapedRequestId, 'shutdown');
       expect(shutdown['result'], isA<Map>());
       await harness.server.done.timeout(const Duration(seconds: 5));
       expect(harness.server.isActive, isFalse);

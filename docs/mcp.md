@@ -35,8 +35,10 @@ args: [mcp]
 
 Do not put passwords, JWTs, bearer tokens, session secrets, signing keys, or
 private keys in MCP arguments or client configuration. The server reuses the
-selected local credential record and does not pass raw credentials to the
-agent.
+selected local credential record—native when available, otherwise the
+permission-locked file fallback—and does not pass raw credentials to the
+agent. MCP does not add a second credential channel or bypass the CLI's
+endpoint and transport checks.
 
 ## Tool boundary
 
@@ -55,8 +57,10 @@ preconditions. MCP does not grant additional permissions or perform an
 interactive login.
 
 MCP is not an arbitrary shell, file browser, or credential transport. Project
-paths and artifact operations are constrained by the tool schemas and the
-same validation used by the CLI.
+and artifact path arguments must be relative to the directory that launched
+the MCP process; absolute paths, `..` traversal, and symlinked path components
+are rejected before the toolchain is called. The normal CLI project checks
+and mutation preconditions still apply.
 
 ## Troubleshooting
 

@@ -1,0 +1,63 @@
+name: Release preflight
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: Validated version shared by CLI and image releases
+        value: ${{ jobs.check.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Scan release source for secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          scanner_dir="$(mktemp -d "$RUNNER_TEMP/gitleaks.XXXXXX")"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
+            --output "$scanner_dir/gitleaks.tar.gz"
+          (cd "$scanner_dir" && echo '9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  gitleaks.tar.gz' | sha256sum --check --strict)
+          tar -xzf "$scanner_dir/gitleaks.tar.gz" -C "$scanner_dir" gitleaks
+          "$scanner_dir/gitleaks" dir . --config .gitleaks.toml \
+            --redact --no-banner --ignore-gitleaks-allow
+      - name: Check public OSS boundary
+        run: ./scripts/check-oss-boundary.sh
+      - name: Validate tag version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Validate without executing repository code or resolving dependencies.
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          tag = os.environ["RELEASE_TAG"]
+          number = r"(?:0|[1-9][0-9]*)"
+          identifier = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+          pattern = rf"v{number}\.{number}\.{number}(?:-{identifier}(?:\.{identifier})*)?"
+          if os.environ["RELEASE_REF_TYPE"] != "tag" or not re.fullmatch(pattern, tag) or len(tag[1:]) > 128:
+              raise SystemExit("Expected canonical v-prefixed SemVer without build metadata (Docker tag limit: 128).")
+          versions = re.findall(r"^version:[ \t]*([^\s#]+)[ \t]*$", pathlib.Path("cli/pubspec.yaml").read_text(), re.MULTILINE)
+          if versions != [tag[1:]]:
+              raise SystemExit("Release tag must match the single cli/pubspec.yaml version.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={tag[1:]}\n")
+          PY

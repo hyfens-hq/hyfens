@@ -133,18 +133,39 @@ sessions are revocable and use the currently proven 30-day (`30d`) lifetime.
 Authentication JWT keys and Patch Format signing keys are separate trust
 boundaries.
 
-The CLI prefers the native OS credential store (macOS Keychain, Windows
-Credential Manager, or Linux Secret Service). The portable fallback is:
+Bundle import and admission use the control plane's server-owned trust policy.
+They do not require or send a caller-selected `--trusted-public-key`; older
+scripts may leave that option in place during migration, but remote bundle
+verification ignores it. Configure the destination server with
+`HYFENS_BUNDLE_TRUST_KEY_ID` and `HYFENS_BUNDLE_TRUST_PUBLIC_KEY` instead.
+The public key is not secret, while the private signing key remains at the
+offline signing boundary.
+
+The OSS CLI prefers a native credential store when the host supports it:
+macOS Keychain through `security`, Linux Secret Service through `secret-tool`,
+and Windows Credential Manager through Win32. These adapters are best effort;
+Linux needs a running Secret Service session and `secret-tool`, and any
+unavailable or failed native operation falls back to the portable file store.
+The fallback is permission-locked as follows:
 
 ```text
-~/.hyfens/       mode 0700
-credentials     mode 0600
+macOS/Linux  ~/.hyfens/       mode 0700
+             credentials     mode 0600
+Windows      ~/.hyfens/       ACL grants the current account only
+             credentials     ACL grants the current account only
 ```
 
-The fallback stores only the session material needed by the implementation and
-is excluded from the repository. `hyfens status` and profile commands display
-metadata, not secrets. `hyfens logout` revokes the server session and removes
-local session material.
+After a native-store failure, endpoint-bound writes go only to `credentials`;
+the legacy `session.json` remains a bounded compatibility read for existing
+installs and is removed when a matching endpoint is successfully replaced or
+logged out. Endpoint-less calls without a bound profile may still write
+`session.json` because they cannot safely create an endpoint-keyed record.
+
+The Windows ACL removes inherited access and fails closed if it cannot be
+applied. Native and fallback stores contain only the session material needed by
+the implementation and are excluded from the repository. `hyfens status` and
+profile commands display metadata, not secrets. `hyfens logout` revokes the
+server session and removes local session material.
 
 ## Project commands
 
@@ -173,6 +194,17 @@ active profile, and writes a minimal committed `hyfens.yaml` binding. It must
 contain only safe organization/application/environment identifiers. It does
 not write credentials or signing material, and it reports an application
 identity mismatch rather than weakening exact checks.
+
+### `hyfens keys generate`
+
+Generates the local Ed25519 key pair without overwriting existing signing
+material. The private key remains in its JSON format and is protected with
+`chmod 600` on macOS/Linux. On Windows, the CLI resolves the current account,
+removes inherited and prior ACL entries, grants that account full control, and
+verifies the resulting ACL with `icacls`. Generation and existing private-key
+reads fail with `S4005` if the current identity or current-account-only ACL
+cannot be established. The public key is not subject to the private-key ACL
+check.
 
 ### `hyfens release android|ios`
 

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -70,24 +71,106 @@ final class AuthSession {
   }
 }
 
-/// File-backed auth storage used when an OS credential store is unavailable.
+/// Stores one endpoint-bound auth session outside the metadata files.
 ///
-/// Profile metadata and credentials intentionally use separate files. The
-/// catalog is non-secret; [credentialsFile] is keyed by normalized API base
-/// and contains only session material. The legacy profile/session files remain
-/// readable so existing local users and release/deploy tests migrate safely.
+/// Implementations must treat [endpointKey] as lookup metadata and [value] as
+/// secret material. The value must not be placed in process arguments or
+/// diagnostic output.
+abstract interface class AuthCredentialStore {
+  Future<String?> read(String endpointKey);
+
+  Future<void> write(String endpointKey, String value);
+
+  Future<void> delete(String endpointKey);
+}
+
+/// Signals that the native credential store is unavailable for this process.
+///
+/// [AuthStorage] catches this exception and uses its permission-locked file
+/// fallback. The exception intentionally carries no platform output or secret.
+final class AuthCredentialStoreUnavailable implements Exception {
+  const AuthCredentialStoreUnavailable();
+}
+
+/// Protection policy used by the portable file-backed auth store.
+enum AuthStoragePlatform {
+  /// POSIX permissions enforced with `chmod` (macOS and Linux).
+  posix,
+
+  /// A non-inherited, current-account ACL enforced with `icacls` (Windows).
+  windows,
+}
+
+/// Process runner used to apply the platform's auth-storage permissions.
+///
+/// The injection point keeps the Windows ACL path deterministic in focused
+/// tests without requiring a Windows host in every test environment.
+typedef AuthStorageProcessRunner = Future<ProcessResult> Function(
+  String executable,
+  List<String> arguments,
+);
+
+/// Protection policy selected for the current host.
+AuthStoragePlatform get defaultAuthStoragePlatform => Platform.isWindows
+    ? AuthStoragePlatform.windows
+    : AuthStoragePlatform.posix;
+
+/// Auth storage that prefers a platform-native adapter when available.
+///
+/// The OSS default uses macOS Keychain through `security`, Linux Secret
+/// Service through `secret-tool`, or Windows Credential Manager through Win32.
+/// Missing utilities, unavailable services, and native failures fall back to
+/// the permission-locked file store. An injected adapter, when present,
+/// contains one session value per normalized API base. Profile metadata and
+/// credentials intentionally use separate stores. The catalog is non-secret.
+/// [credentialsFile] is the permission-locked fallback, keyed by the same
+/// endpoint values. The legacy profile/session files remain readable so
+/// existing local users and release/deploy tests migrate safely. Once a native
+/// store fails, endpoint-bound sessions are written only to [credentialsFile];
+/// the legacy session projection remains a read-only migration path.
 class AuthStorage {
   AuthStorage({
     Directory? root,
     String? rootPath,
     Map<String, String>? environment,
+    AuthStoragePlatform? platform,
+    AuthStorageProcessRunner? processRunner,
+    AuthCredentialStore? credentialStore,
+    bool? useNativeCredentialStore,
   }) : root = _resolveRoot(
          root: root,
          rootPath: rootPath,
          environment: environment ?? Platform.environment,
-       );
+       ),
+       platform = platform ?? defaultAuthStoragePlatform,
+       _processRunner = processRunner ?? _runAuthStorageProcess,
+       _environment = Map<String, String>.unmodifiable(
+         environment ?? Platform.environment,
+       ) {
+    final preferNative =
+        useNativeCredentialStore ??
+        (root == null && rootPath == null && environment == null);
+    _credentialStore =
+        credentialStore ??
+        (preferNative ? _defaultAuthCredentialStore() : null);
+  }
 
   final Directory root;
+
+  /// The permission policy used for this storage instance.
+  final AuthStoragePlatform platform;
+
+  final AuthStorageProcessRunner _processRunner;
+  final Map<String, String> _environment;
+  AuthCredentialStore? _credentialStore;
+  bool _nativeCredentialStoreUnavailable = false;
+
+  /// Whether this instance is configured to try an OS credential store.
+  ///
+  /// A configured native store can still be unavailable at runtime, for
+  /// example when a Linux Secret Service session is not running. In that case
+  /// this value becomes false after the first failed native operation.
+  bool get prefersNativeCredentialStore => _credentialStore != null;
 
   /// Legacy identity projection retained for compatibility.
   File get profileFile => File(p.join(root.path, 'profile.json'));
@@ -99,7 +182,23 @@ class AuthStorage {
   File get profilesFile => File(p.join(root.path, 'profiles.json'));
 
   /// Canonical host-bound credential store.
+  ///
+  /// This file is used only by the portable fallback or for legacy data.
   File get credentialsFile => File(p.join(root.path, 'credentials'));
+
+  // Non-secret authority markers prevent an unavailable native store from
+  // resurrecting an older login after fallback or logout in another process.
+  File get _credentialAuthorityFile =>
+      File(p.join(root.path, 'credential-authority.json'));
+
+  Future<Map<String, Object?>> _credentialAuthorities() async =>
+      await _readJson(_credentialAuthorityFile, code: 'A1003') ?? {};
+
+  Future<void> _setCredentialAuthority(Uri endpoint, String authority) async {
+    final authorities = await _credentialAuthorities();
+    authorities[controlPlaneEndpointKey(endpoint)] = authority;
+    await _writeJson(_credentialAuthorityFile, authorities, code: 'A1006');
+  }
 
   Future<ProfileCatalog> readProfileCatalog() async {
     final json = await _readJson(profilesFile, code: 'A1022');
@@ -277,7 +376,25 @@ class AuthStorage {
   }
 
   Future<AuthSession?> readSession({Uri? endpoint}) async {
-    final target = endpoint ?? await _sessionEndpoint();
+    final target = endpoint == null
+        ? await _sessionEndpoint()
+        : validateControlPlaneEndpoint(
+            endpoint,
+            operation: 'credential lookup',
+          );
+    if (target != null) {
+      final authority =
+          (await _credentialAuthorities())[controlPlaneEndpointKey(target)];
+      if (authority == 'cleared') return null;
+      if (authority != null && authority != 'native' && authority != 'file') {
+        throw const FormatException('Invalid credential authority');
+      }
+      if (authority != 'file') {
+        final nativeValue = await _readNativeValue(target);
+        if (nativeValue != null) return _decodeSessionText(nativeValue);
+        if (authority == 'native') return null;
+      }
+    }
     final credentials = await _readCredentials();
     if (target != null) {
       final encoded = credentials[controlPlaneEndpointKey(target)];
@@ -302,10 +419,17 @@ class AuthStorage {
       _writeJson(profileFile, profile.toJson(), code: 'A1005');
 
   Future<void> writeSession(AuthSession session, {Uri? endpoint}) async {
-    // Calls that do not identify an endpoint are the legacy compatibility
-    // projection. New auth flows always pass the normalized endpoint so the
-    // canonical credential file remains strictly host/API-base bound.
     if (endpoint == null) {
+      // Resolve the active profile when possible so the default storage still
+      // keeps a caller that omits the optional endpoint in the native store.
+      final target = await _sessionEndpoint();
+      if (target != null &&
+          (_credentialStore != null || _nativeCredentialStoreUnavailable)) {
+        await writeSession(session, endpoint: target);
+        return;
+      }
+      // No endpoint means this is an old compatibility projection. It cannot
+      // be safely placed in a host-bound native entry.
       await _writeJson(sessionFile, session.toJson(), code: 'A1006');
       return;
     }
@@ -313,36 +437,82 @@ class AuthStorage {
       endpoint,
       operation: 'credential storage',
     );
-    final credentials = await _readCredentials();
-    credentials[controlPlaneEndpointKey(target)] = session.toJson();
-    await _writeJson(credentialsFile, credentials, code: 'A1006');
-    // Keep the old projection for scripts that only inspect the active
-    // session file. Reads use the keyed store whenever it exists.
-    await _writeJson(sessionFile, session.toJson(), code: 'A1006');
+    final encoded = jsonEncode(session.toJson());
+    // Incomplete replacement must fail closed rather than select an older
+    // account from either backend on the next process invocation.
+    await _setCredentialAuthority(target, 'cleared');
+    final nativeStore = _credentialStore;
+    if (nativeStore != null) {
+      try {
+        await nativeStore.write(controlPlaneEndpointKey(target), encoded);
+        await _removeFileCredential(target);
+        await _setCredentialAuthority(target, 'native');
+        return;
+      } on AuthCredentialStoreUnavailable {
+        _credentialStore = null;
+        _nativeCredentialStoreUnavailable = true;
+      }
+    }
+    await _writeFileSession(session, target);
+    await _setCredentialAuthority(target, 'file');
   }
 
   Future<void> clearProfile() => _delete(profileFile);
 
   Future<void> clearSession({Uri? endpoint}) async {
     if (endpoint == null) {
+      final endpoints = await _storedCredentialEndpoints();
+      for (final target in endpoints) {
+        await _setCredentialAuthority(target, 'cleared');
+        await _deleteNativeValue(target);
+      }
       await _delete(credentialsFile);
       await _delete(sessionFile);
       return;
     }
+    final target = validateControlPlaneEndpoint(
+      endpoint,
+      operation: 'credential removal',
+    );
+    await _setCredentialAuthority(target, 'cleared');
+    await _deleteNativeValue(target);
+    await _removeFileCredential(target);
+  }
+
+  Future<void> _writeFileSession(AuthSession session, Uri endpoint) async {
     final credentials = await _readCredentials();
-    credentials.remove(controlPlaneEndpointKey(endpoint));
+    credentials[controlPlaneEndpointKey(endpoint)] = session.toJson();
+    await _writeJson(credentialsFile, credentials, code: 'A1006');
+    if (_nativeCredentialStoreUnavailable) {
+      await _removeLegacySessionProjection(endpoint);
+      return;
+    }
+    // Keep the old projection for scripts that only inspect the active
+    // session file when this instance is explicitly using the portable file
+    // store. A native-store failure must not create a second secret copy.
+    await _writeJson(sessionFile, session.toJson(), code: 'A1006');
+  }
+
+  Future<void> _removeFileCredential(Uri endpoint) async {
+    final key = controlPlaneEndpointKey(endpoint);
+    final credentials = await _readCredentials();
+    credentials.remove(key);
     if (credentials.isEmpty) {
       await _delete(credentialsFile);
     } else {
       await _writeJson(credentialsFile, credentials, code: 'A1007');
     }
+    await _removeLegacySessionProjection(endpoint);
+  }
+
+  Future<void> _removeLegacySessionProjection(Uri endpoint) async {
     // The compatibility projection has no endpoint field. Remove it only when
     // it belongs to the targeted endpoint; otherwise removing an inactive
     // profile would log out the active legacy projection as a side effect.
+    final key = controlPlaneEndpointKey(endpoint);
     final legacyProfile = await _readLegacyProfile();
     if (legacyProfile == null ||
-        controlPlaneEndpointKey(legacyProfile.endpoint) ==
-            controlPlaneEndpointKey(endpoint)) {
+        controlPlaneEndpointKey(legacyProfile.endpoint) == key) {
       await _delete(sessionFile);
     }
   }
@@ -375,6 +545,48 @@ class AuthStorage {
     return profile?.endpoint;
   }
 
+  Future<List<Uri>> _storedCredentialEndpoints() async {
+    final values = <String, Uri>{};
+    for (final key in (await _credentialAuthorities()).keys) {
+      values[key] = validateControlPlaneEndpoint(
+        Uri.parse(key),
+        operation: 'credential removal',
+      );
+    }
+    final catalog = await readProfileCatalog();
+    for (final profile in catalog.profiles) {
+      values[controlPlaneEndpointKey(profile.endpoint)] = profile.endpoint;
+    }
+    final legacy = await _readLegacyProfile();
+    if (legacy != null) {
+      values[controlPlaneEndpointKey(legacy.endpoint)] = legacy.endpoint;
+    }
+    return values.values.toList(growable: false);
+  }
+
+  Future<String?> _readNativeValue(Uri endpoint) async {
+    final store = _credentialStore;
+    if (store == null) return null;
+    try {
+      return await store.read(controlPlaneEndpointKey(endpoint));
+    } on AuthCredentialStoreUnavailable {
+      _credentialStore = null;
+      _nativeCredentialStoreUnavailable = true;
+      return null;
+    }
+  }
+
+  Future<void> _deleteNativeValue(Uri endpoint) async {
+    final store = _credentialStore;
+    if (store == null) return;
+    try {
+      await store.delete(controlPlaneEndpointKey(endpoint));
+    } on AuthCredentialStoreUnavailable {
+      _credentialStore = null;
+      _nativeCredentialStoreUnavailable = true;
+    }
+  }
+
   Future<Map<String, Map<String, Object?>>> _readCredentials() async {
     final json = await _readJson(credentialsFile, code: 'A1003');
     if (json == null) return <String, Map<String, Object?>>{};
@@ -394,7 +606,29 @@ class AuthStorage {
     return result;
   }
 
-  AuthSession _decodeSession(Map<String, Object?> json) {
+  Future<Map<String, Object?>?> _readJson(File file, {required String code}) =>
+      _readJsonFile(
+        file,
+        code: code,
+        platform: platform,
+        processRunner: _processRunner,
+        environment: _environment,
+      );
+
+  Future<void> _writeJson(
+    File file,
+    Map<String, Object?> value, {
+    required String code,
+  }) => _writeJsonFile(
+    file,
+    value,
+    code: code,
+    platform: platform,
+    processRunner: _processRunner,
+    environment: _environment,
+  );
+
+  AuthSession _decodeSession(Map<String, Object?> json, {String? detail}) {
     try {
       return AuthSession.fromJson(json);
     } on FormatException {
@@ -402,17 +636,513 @@ class AuthStorage {
         exitCode: ToolExitCode.environment,
         code: 'A1004',
         summary: 'Stored auth session is malformed',
-        detail: sessionFile.path,
+        detail: detail ?? sessionFile.path,
+        action: 'Run hyfens login to replace the local session.',
+      );
+    }
+  }
+
+  AuthSession _decodeSessionText(String value) {
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! Map) throw const FormatException('Expected an object');
+      return _decodeSession(
+        _mapStringKeys(decoded),
+        detail: 'native credential store',
+      );
+    } on ToolFailure {
+      rethrow;
+    } on FormatException {
+      throw ToolFailure.single(
+        exitCode: ToolExitCode.environment,
+        code: 'A1004',
+        summary: 'Stored auth session is malformed',
+        detail: 'native credential store',
         action: 'Run hyfens login to replace the local session.',
       );
     }
   }
 }
 
-/// Explicit name for callers that want to document the portable fallback.
+/// Explicit name for callers that want to document the portable file store.
 final class FileAuthStorage extends AuthStorage {
-  FileAuthStorage({super.root, super.rootPath, super.environment});
+  FileAuthStorage({
+    super.root,
+    super.rootPath,
+    super.environment,
+    super.platform,
+    super.processRunner,
+  }) : super(useNativeCredentialStore: false);
 }
+
+/// Native credential-store adapter used by the default [AuthStorage].
+///
+/// macOS delegates to the `security` Keychain utility, Linux delegates to the
+/// Secret Service through `secret-tool`, and Windows calls Credential Manager
+/// through Win32. Secret values are passed through stdin or native memory, and
+/// never through a process argument.
+final class NativeAuthCredentialStore implements AuthCredentialStore {
+  static const _macOsService = 'org.hyfens.cli.auth.v1';
+  static const _linuxApplication = 'org.hyfens.cli';
+  static const _linuxLabel = 'Hyfens CLI session';
+
+  _WindowsCredentialStore? _windows;
+
+  @override
+  Future<String?> read(String endpointKey) async {
+    _validateNativeEndpointKey(endpointKey);
+    if (Platform.isMacOS) return _readMacOs(endpointKey);
+    if (Platform.isLinux) return _readLinux(endpointKey);
+    if (Platform.isWindows) {
+      try {
+        return _windowsStore().read(_windowsTarget(endpointKey));
+      } on AuthCredentialStoreUnavailable {
+        rethrow;
+      } on Object {
+        throw const AuthCredentialStoreUnavailable();
+      }
+    }
+    throw const AuthCredentialStoreUnavailable();
+  }
+
+  @override
+  Future<void> write(String endpointKey, String value) async {
+    _validateNativeEndpointKey(endpointKey);
+    if (Platform.isMacOS) {
+      await _writeMacOs(endpointKey, value);
+      return;
+    }
+    if (Platform.isLinux) {
+      await _writeLinux(endpointKey, value);
+      return;
+    }
+    if (Platform.isWindows) {
+      try {
+        _windowsStore().write(_windowsTarget(endpointKey), value);
+        return;
+      } on AuthCredentialStoreUnavailable {
+        rethrow;
+      } on Object {
+        throw const AuthCredentialStoreUnavailable();
+      }
+    }
+    throw const AuthCredentialStoreUnavailable();
+  }
+
+  @override
+  Future<void> delete(String endpointKey) async {
+    _validateNativeEndpointKey(endpointKey);
+    if (Platform.isMacOS) {
+      await _deleteMacOs(endpointKey);
+      return;
+    }
+    if (Platform.isLinux) {
+      await _deleteLinux(endpointKey);
+      return;
+    }
+    if (Platform.isWindows) {
+      try {
+        _windowsStore().delete(_windowsTarget(endpointKey));
+        return;
+      } on AuthCredentialStoreUnavailable {
+        rethrow;
+      } on Object {
+        throw const AuthCredentialStoreUnavailable();
+      }
+    }
+    throw const AuthCredentialStoreUnavailable();
+  }
+
+  Future<String?> _readMacOs(String endpointKey) async {
+    final result = await _runNativeCredentialCommand('security', <String>[
+      'find-generic-password',
+      '-a',
+      endpointKey,
+      '-s',
+      _macOsService,
+      '-w',
+    ]);
+    if (result.exitCode != 0) return null;
+    return _stripTrailingLineBreak(result.stdout);
+  }
+
+  Future<void> _writeMacOs(String endpointKey, String value) async {
+    // Interactive command mode reads a complete command from stdin. A bare
+    // trailing -w instead invokes getpass on the terminal, not this pipe.
+    // Hex keeps secret bytes out of command parsing; nothing secret is argv.
+    final command = <String>[
+      'add-generic-password',
+      '-a',
+      '"${endpointKey.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"',
+      '-s',
+      '"$_macOsService"',
+      '-U',
+      '-X',
+      utf8
+          .encode(value)
+          .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+          .join(),
+    ].join(' ');
+    // Apple's interactive parser has a 4096-byte line buffer. Refuse to
+    // truncate a credential; larger sessions use the permission-locked file.
+    if (utf8.encode(command).length >= 4095) {
+      throw const AuthCredentialStoreUnavailable();
+    }
+    final result = await _runNativeCredentialCommand(
+      '/usr/bin/security',
+      <String>['-i'],
+      input: command,
+    );
+    if (result.exitCode != 0) {
+      throw const AuthCredentialStoreUnavailable();
+    }
+  }
+
+  Future<void> _deleteMacOs(String endpointKey) async {
+    final result = await _runNativeCredentialCommand('security', <String>[
+      'delete-generic-password',
+      '-a',
+      endpointKey,
+      '-s',
+      _macOsService,
+    ]);
+    if (result.exitCode != 0) {
+      throw const AuthCredentialStoreUnavailable();
+    }
+  }
+
+  Future<String?> _readLinux(String endpointKey) async {
+    final result = await _runNativeCredentialCommand('secret-tool', <String>[
+      'lookup',
+      'application',
+      _linuxApplication,
+      'endpoint',
+      endpointKey,
+    ]);
+    if (result.exitCode != 0) return null;
+    return _stripTrailingLineBreak(result.stdout);
+  }
+
+  Future<void> _writeLinux(String endpointKey, String value) async {
+    final result = await _runNativeCredentialCommand('secret-tool', <String>[
+      'store',
+      '--label=$_linuxLabel',
+      'application',
+      _linuxApplication,
+      'endpoint',
+      endpointKey,
+    ], input: value);
+    if (result.exitCode != 0) {
+      throw const AuthCredentialStoreUnavailable();
+    }
+  }
+
+  Future<void> _deleteLinux(String endpointKey) async {
+    final result = await _runNativeCredentialCommand('secret-tool', <String>[
+      'clear',
+      'application',
+      _linuxApplication,
+      'endpoint',
+      endpointKey,
+    ]);
+    if (result.exitCode != 0) {
+      throw const AuthCredentialStoreUnavailable();
+    }
+  }
+
+  _WindowsCredentialStore _windowsStore() {
+    try {
+      return _windows ??= _WindowsCredentialStore();
+    } on AuthCredentialStoreUnavailable {
+      rethrow;
+    } on Object {
+      throw const AuthCredentialStoreUnavailable();
+    }
+  }
+
+  String _windowsTarget(String endpointKey) =>
+      'Hyfens CLI auth v1/$endpointKey';
+}
+
+/// Returns the native adapter only for the supported desktop operating systems.
+///
+/// Runtime availability is still best-effort: Linux needs a usable Secret
+/// Service session and `secret-tool`, while the macOS and Windows adapters need
+/// their respective host APIs. [AuthStorage] falls back when an adapter fails.
+AuthCredentialStore? _defaultAuthCredentialStore() {
+  if (Platform.isMacOS || Platform.isLinux || Platform.isWindows) {
+    return NativeAuthCredentialStore();
+  }
+  return null;
+}
+
+void _validateNativeEndpointKey(String endpointKey) {
+  if (endpointKey.isEmpty || endpointKey.contains(RegExp(r'[\u0000\r\n]'))) {
+    throw ArgumentError.value(endpointKey, 'endpointKey');
+  }
+}
+
+Future<_NativeCredentialCommandResult> _runNativeCredentialCommand(
+  String executable,
+  List<String> arguments, {
+  String? input,
+}) async {
+  late final Process process;
+  try {
+    process = await Process.start(executable, arguments, runInShell: false);
+  } on ProcessException {
+    throw const AuthCredentialStoreUnavailable();
+  }
+  final stdout = process.stdout.transform(utf8.decoder).join();
+  final stderr = process.stderr.transform(utf8.decoder).join();
+  try {
+    if (input != null) process.stdin.write('$input\n');
+    await process.stdin.close();
+  } on Object {
+    process.kill();
+    throw const AuthCredentialStoreUnavailable();
+  }
+  try {
+    final exitCode = await process.exitCode.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {
+        process.kill();
+        throw const AuthCredentialStoreUnavailable();
+      },
+    );
+    final output = await stdout;
+    await stderr;
+    return _NativeCredentialCommandResult(exitCode: exitCode, stdout: output);
+  } on Object {
+    throw const AuthCredentialStoreUnavailable();
+  }
+}
+
+String _stripTrailingLineBreak(String value) {
+  if (value.endsWith('\r\n')) return value.substring(0, value.length - 2);
+  if (value.endsWith('\n')) return value.substring(0, value.length - 1);
+  return value;
+}
+
+final class _NativeCredentialCommandResult {
+  const _NativeCredentialCommandResult({
+    required this.exitCode,
+    required this.stdout,
+  });
+
+  final int exitCode;
+  final String stdout;
+}
+
+final class _WindowsCredentialStore {
+  _WindowsCredentialStore()
+    : _advapi = DynamicLibrary.open('Advapi32.dll'),
+      _kernel32 = DynamicLibrary.open('Kernel32.dll');
+
+  final DynamicLibrary _advapi;
+  final DynamicLibrary _kernel32;
+
+  late final _CredReadDart _credRead = _advapi
+      .lookupFunction<_CredReadNative, _CredReadDart>('CredReadW');
+  late final _CredWriteDart _credWrite = _advapi
+      .lookupFunction<_CredWriteNative, _CredWriteDart>('CredWriteW');
+  late final _CredDeleteDart _credDelete = _advapi
+      .lookupFunction<_CredDeleteNative, _CredDeleteDart>('CredDeleteW');
+  late final _CredFreeDart _credFree = _advapi
+      .lookupFunction<_CredFreeNative, _CredFreeDart>('CredFree');
+  late final _LocalAllocDart _localAlloc = _kernel32
+      .lookupFunction<_LocalAllocNative, _LocalAllocDart>('LocalAlloc');
+  late final _LocalFreeDart _localFree = _kernel32
+      .lookupFunction<_LocalFreeNative, _LocalFreeDart>('LocalFree');
+  late final _GetLastErrorDart _getLastError = _kernel32
+      .lookupFunction<_GetLastErrorNative, _GetLastErrorDart>('GetLastError');
+
+  String? read(String targetName) {
+    final target = _utf16(targetName);
+    final result = _allocate(sizeOf<Pointer<_WindowsCredential>>())
+        .cast<Pointer<_WindowsCredential>>();
+    Pointer<_WindowsCredential>? credential;
+    try {
+      final success = _credRead(target, _windowsGenericCredential, 0, result);
+      if (success == 0) {
+        if (_getLastError() == _windowsCredentialNotFound) return null;
+        throw const AuthCredentialStoreUnavailable();
+      }
+      credential = result.value;
+      if (credential.address == 0) {
+        throw const AuthCredentialStoreUnavailable();
+      }
+      final blobSize = credential.ref.credentialBlobSize;
+      final blob = credential.ref.credentialBlob;
+      if (blobSize == 0) return '';
+      if (blob.address == 0) {
+        throw const AuthCredentialStoreUnavailable();
+      }
+      final bytes = List<int>.generate(
+        blobSize,
+        (index) => (blob + index).value,
+        growable: false,
+      );
+      try {
+        return utf8.decode(bytes);
+      } on FormatException {
+        throw const AuthCredentialStoreUnavailable();
+      }
+    } finally {
+      if (credential != null && credential.address != 0) {
+        _credFree(credential.cast<Void>());
+      }
+      _localFree(target.cast<Void>());
+      _localFree(result.cast<Void>());
+    }
+  }
+
+  void write(String targetName, String value) {
+    final target = _utf16(targetName);
+    final username = _utf16('hyfens');
+    final bytes = utf8.encode(value);
+    final credential = _allocate(sizeOf<_WindowsCredential>());
+    final blob = bytes.isEmpty
+        ? Pointer<Uint8>.fromAddress(0)
+        : _allocate(bytes.length).cast<Uint8>();
+    try {
+      for (var index = 0; index < bytes.length; index++) {
+        (blob + index).value = bytes[index];
+      }
+      final valuePointer = credential.cast<_WindowsCredential>().ref
+        ..flags = 0
+        ..type = _windowsGenericCredential
+        ..targetName = target
+        ..comment = Pointer<Uint16>.fromAddress(0)
+        ..credentialBlobSize = bytes.length
+        ..credentialBlob = blob
+        ..persist = _windowsPersistLocalMachine
+        ..attributeCount = 0
+        ..attributes = Pointer<Void>.fromAddress(0)
+        ..targetAlias = Pointer<Uint16>.fromAddress(0)
+        ..userName = username;
+      valuePointer.lastWritten.lowDateTime = 0;
+      valuePointer.lastWritten.highDateTime = 0;
+      if (_credWrite(credential.cast<_WindowsCredential>(), 0) == 0) {
+        throw const AuthCredentialStoreUnavailable();
+      }
+    } finally {
+      _localFree(target.cast<Void>());
+      _localFree(username.cast<Void>());
+      _localFree(credential.cast<Void>());
+      if (blob.address != 0) _localFree(blob.cast<Void>());
+    }
+  }
+
+  void delete(String targetName) {
+    final target = _utf16(targetName);
+    try {
+      if (_credDelete(target, _windowsGenericCredential, 0) == 0 &&
+          _getLastError() != _windowsCredentialNotFound) {
+        throw const AuthCredentialStoreUnavailable();
+      }
+    } finally {
+      _localFree(target.cast<Void>());
+    }
+  }
+
+  Pointer<Uint16> _utf16(String value) {
+    final units = value.codeUnits;
+    final pointer = _allocate((units.length + 1) * sizeOf<Uint16>())
+        .cast<Uint16>();
+    for (var index = 0; index < units.length; index++) {
+      (pointer + index).value = units[index];
+    }
+    (pointer + units.length).value = 0;
+    return pointer;
+  }
+
+  Pointer<Void> _allocate(int bytes) {
+    final pointer = _localAlloc(0, bytes);
+    if (pointer.address == 0) {
+      throw const AuthCredentialStoreUnavailable();
+    }
+    return pointer;
+  }
+}
+
+const _windowsGenericCredential = 1;
+const _windowsPersistLocalMachine = 2;
+const _windowsCredentialNotFound = 1168;
+
+final class _WindowsFileTime extends Struct {
+  @Uint32()
+  external int lowDateTime;
+
+  @Uint32()
+  external int highDateTime;
+}
+
+final class _WindowsCredential extends Struct {
+  @Uint32()
+  external int flags;
+
+  @Uint32()
+  external int type;
+
+  external Pointer<Uint16> targetName;
+  external Pointer<Uint16> comment;
+  external _WindowsFileTime lastWritten;
+
+  @Uint32()
+  external int credentialBlobSize;
+
+  external Pointer<Uint8> credentialBlob;
+
+  @Uint32()
+  external int persist;
+
+  @Uint32()
+  external int attributeCount;
+
+  external Pointer<Void> attributes;
+  external Pointer<Uint16> targetAlias;
+  external Pointer<Uint16> userName;
+}
+
+typedef _CredReadNative = Int32 Function(
+  Pointer<Uint16> targetName,
+  Uint32 type,
+  Uint32 flags,
+  Pointer<Pointer<_WindowsCredential>> credential,
+);
+typedef _CredReadDart = int Function(
+  Pointer<Uint16> targetName,
+  int type,
+  int flags,
+  Pointer<Pointer<_WindowsCredential>> credential,
+);
+typedef _CredWriteNative = Int32 Function(
+  Pointer<_WindowsCredential> credential,
+  Uint32 flags,
+);
+typedef _CredWriteDart = int Function(
+  Pointer<_WindowsCredential> credential,
+  int flags,
+);
+typedef _CredDeleteNative = Int32 Function(
+  Pointer<Uint16> targetName,
+  Uint32 type,
+  Uint32 flags,
+);
+typedef _CredDeleteDart = int Function(
+  Pointer<Uint16> targetName,
+  int type,
+  int flags,
+);
+typedef _CredFreeNative = Void Function(Pointer<Void> buffer);
+typedef _CredFreeDart = void Function(Pointer<Void> buffer);
+typedef _LocalAllocNative = Pointer<Void> Function(Uint32 flags, IntPtr bytes);
+typedef _LocalAllocDart = Pointer<Void> Function(int flags, int bytes);
+typedef _LocalFreeNative = Pointer<Void> Function(Pointer<Void> pointer);
+typedef _LocalFreeDart = Pointer<Void> Function(Pointer<Void> pointer);
+typedef _GetLastErrorNative = Uint32 Function();
+typedef _GetLastErrorDart = int Function();
 
 Directory defaultAuthStorageRoot({Map<String, String>? environment}) =>
     _resolveRoot(environment: environment ?? Platform.environment);
@@ -452,13 +1182,29 @@ String? _firstEnvironment(Map<String, String> environment, List<String> keys) {
   return null;
 }
 
-Future<Map<String, Object?>?> _readJson(
+Future<Map<String, Object?>?> _readJsonFile(
   File file, {
   required String code,
+  required AuthStoragePlatform platform,
+  required AuthStorageProcessRunner processRunner,
+  required Map<String, String> environment,
 }) async {
   if (!file.existsSync()) return null;
-  await _restrict(file.parent, code: code, directory: true);
-  await _restrict(file, code: code);
+  await _restrict(
+    file.parent,
+    code: code,
+    directory: true,
+    platform: platform,
+    processRunner: processRunner,
+    environment: environment,
+  );
+  await _restrict(
+    file,
+    code: code,
+    platform: platform,
+    processRunner: processRunner,
+    environment: environment,
+  );
   try {
     final decoded = jsonDecode(await file.readAsString());
     if (decoded is! Map) throw const FormatException('Expected an object');
@@ -476,22 +1222,44 @@ Future<Map<String, Object?>?> _readJson(
   }
 }
 
-Future<void> _writeJson(
+Future<void> _writeJsonFile(
   File file,
   Map<String, Object?> value, {
   required String code,
+  required AuthStoragePlatform platform,
+  required AuthStorageProcessRunner processRunner,
+  required Map<String, String> environment,
 }) async {
   try {
     await file.parent.create(recursive: true);
-    await _restrict(file.parent, code: code, directory: true);
+    await _restrict(
+      file.parent,
+      code: code,
+      directory: true,
+      platform: platform,
+      processRunner: processRunner,
+      environment: environment,
+    );
     final temporary = File(
       '${file.path}.tmp-${pid}-${DateTime.now().microsecondsSinceEpoch}',
     );
     try {
       await temporary.writeAsString('${jsonEncode(value)}\n', flush: true);
-      await _restrict(temporary, code: code);
+      await _restrict(
+        temporary,
+        code: code,
+        platform: platform,
+        processRunner: processRunner,
+        environment: environment,
+      );
       await temporary.rename(file.path);
-      await _restrict(file, code: code);
+      await _restrict(
+        file,
+        code: code,
+        platform: platform,
+        processRunner: processRunner,
+        environment: environment,
+      );
     } finally {
       if (temporary.existsSync()) await temporary.delete();
     }
@@ -526,20 +1294,63 @@ Future<void> _restrict(
   FileSystemEntity entity, {
   required String code,
   bool directory = false,
+  required AuthStoragePlatform platform,
+  required AuthStorageProcessRunner processRunner,
+  required Map<String, String> environment,
 }) async {
-  if (Platform.isWindows) return;
-  final mode = directory ? '700' : '600';
-  final result = await Process.run('chmod', <String>[mode, entity.path]);
+  late final String executable;
+  late final List<String> arguments;
+  switch (platform) {
+    case AuthStoragePlatform.posix:
+      executable = 'chmod';
+      arguments = <String>[directory ? '700' : '600', entity.path];
+    case AuthStoragePlatform.windows:
+      final principal = _windowsPrincipal(environment);
+      if (principal == null) {
+        throw _permissionFailure(entity, code);
+      }
+      executable = 'icacls';
+      final permission = directory ? '(OI)(CI)F' : 'F';
+      arguments = <String>[
+        entity.path,
+        '/reset',
+        '/inheritance:r',
+        '/grant:r',
+        '$principal:$permission',
+      ];
+  }
+
+  ProcessResult result;
+  try {
+    result = await processRunner(executable, arguments);
+  } on Object {
+    throw _permissionFailure(entity, code);
+  }
   if (result.exitCode != 0) {
-    throw ToolFailure.single(
+    throw _permissionFailure(entity, code);
+  }
+}
+
+Future<ProcessResult> _runAuthStorageProcess(
+  String executable,
+  List<String> arguments,
+) => Process.run(executable, arguments);
+
+String? _windowsPrincipal(Map<String, String> environment) {
+  final username = environment['USERNAME']?.trim();
+  if (username == null || username.isEmpty) return null;
+  final domain = environment['USERDOMAIN']?.trim();
+  return domain == null || domain.isEmpty ? username : '$domain\\$username';
+}
+
+ToolFailure _permissionFailure(FileSystemEntity entity, String code) =>
+    ToolFailure.single(
       exitCode: ToolExitCode.environment,
       code: code,
       summary: 'Auth storage permissions could not be restricted',
       detail: entity.path,
       action: 'Use a local auth directory writable only by the current user.',
     );
-  }
-}
 
 Map<String, Object?> _mapStringKeys(Map value) => <String, Object?>{
   for (final entry in value.entries)

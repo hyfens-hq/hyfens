@@ -65,9 +65,12 @@ and are bound to the normalized endpoint origin and API base path, so a
 session from one host cannot be sent to another.
 
 Human login uses a short-lived 15-minute (`15m`) access JWT backed by a
-revocable 30-day (`30d`) server session. The CLI prefers the native OS
-credential store. Its portable fallback is `~/.hyfens/` with mode `0700` and
-credential files with mode `0600`. Profile/configuration metadata contains no
+revocable 30-day (`30d`) server session. The OSS CLI prefers macOS Keychain,
+Linux Secret Service, or Windows Credential Manager when the corresponding
+host support is available. If a native adapter is unavailable or fails, it
+uses a permission-locked file store: macOS/Linux use `~/.hyfens/` mode `0700`
+and credential files mode `0600`; Windows removes inherited ACL access and
+grants the current account only. Profile/configuration metadata contains no
 password, JWT, bearer token, session secret, signing key, or private key.
 `hyfens logout` revokes the server session and removes local session material.
 

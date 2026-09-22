@@ -3,7 +3,10 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 
 final _releaseVersionPattern = RegExp(
-  r'^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$',
+  r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+  r'(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+  r'(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?'
+  r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$',
 );
 final _artifactNamePattern = RegExp(
   r'^hyfens-(.+)-(macos|linux|windows)-([a-z0-9]+)\.(tar\.gz|zip)$',

@@ -160,8 +160,6 @@ void main() {
       'env_destination_90',
       '--idempotency-key',
       'bundle-import-90',
-      '--trusted-public-key',
-      publicKeyPath,
       '--json',
     ]);
     _expectSuccess(imported, 'QUARANTINED');
@@ -185,8 +183,6 @@ void main() {
       'pat_destination_90',
       '--idempotency-key',
       'bundle-admit-90',
-      '--trusted-public-key',
-      publicKeyPath,
       '--json',
     ]);
     _expectSuccess(admitted, 'ADMITTED');
@@ -209,12 +205,8 @@ void main() {
       idempotencyKeys,
       containsAll(<String>['bundle-import-90', 'bundle-admit-90']),
     );
-    expect(trustedKeyIds, <String?>[null, signingKey.keyId, signingKey.keyId]);
-    expect(trustedPublicKeys, <String?>[
-      null,
-      base64Encode(signingKey.publicKey),
-      base64Encode(signingKey.publicKey),
-    ]);
+    expect(trustedKeyIds, <String?>[null, null, null]);
+    expect(trustedPublicKeys, <String?>[null, null, null]);
     expect(importedBytes, signedBytes);
 
     final commands = HyfensCommandRunner().commands;
