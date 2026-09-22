@@ -1,6 +1,6 @@
 # Task 303: Branch retention and security integration audit
 
-Status: [*] In Progress
+Status: [-] Blocked
 
 ## Goal
 Audit remaining branches, preserve needed functionality and data, and integrate reviewed, validated changes through pull requests.
@@ -21,14 +21,15 @@ Historical branches must not be merged wholesale across the sanitized public his
 - [x] Archive all local refs and tracked/untracked work before changes.
 - [x] Classify retained branches against current source and historical integration evidence.
 - [x] Review the complete security diff and fix substantiated regressions.
-- [ ] Run required validation, create PR, obtain review, and merge only if safe.
-- [ ] Remove redundant branches and report retained blockers.
+- [x] Run required validation, create PR and record independent agent reviews.
+- [-] Obtain the required independent approving review before merging PR 28.
+- [x] Remove redundant branches and report retained blockers.
 
 ## Validation
 Inspect branch patch equivalence and source behavior; git diff --check; OSS boundary scan; Dart analysis and repository package tests with Flutter for Flutter-dependent packages; release workflow and packaging checks. Full relevant repository validation is required before PR integration. Record toolchain limitations and do not treat failed checks as passes.
 
 ## Next Action
-Finish branch equivalence and independent reviews, then validate the consolidated changes.
+An independent eligible reviewer must approve PR 28. Merge only after the repository's review requirements are satisfied. The reviewed security branch is retained; obsolete historical branches are archived and removed.
 
 ## Outcome
 Recovery Git bundles and source archives were verified outside the repository before mutation. Retain the security branch for PR integration. Historical deletion hardening is patch-equivalent to the integrated history. The two historical notification branches were superseded by the later main integration and subsequent approved OSS boundary restoration. The older runtime branch contains unique visual/manual-control work against a pre-restoration tree; merging it wholesale would restore deliberately removed implementation and history. Preserve that work in the recovery bundle rather than republishing it or claiming it is merged.
@@ -52,6 +53,9 @@ Upstream main requires one independent approval and approval by someone other th
 ## References
 Tasks 289–302; current security branch; upstream main.
 
+- https://github.com/hyfens-hq/hyfens/pull/28
+
 ## History
 - 2026-09-22: Authorized audit, PR review/integration, and redundant branch cleanup. Recovery copies created before changes; production inspection is read-only.
 - 2026-09-22: Completed independent reviews, corrective batch, source secret/boundary scans and full available validation. Verified existing reconciliation and rollback-route failures against unchanged main. PR integration remains subject to the repository review gate.
+- 2026-09-22: Created PR 28 and recorded agent review evidence. GitHub reports REVIEW_REQUIRED/BLOCKED. Removed four obsolete local branches after recovery verification and aligned the unused local main ref with the sanitized upstream main; no remote history rewrite occurred.
