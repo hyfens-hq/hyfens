@@ -44,6 +44,70 @@ final class _RolloutTransitionOutcome {
   final bool applied;
 }
 
+/// The server-owned trust anchor used by HTTP bundle import and admission.
+///
+/// The anchor is resolved from [ControlPlaneBundleTrustPolicy], never from
+/// request metadata. Direct service callers may still pass an explicit anchor
+/// to the bundle methods for isolated fixtures or other in-process seams.
+final class ControlPlaneBundleTrustAnchor {
+  ControlPlaneBundleTrustAnchor({
+    required this.keyId,
+    required List<int> publicKey,
+  }) : publicKey = List.unmodifiable(publicKey);
+
+  final String keyId;
+  final List<int> publicKey;
+}
+
+/// Server-owned trust configuration for bundle verification.
+///
+/// Bundle HTTP operations intentionally require exactly one configured key.
+/// A missing or multi-key policy is ambiguous without a caller-controlled
+/// selector, so it fails closed instead of allowing bundle metadata or request
+/// headers to choose a trust anchor.
+final class ControlPlaneBundleTrustPolicy {
+  ControlPlaneBundleTrustPolicy({required Map<String, List<int>> trustedKeys})
+    : trustedKeys = Map.unmodifiable(
+        trustedKeys.map(
+          (keyId, publicKey) =>
+              MapEntry(keyId, List<int>.unmodifiable(publicKey)),
+        ),
+      );
+
+  final Map<String, List<int>> trustedKeys;
+
+  ControlPlaneBundleTrustAnchor resolve() {
+    if (trustedKeys.isEmpty) {
+      throw const ControlPlaneException(
+        'BUNDLE_TRUST_POLICY_MISSING',
+        'A server-owned bundle trust key is not configured',
+        statusCode: 503,
+      );
+    }
+    if (trustedKeys.length != 1) {
+      throw const ControlPlaneException(
+        'BUNDLE_TRUST_POLICY_AMBIGUOUS',
+        'Exactly one server-owned bundle trust key is required',
+        statusCode: 503,
+      );
+    }
+    final entry = trustedKeys.entries.single;
+    if (entry.key.trim().isEmpty ||
+        entry.value.length != 32 ||
+        entry.value.any((value) => value < 0 || value > 255)) {
+      throw const ControlPlaneException(
+        'BUNDLE_TRUST_POLICY_INVALID',
+        'The server-owned bundle trust key is invalid',
+        statusCode: 503,
+      );
+    }
+    return ControlPlaneBundleTrustAnchor(
+      keyId: entry.key,
+      publicKey: entry.value,
+    );
+  }
+}
+
 /// The local product boundary. It owns tenant/resource admission and
 /// distribution policy, but it never becomes a runtime trust root.
 final class ControlPlaneService {
@@ -52,6 +116,7 @@ final class ControlPlaneService {
     Random? random,
     DateTime Function()? clock,
     this.observationPolicy = const ObservationPolicy(),
+    this.bundleTrustPolicy,
     this.p3eStore,
     this.humanAuth,
     BillingService? billingService,
@@ -65,12 +130,30 @@ final class ControlPlaneService {
   final Random _random;
   final DateTime Function() _clock;
   final ObservationPolicy observationPolicy;
+  final ControlPlaneBundleTrustPolicy? bundleTrustPolicy;
   final P3ePersistenceStore? p3eStore;
   final HumanAuthService? humanAuth;
   late final BillingService billing;
   Future<void> _writeTail = Future<void>.value();
   final Map<String, List<DateTime>> _observationWindows =
       <String, List<DateTime>>{};
+
+  /// Resolves the trust anchor owned by this server instance.
+  ///
+  /// HTTP bundle handlers call this path without forwarding request headers.
+  /// The explicit trust parameters on [importBundle] and [admitBundle] remain
+  /// available for direct in-process test injection.
+  ControlPlaneBundleTrustAnchor resolveBundleTrustPolicy() {
+    final policy = bundleTrustPolicy;
+    if (policy == null) {
+      throw const ControlPlaneException(
+        'BUNDLE_TRUST_POLICY_MISSING',
+        'A server-owned bundle trust policy is not configured',
+        statusCode: 503,
+      );
+    }
+    return policy.resolve();
+  }
 
   Future<void> initialize() async {
     await store.initialize();
@@ -1147,8 +1230,8 @@ final class ControlPlaneService {
     required String environmentId,
     required List<int> bytes,
     required String idempotencyKey,
-    required String trustedKeyId,
-    required List<int> trustedPublicKey,
+    String? trustedKeyId,
+    List<int>? trustedPublicKey,
     String? requestId,
   }) => _serialized(() async {
     final actor = await _authorize(
@@ -1168,12 +1251,16 @@ final class ControlPlaneService {
         statusCode: 404,
       );
     }
+    final trusted = _bundleTrustAnchor(
+      trustedKeyId: trustedKeyId,
+      trustedPublicKey: trustedPublicKey,
+    );
     late final ReleaseBundle bundle;
     try {
       bundle = await ReleaseBundle.verify(
         bytes: bytes,
-        expectedKeyId: trustedKeyId,
-        expectedPublicKey: trustedPublicKey,
+        expectedKeyId: trusted.keyId,
+        expectedPublicKey: trusted.publicKey,
       );
     } on Object {
       throw const ControlPlaneException(
@@ -1430,8 +1517,8 @@ final class ControlPlaneService {
     required String releaseId,
     required String patchId,
     required String idempotencyKey,
-    required String trustedKeyId,
-    required List<int> trustedPublicKey,
+    String? trustedKeyId,
+    List<int>? trustedPublicKey,
     String? requestId,
   }) => _serialized(() async {
     final actor = await _authorize(
@@ -1451,6 +1538,10 @@ final class ControlPlaneService {
         statusCode: 404,
       );
     }
+    final trusted = _bundleTrustAnchor(
+      trustedKeyId: trustedKeyId,
+      trustedPublicKey: trustedPublicKey,
+    );
     final body = <String, Object?>{
       'organizationId': actor.organizationId,
       'applicationId': applicationId,
@@ -1535,8 +1626,8 @@ final class ControlPlaneService {
         bundleKeyId: _bundleStoredString(importRecord, 'bundleKeyId'),
         bundleSignature: _bundleStoredString(importRecord, 'bundleSignature'),
         artifactBytes: bytes,
-        expectedKeyId: trustedKeyId,
-        expectedPublicKey: trustedPublicKey,
+        expectedKeyId: trusted.keyId,
+        expectedPublicKey: trusted.publicKey,
       );
       _validateBundleDestinationMetadata(
         sourcePayload: _bundlePayloadFromStoredMetadata(signedPayload, bytes),
@@ -5123,6 +5214,26 @@ final class ControlPlaneService {
       throw const FormatException('Bundle import provenance field is invalid');
     }
     return item.map<String, Object?>((key, value) => MapEntry('$key', value));
+  }
+
+  ControlPlaneBundleTrustAnchor _bundleTrustAnchor({
+    required String? trustedKeyId,
+    required List<int>? trustedPublicKey,
+  }) {
+    if ((trustedKeyId == null) != (trustedPublicKey == null)) {
+      throw const ControlPlaneException(
+        'BUNDLE_TRUST_KEY_INVALID',
+        'Bundle trust key ID and public key must be paired',
+        statusCode: 500,
+      );
+    }
+    if (trustedKeyId != null) {
+      return ControlPlaneBundleTrustAnchor(
+        keyId: trustedKeyId,
+        publicKey: trustedPublicKey!,
+      );
+    }
+    return resolveBundleTrustPolicy();
   }
 
   ReleaseBundlePayload _bundlePayloadFromStoredMetadata(

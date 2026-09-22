@@ -36,42 +36,41 @@ Future<void> writeInventory({
 }) async {
   validateReleaseVersion(repositoryRoot: repositoryRoot, version: version);
   final normalizedVersion = normalizeReleaseVersion(version);
-  final files =
-      artifactsDirectory
-          .listSync(followLinks: false)
-          .whereType<File>()
-          .where(
-            (file) =>
-                file.path.endsWith('.tar.gz') || file.path.endsWith('.zip'),
-          )
-          .toList()
-        ..sort((left, right) => left.path.compareTo(right.path));
-  if (files.isEmpty) {
+  final expectedNames = <String>{
+    for (final target in supportedReleaseTargets)
+      artifactFileName(
+        version: normalizedVersion,
+        platform: target.split('/')[0],
+        architecture: target.split('/')[1],
+      ),
+  };
+  final entries = artifactsDirectory.listSync(followLinks: false);
+  // The publisher uploads this whole directory. Do not silently ignore extra
+  // files, directories, aliases, or symlinks outside the checksummed inventory.
+  if (entries.length != expectedNames.length ||
+      entries.any(
+        (entry) =>
+            entry is! File || !expectedNames.contains(p.basename(entry.path)),
+      )) {
     throw StateError(
-      'No release archives found in ${artifactsDirectory.path}.',
+      'Release directory must contain exactly the six canonical archives; '
+      'no extra files, directories, or links are allowed.',
     );
   }
+  final files = entries.cast<File>()
+    ..sort((left, right) => left.path.compareTo(right.path));
 
   final records = <Map<String, Object>>[];
-  final targets = <String>{};
   final checksumLines = <String>[];
   for (final file in files) {
     final descriptor = parseArtifactFileName(_fileName(file));
-    if (descriptor.version != normalizedVersion) {
-      throw StateError(
-        'Archive ${descriptor.fileName} does not match release $normalizedVersion.',
-      );
+    final bytes = file.lengthSync();
+    if (bytes == 0) {
+      throw StateError('Release archive ${descriptor.fileName} is empty.');
     }
     final digest = await fileSha256(file);
-    records.add(descriptor.toJson(bytes: file.lengthSync(), sha256: digest));
-    targets.add('${descriptor.platform}/${descriptor.architecture}');
+    records.add(descriptor.toJson(bytes: bytes, sha256: digest));
     checksumLines.add('$digest  ${descriptor.fileName}');
-  }
-  if (!targets.containsAll(supportedReleaseTargets)) {
-    throw StateError(
-      'Release inventory must contain x64 and arm64 archives for macos, '
-      'linux, and windows; found ${targets.toList()..sort()}.',
-    );
   }
 
   final inventory = <String, Object>{
@@ -85,6 +84,9 @@ Future<void> writeInventory({
   await output.writeAsString(
     '${const JsonEncoder.withIndent('  ').convert(inventory)}\n',
   );
+  // Include metadata integrity too. The workflow attests SHA256SUMS itself.
+  final inventoryPath = p.relative(output.path, from: artifactsDirectory.path);
+  checksumLines.add('${await fileSha256(output)}  $inventoryPath');
   await File(p.join(artifactsDirectory.path, 'SHA256SUMS'))
       .writeAsString('${checksumLines.join('\n')}\n');
   stdout.writeln('Wrote ${output.path}');

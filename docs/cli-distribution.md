@@ -16,15 +16,100 @@ repository has been created and its Actions permissions are enabled:
 4. `.github/workflows/release-cli.yml` builds and attaches six archives:
    macOS, Linux, and Windows on x64 and arm64.
 5. The workflow also attaches `SHA256SUMS` and `artifact-inventory.json`.
+   The checksum file covers all six archives and the inventory. Assembly
+   rejects missing, empty, noncanonical, or extra files and symlinks.
 
 The separate `release-images.yml` workflow publishes matching multi-architecture
 `hyfens-control-plane` and `hyfens-dashboard` images to GHCR. Both workflows
 fail if the tag does not match `cli/pubspec.yaml`.
 
+Both use `release-checks.yml` before building or publishing: it scans the
+checked-out source with checksum-pinned Gitleaks and validates a canonical
+`vMAJOR.MINOR.PATCH` tag, optionally with a SemVer prerelease. Build metadata
+(`+...`) is rejected because Docker tags cannot represent it. Prereleases do
+not move the image `latest` tags and are marked prerelease on GitHub.
+
+The scan uses the scanner's default rules, redacts findings, and disables
+inline bypass comments. `.gitleaks.toml` contains only an exact Dart-type false
+positive exception in four files and one exact invalid-token test fixture.
+It scans release source, not full Git history
+or compiled binary contents; it is not a guarantee that every secret is
+detectable. Never expand an exception to an entire fixture or source directory.
+
+Actions are pinned to reviewed commits. Native CLI build and assembly jobs use
+the pinned Flutter `3.47.1` stable toolchain (and its bundled Dart 3.13.x)
+because the checked-in lockfile includes Flutter SDK dependencies. Checkout
+does not persist credentials. Build and assembly jobs have read-only repository
+tokens; only the final CLI publishing job has release/attestation/OIDC write
+scopes, and only the image publishing job has package write permission.
+Dependency resolution and repository scripts do not run in the CLI publishing
+job.
+
 The workflows do not contain signing keys, package-manager tokens, or user
-credentials. Code signing and package-manager publication are separate release
+credentials. CLI assets receive GitHub OIDC-backed provenance attestations,
+which require no stored signing key. OS code signing and package-manager publication are separate release
 controls that must be added only after their credentials and ownership are
 approved.
+
+## Verify provenance and integrity
+
+For releases produced by the hardened workflow, use GitHub CLI to authenticate
+the downloaded archive and checksum file before extraction:
+
+```sh
+gh attestation verify "$archive" --repo hyfens-hq/hyfens \
+  --signer-workflow hyfens-hq/hyfens/.github/workflows/release-cli.yml \
+  --source-ref "refs/tags/v${version}"
+gh attestation verify SHA256SUMS --repo hyfens-hq/hyfens \
+  --signer-workflow hyfens-hq/hyfens/.github/workflows/release-cli.yml \
+  --source-ref "refs/tags/v${version}"
+```
+
+Set `archive` and `version` as in the installation example below. Stop if either
+verification fails. Older releases may lack attestations: their checksums
+detect corrupted downloads but cannot independently authenticate the publisher.
+An attestation binds the asset to this workflow/repository/tag; it is not an
+independent code audit or a claim of reproducible builds. See GitHub's
+[attestation verification guidance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations).
+
+Container builds publish BuildKit `mode=min` provenance with repository,
+revision, platform, and build-material metadata; build-argument values are not
+included. Each pushed digest also receives a GitHub OIDC/Sigstore
+workflow-bound attestation in the registry. The workflow summary and its
+`image-digests` artifact record immutable image references (artifact retained
+for 90 days). Copy the desired reference from the trusted release run, verify
+its attestation, then inspect and pull by digest:
+
+```sh
+image='ghcr.io/hyfens-hq/hyfens-dashboard@sha256:<digest-from-release-run>'
+gh attestation verify "oci://$image" -R hyfens-hq/hyfens
+docker buildx imagetools inspect "$image" --format '{{ json .Provenance.SLSA }}'
+docker pull "$image"
+```
+
+Use GitHub's container attestation verification tooling to confirm that the
+digest is bound to the expected repository workflow and tag before promotion.
+The attestation is signed with short-lived identity; no repository signing key
+is stored in Actions.
+
+Compare the recorded source revision with the reviewed release commit. Tags,
+including version tags, can move; retain the digest for repeatable deployment.
+See Docker's [provenance reference](https://docs.docker.com/build/metadata/attestations/slsa-provenance/).
+
+The public control-plane image is built by
+`deploy/self-hosted/control-plane.Dockerfile`. It compiles
+only the checked-in control-plane and patch-format packages, then runs from a
+distroless non-root image with no shell or package manager. Self-hosted Compose
+also runs the service read-only with `no-new-privileges` and all Linux
+capabilities dropped; PostgreSQL and object storage remain external services.
+Owners should protect release tags and workflow changes using repository rules;
+no repository settings are changed here.
+
+The CLI lockfile includes Flutter SDK dependencies. Native release jobs install
+the pinned Flutter 3.47.1 stable toolchain, which supplies the compatible Dart
+SDK on each runner; the shared tag-validation gate intentionally does not
+resolve CLI dependencies. Local packaging tests can run with `FLUTTER_ROOT`
+pointing to an installed compatible Flutter SDK.
 
 ## Install a GitHub Release directly
 
@@ -35,6 +120,7 @@ ship native libraries beside the executable.
 On macOS or Linux:
 
 ```sh
+set -eu
 version=0.1.0
 platform=macos
 architecture=arm64
@@ -44,10 +130,13 @@ mkdir -p "$HOME/.local/opt/hyfens-${version}"
 curl --fail --location --remote-name "$base/$archive"
 curl --fail --location --remote-name "$base/SHA256SUMS"
 
+# Verify provenance as described above before continuing on hardened releases.
+awk -v name="$archive" '$2 == name { print }' SHA256SUMS > "$archive.sha256"
+test "$(wc -l < "$archive.sha256" | tr -d ' ')" = 1
 if [ "$platform" = macos ]; then
-  grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
+  shasum -a 256 -c "$archive.sha256"
 else
-  grep -F "  $archive" SHA256SUMS | sha256sum -c -
+  sha256sum -c "$archive.sha256"
 fi
 tar -xzf "$archive" -C "$HOME/.local/opt/hyfens-${version}" --strip-components=1
 mkdir -p "$HOME/.local/bin"
@@ -71,9 +160,11 @@ $root = "$env:LOCALAPPDATA\Hyfens\$version"
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 Invoke-WebRequest "$base/$archive" -OutFile "$root\$archive"
 Invoke-WebRequest "$base/SHA256SUMS" -OutFile "$root\SHA256SUMS"
-$checksumLine = Select-String -Path "$root\SHA256SUMS" -SimpleMatch $archive
-if (-not $checksumLine) { throw "No checksum found for $archive" }
-$expected = (($checksumLine.Line -replace '\s+.*$', '')).ToLowerInvariant()
+$checksumLines = @(Get-Content "$root\SHA256SUMS" | Where-Object {
+  $_ -cmatch ('^[0-9a-f]{64}  ' + [regex]::Escape($archive) + '$')
+})
+if ($checksumLines.Count -ne 1) { throw "Expected exactly one checksum for $archive" }
+$expected = $checksumLines[0].Substring(0, 64)
 $actual = (Get-FileHash "$root\$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw "Checksum mismatch for $archive" }
 Expand-Archive "$root\$archive" -DestinationPath $root -Force

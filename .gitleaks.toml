@@ -1,0 +1,21 @@
+title = "Hyfens release source scan"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Dart type after a token parameter, not a credential"
+condition = "AND"
+regexTarget = "match"
+regexes = ['''^token,\s+P3e5ClaimScope $''']
+paths = ['''(^|/)packages/control_plane/lib/src/(p3e5_integration|p3e_auto_halt_applicability|p3e_auto_halt_application|p3e_claim_service)\.dart$''']
+
+[[rules.allowlists]]
+description = "Deliberately invalid lease token in the rejection test"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^wrong_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$''']
+paths = ['''(^|/)packages/control_plane/test/p3e_auto_halt_applicability_test\.dart$''']

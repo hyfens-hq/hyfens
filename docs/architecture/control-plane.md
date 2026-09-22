@@ -274,6 +274,18 @@ external signing service is used, it is a distinct, explicitly authorized
 boundary with key-use audit, rotation/recovery procedures, and no API response
 containing private key material.
 
+For HTTP offline-bundle import and admission, the running server resolves
+exactly one trust anchor from its own configuration. The source bundle's
+`signingPublicKeys` and the legacy `X-Hyfens-Trusted-Key-*` request headers are
+provenance or compatibility data only; neither can select the verification
+key. The production binary uses `HYFENS_BUNDLE_TRUST_KEY_ID` together with
+`HYFENS_BUNDLE_TRUST_PUBLIC_KEY` (canonical base64 Ed25519 public-key bytes).
+If the pair is absent, bundle mutation endpoints fail closed; partial or
+invalid environment configuration is rejected, and an ambiguous runtime policy
+also fails closed. The public key is not a secret, but it should still be
+supplied through deployment configuration rather than copied into bundle
+requests.
+
 ## 8. Rollout and delivery evaluation
 
 The delivery evaluator takes:

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'human_auth.dart';
@@ -291,6 +292,8 @@ final class ControlPlaneConfig {
     this.artifactUseTaskRole = false,
     this.artifactKeyPrefix = '',
     this.artifactRegion = 'us-east-1',
+    this.bundleTrustKeyId,
+    this.bundleTrustPublicKey,
     this.maxJsonBodyBytes = 256 * 1024,
     this.maxArtifactBytes = 4 * 1024 * 1024,
     this.rateLimitPerMinute = 600,
@@ -313,6 +316,12 @@ final class ControlPlaneConfig {
   final bool artifactUseTaskRole;
   final String artifactKeyPrefix;
   final String artifactRegion;
+
+  /// The server-owned bundle verification anchor. Both values are optional
+  /// for deployments that do not expose bundle mutation; the service fails
+  /// closed for HTTP bundle import/admission until both are configured.
+  final String? bundleTrustKeyId;
+  final List<int>? bundleTrustPublicKey;
   final int maxJsonBodyBytes;
   final int maxArtifactBytes;
   final int rateLimitPerMinute;
@@ -351,6 +360,30 @@ final class ControlPlaneConfig {
     final periodic = ReconciliationPeriodicConfig.fromEnvironment(env);
     final auth = HumanAuthConfig.fromEnvironment(env);
     final discovery = ControlPlaneDiscoveryConfig.fromEnvironment(env);
+    final rawBundleTrustKeyId = env['HYFENS_BUNDLE_TRUST_KEY_ID'];
+    final rawBundleTrustPublicKey = env['HYFENS_BUNDLE_TRUST_PUBLIC_KEY'];
+    final bundleTrustKeyId =
+        rawBundleTrustKeyId == null || rawBundleTrustKeyId.isEmpty
+        ? null
+        : rawBundleTrustKeyId;
+    final bundleTrustPublicKeyText =
+        rawBundleTrustPublicKey == null || rawBundleTrustPublicKey.isEmpty
+        ? null
+        : rawBundleTrustPublicKey;
+    if ((bundleTrustKeyId == null) != (bundleTrustPublicKeyText == null)) {
+      throw ArgumentError(
+        'HYFENS_BUNDLE_TRUST_KEY_ID and '
+        'HYFENS_BUNDLE_TRUST_PUBLIC_KEY must be set together',
+      );
+    }
+    if (bundleTrustKeyId != null &&
+        (bundleTrustKeyId.length > 256 ||
+            bundleTrustKeyId.contains(RegExp(r'[\u0000\r\n]')))) {
+      throw ArgumentError('HYFENS_BUNDLE_TRUST_KEY_ID is invalid');
+    }
+    final bundleTrustPublicKey = bundleTrustPublicKeyText == null
+        ? null
+        : _decodeBundleTrustPublicKey(bundleTrustPublicKeyText);
     if (port == null || port < 1 || port > 65535) {
       throw ArgumentError('HYFENS_PORT must be between 1 and 65535');
     }
@@ -418,6 +451,8 @@ final class ControlPlaneConfig {
       artifactUseTaskRole: useTaskRole,
       artifactKeyPrefix: env['HYFENS_ARTIFACT_KEY_PREFIX'] ?? '',
       artifactRegion: env['HYFENS_ARTIFACT_REGION'] ?? 'us-east-1',
+      bundleTrustKeyId: bundleTrustKeyId,
+      bundleTrustPublicKey: bundleTrustPublicKey,
       maxJsonBodyBytes: maxJson,
       maxArtifactBytes: maxArtifact,
       rateLimitPerMinute: rate,
@@ -437,6 +472,23 @@ final class ControlPlaneConfig {
       'false' => false,
       _ => throw ArgumentError('$key must be true or false'),
     };
+  }
+
+  static List<int> _decodeBundleTrustPublicKey(String encoded) {
+    late final List<int> bytes;
+    try {
+      bytes = base64Decode(encoded);
+    } on FormatException {
+      throw ArgumentError(
+        'HYFENS_BUNDLE_TRUST_PUBLIC_KEY must be canonical base64',
+      );
+    }
+    if (bytes.length != 32 || base64Encode(bytes) != encoded) {
+      throw ArgumentError(
+        'HYFENS_BUNDLE_TRUST_PUBLIC_KEY must be canonical base64 Ed25519 bytes',
+      );
+    }
+    return List.unmodifiable(bytes);
   }
 
   static String? _databaseUrlFromComponents(Map<String, String> env) {

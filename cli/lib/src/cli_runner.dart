@@ -2314,7 +2314,7 @@ abstract base class _BundleRemoteCommand extends _ToolCommand {
       )
       ..addOption(
         'trusted-public-key',
-        help: 'Trusted Ed25519 public key file or HYFENS_TRUSTED_PUBLIC_KEY; required for bundle acceptance.',
+        help: 'Trusted Ed25519 public key file or HYFENS_TRUSTED_PUBLIC_KEY; used by local export verification only and never sent to the control plane.',
       )
       ..addOption('ca-cert', help: 'PEM CA certificate or HYFENS_TLS_CA_CERT.');
   }
@@ -2590,7 +2590,7 @@ final class BundleImportCommand extends _BundleRemoteCommand {
 
   @override
   String get description =>
-      'Verify and import one bundle into destination quarantine.';
+      'Import one bundle into destination quarantine; the control plane owns trust verification.';
 
   @override
   Future<void> run() async {
@@ -2599,14 +2599,6 @@ final class BundleImportCommand extends _BundleRemoteCommand {
     }
     final bundleFile = File(argResults!.rest.single);
     final bundleBytes = await _readBundleBytes(bundleFile);
-    final trustedKey = _readTrustedBundleKey(
-      requiredOption('trusted-public-key', 'HYFENS_TRUSTED_PUBLIC_KEY'),
-    );
-    final bundle = await _verifyBundleBytes(
-      bundleFile.path,
-      bundleBytes,
-      trustedKey: trustedKey,
-    );
     final auth = await resolveControlAuth();
     final response = await _bundleHttpRequest(
       method: 'POST',
@@ -2625,15 +2617,12 @@ final class BundleImportCommand extends _BundleRemoteCommand {
         'idempotency-key',
         'HYFENS_IDEMPOTENCY_KEY',
       ),
-      trustedKeyId: trustedKey.keyId,
-      trustedPublicKey: trustedKey.publicKey,
       body: bundleBytes,
     );
     _writeBundleRemoteResult(
       runner,
       response,
       humanTitle: 'Bundle imported',
-      verifiedDigest: bundle.bundleDigest,
       jsonMode: jsonMode,
     );
   }
@@ -2665,9 +2654,6 @@ final class BundleAdmitCommand extends _BundleRemoteCommand {
     final environmentId = auth.environmentId!;
     final releaseId = requiredOption('release-id', 'HYFENS_RELEASE_ID');
     final patchId = requiredOption('patch-id', 'HYFENS_PATCH_ID');
-    final trustedKey = _readTrustedBundleKey(
-      requiredOption('trusted-public-key', 'HYFENS_TRUSTED_PUBLIC_KEY'),
-    );
     final response = await _bundleHttpRequest(
       method: 'POST',
       uri: _deployUri(
@@ -2681,8 +2667,6 @@ final class BundleAdmitCommand extends _BundleRemoteCommand {
         'idempotency-key',
         'HYFENS_IDEMPOTENCY_KEY',
       ),
-      trustedKeyId: trustedKey.keyId,
-      trustedPublicKey: trustedKey.publicKey,
     );
     _writeBundleRemoteResult(
       runner,
@@ -2905,13 +2889,8 @@ Future<Map<String, Object?>> _bundleHttpRequest({
   required String token,
   SecurityContext? securityContext,
   String? idempotencyKey,
-  String? trustedKeyId,
-  List<int>? trustedPublicKey,
   List<int>? body,
 }) async {
-  if ((trustedKeyId == null) != (trustedPublicKey == null)) {
-    throw StateError('Bundle trust key ID and public key must be paired');
-  }
   final client = HttpClient(context: securityContext);
   try {
     final request = await client.openUrl(method, uri);
@@ -2923,14 +2902,6 @@ Future<Map<String, Object?>> _bundleHttpRequest({
       );
     if (idempotencyKey != null) {
       request.headers.set('Idempotency-Key', idempotencyKey);
-    }
-    if (trustedKeyId != null) {
-      request.headers
-        ..set(ReleaseBundle.trustedKeyIdHeader, trustedKeyId)
-        ..set(
-          ReleaseBundle.trustedPublicKeyHeader,
-          base64Encode(trustedPublicKey!),
-        );
     }
     if (body != null) {
       request

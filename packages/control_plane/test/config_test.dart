@@ -13,6 +13,52 @@ void main() {
     expect(config.artifactAuthorization, isNull);
     expect(config.fileRoot, isA<Directory>());
     expect(config.auth, isNull);
+    expect(config.bundleTrustKeyId, isNull);
+    expect(config.bundleTrustPublicKey, isNull);
+  });
+
+  test('bundle trust configuration is paired, canonical, and non-secret', () {
+    final publicKey = List<int>.generate(32, (index) => index);
+    final config = ControlPlaneConfig.fromEnvironment(<String, String>{
+      'HYFENS_BUNDLE_TRUST_KEY_ID': 'release-key-90',
+      'HYFENS_BUNDLE_TRUST_PUBLIC_KEY': base64Encode(publicKey),
+    });
+    expect(config.bundleTrustKeyId, 'release-key-90');
+    expect(config.bundleTrustPublicKey, publicKey);
+
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_BUNDLE_TRUST_KEY_ID': 'release-key-90',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_BUNDLE_TRUST_PUBLIC_KEY': base64Encode(publicKey),
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_BUNDLE_TRUST_KEY_ID': 'release-key-90',
+        'HYFENS_BUNDLE_TRUST_PUBLIC_KEY': base64Encode(List<int>.filled(31, 1)),
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_BUNDLE_TRUST_KEY_ID': 'release-key-90',
+        'HYFENS_BUNDLE_TRUST_PUBLIC_KEY': 'not-base64',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => ControlPlaneConfig.fromEnvironment(<String, String>{
+        'HYFENS_BUNDLE_TRUST_KEY_ID': 'release\nkey',
+        'HYFENS_BUNDLE_TRUST_PUBLIC_KEY': base64Encode(publicKey),
+      }),
+      throwsArgumentError,
+    );
   });
 
   test('human auth configuration is explicit and bounded', () {

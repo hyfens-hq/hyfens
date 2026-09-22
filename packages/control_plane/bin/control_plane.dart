@@ -47,7 +47,18 @@ Future<void> main(List<String> arguments) async {
   final auth = config.auth == null
       ? null
       : HumanAuthService(store: store, config: config.auth!);
-  final configuredService = ControlPlaneService(store: store, humanAuth: auth);
+  final bundleTrustPolicy = config.bundleTrustKeyId == null
+      ? null
+      : ControlPlaneBundleTrustPolicy(
+          trustedKeys: <String, List<int>>{
+            config.bundleTrustKeyId!: config.bundleTrustPublicKey!,
+          },
+        );
+  final configuredService = ControlPlaneService(
+    store: store,
+    humanAuth: auth,
+    bundleTrustPolicy: bundleTrustPolicy,
+  );
   await configuredService.initialize();
   if (options.containsKey('bootstrap-admin')) {
     if (options.containsKey('bootstrap') ||

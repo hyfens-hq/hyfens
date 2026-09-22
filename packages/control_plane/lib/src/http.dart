@@ -37,13 +37,6 @@ final class ControlPlaneHttpLimits {
   final int maxObservationBodyBytes;
 }
 
-final class _TrustedBundleKey {
-  const _TrustedBundleKey({required this.keyId, required this.publicKey});
-
-  final String keyId;
-  final List<int> publicKey;
-}
-
 /// The trust boundary for the local HTTP adapter.
 ///
 /// Forwarded headers describe a proxy's view of a request; they are not an
@@ -1532,7 +1525,6 @@ final class ControlPlaneHttpServer {
     List<String> path,
     String requestId,
   ) async {
-    final trustedKey = _trustedBundleKey(request);
     final bytes = await _bytesBody(
       request,
       maxBytes: limits.maxBundleBytes,
@@ -1545,8 +1537,6 @@ final class ControlPlaneHttpServer {
       environmentId: path[6],
       bytes: bytes,
       idempotencyKey: _idempotency(request),
-      trustedKeyId: trustedKey.keyId,
-      trustedPublicKey: trustedKey.publicKey,
       requestId: requestId,
     );
     await _json(
@@ -1561,7 +1551,6 @@ final class ControlPlaneHttpServer {
     List<String> path,
     String requestId,
   ) async {
-    final trustedKey = _trustedBundleKey(request);
     final result = await service.admitBundle(
       token: _bearer(request),
       organizationId: path[2],
@@ -1570,8 +1559,6 @@ final class ControlPlaneHttpServer {
       releaseId: path[8],
       patchId: path[9],
       idempotencyKey: _idempotency(request),
-      trustedKeyId: trustedKey.keyId,
-      trustedPublicKey: trustedKey.publicKey,
       requestId: requestId,
     );
     await _json(request.response, 200, <String, Object?>{
@@ -2638,33 +2625,6 @@ final class ControlPlaneHttpServer {
       );
     }
     return value;
-  }
-
-  _TrustedBundleKey _trustedBundleKey(HttpRequest request) {
-    final keyId = request.headers.value(ReleaseBundle.trustedKeyIdHeader);
-    final encoded = request.headers.value(ReleaseBundle.trustedPublicKeyHeader);
-    if (keyId == null || keyId.isEmpty || encoded == null || encoded.isEmpty) {
-      throw const ControlPlaneException(
-        'BUNDLE_TRUST_KEY_REQUIRED',
-        'Trusted bundle key ID and public key headers are required',
-      );
-    }
-    late final List<int> publicKey;
-    try {
-      publicKey = base64Decode(encoded);
-    } on FormatException {
-      throw const ControlPlaneException(
-        'BUNDLE_TRUST_KEY_INVALID',
-        'Trusted bundle public key is not valid base64',
-      );
-    }
-    if (publicKey.length != 32 || base64Encode(publicKey) != encoded) {
-      throw const ControlPlaneException(
-        'BUNDLE_TRUST_KEY_INVALID',
-        'Trusted bundle public key must be canonical Ed25519 bytes',
-      );
-    }
-    return _TrustedBundleKey(keyId: keyId, publicKey: publicKey);
   }
 
   int? _ifMatchVersion(HttpRequest request) {

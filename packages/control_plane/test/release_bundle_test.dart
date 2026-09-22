@@ -9,6 +9,8 @@ import 'package:test/test.dart';
 
 const _bundleKeyId = 'bundle-key';
 final _bundleSeed = List<int>.filled(32, 7);
+const _freshBundleKeyId = 'fresh-bundle-key';
+final _freshBundleSeed = List<int>.filled(32, 8);
 
 void main() {
   test('signs a canonical bundle and rejects envelope tampering', () async {
@@ -408,6 +410,9 @@ void main() {
     final target = await _createTargetFixture(
       prefix: 'bundle-http-target',
       runtimeApplicationId: source.bootstrap.application.runtimeApplicationId,
+      bundleTrustPolicy: ControlPlaneBundleTrustPolicy(
+        trustedKeys: <String, List<int>>{_bundleKeyId: source.publicKey},
+      ),
     );
     final sourceAdapter = ControlPlaneHttpServer(source.service);
     final targetAdapter = ControlPlaneHttpServer(target.service);
@@ -453,8 +458,6 @@ void main() {
       uri: importUri,
       token: target.bootstrap.controlCredential.token,
       idempotencyKey: 'http-bundle-import-1',
-      trustedKeyId: _bundleKeyId,
-      trustedPublicKey: source.publicKey,
       body: source.bundleBytes,
     );
     expect(importedResponse.statusCode, HttpStatus.created);
@@ -469,8 +472,6 @@ void main() {
       uri: importUri,
       token: target.bootstrap.controlCredential.token,
       idempotencyKey: 'http-bundle-import-1',
-      trustedKeyId: _bundleKeyId,
-      trustedPublicKey: source.publicKey,
       body: source.bundleBytes,
     );
     expect(importedReplay.statusCode, HttpStatus.ok);
@@ -484,13 +485,145 @@ void main() {
       ),
       token: target.bootstrap.controlCredential.token,
       idempotencyKey: 'http-bundle-admit-1',
-      trustedKeyId: _bundleKeyId,
-      trustedPublicKey: source.publicKey,
     );
     expect(admitResponse.statusCode, HttpStatus.ok);
     expect(admitResponse.body['result'], 'ADMITTED');
     expect(admitResponse.body['patch'], isA<Map>());
     expect((admitResponse.body['patch']! as Map)['state'], 'READY');
+  });
+
+  test('HTTP bundle trust is server-owned and fails closed', () async {
+    final source = await _createReadyFixture(prefix: 'bundle-policy-source');
+    final fresh = await _createReadyFixture(
+      prefix: 'bundle-policy-fresh',
+      runtimeApplicationId: source.bootstrap.application.runtimeApplicationId,
+      signingKeyId: _freshBundleKeyId,
+      signingSeed: _freshBundleSeed,
+    );
+    final target = await _createTargetFixture(
+      prefix: 'bundle-policy-target',
+      runtimeApplicationId: source.bootstrap.application.runtimeApplicationId,
+      bundleTrustPolicy: ControlPlaneBundleTrustPolicy(
+        trustedKeys: <String, List<int>>{_bundleKeyId: source.publicKey},
+      ),
+    );
+    final missingPolicyTarget = await _createTargetFixture(
+      prefix: 'bundle-policy-missing',
+      runtimeApplicationId: source.bootstrap.application.runtimeApplicationId,
+    );
+    final ambiguousPolicyTarget = await _createTargetFixture(
+      prefix: 'bundle-policy-ambiguous',
+      runtimeApplicationId: source.bootstrap.application.runtimeApplicationId,
+      bundleTrustPolicy: ControlPlaneBundleTrustPolicy(
+        trustedKeys: <String, List<int>>{
+          _bundleKeyId: source.publicKey,
+          _freshBundleKeyId: fresh.publicKey,
+        },
+      ),
+    );
+    final targetAdapter = ControlPlaneHttpServer(target.service);
+    final missingPolicyAdapter = ControlPlaneHttpServer(
+      missingPolicyTarget.service,
+    );
+    final ambiguousPolicyAdapter = ControlPlaneHttpServer(
+      ambiguousPolicyTarget.service,
+    );
+    final targetServer = await targetAdapter.bind();
+    final missingPolicyServer = await missingPolicyAdapter.bind();
+    final ambiguousPolicyServer = await ambiguousPolicyAdapter.bind();
+    addTearDown(() async {
+      await targetAdapter.close(force: true);
+      await missingPolicyAdapter.close(force: true);
+      await ambiguousPolicyAdapter.close(force: true);
+      await source.directory.delete(recursive: true);
+      await fresh.directory.delete(recursive: true);
+      await target.directory.delete(recursive: true);
+      await missingPolicyTarget.directory.delete(recursive: true);
+      await ambiguousPolicyTarget.directory.delete(recursive: true);
+    });
+
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final targetImportUri = _bundleImportUri(targetServer, target.bootstrap);
+    final freshImport = await _httpRequest(
+      client: client,
+      method: 'POST',
+      uri: targetImportUri,
+      token: target.bootstrap.controlCredential.token,
+      idempotencyKey: 'http-bundle-fresh-import',
+      trustedKeyId: _freshBundleKeyId,
+      trustedPublicKey: fresh.publicKey,
+      body: fresh.bundleBytes,
+    );
+    expect(freshImport.statusCode, HttpStatus.unsupportedMediaType);
+    expect(freshImport.body['error'], isA<Map>());
+    expect((freshImport.body['error']! as Map)['code'], 'BUNDLE_INVALID');
+    expect(await target.service.store.listJson('bundle_imports'), isEmpty);
+
+    final missingPolicyImport = await _httpRequest(
+      client: client,
+      method: 'POST',
+      uri: _bundleImportUri(missingPolicyServer, missingPolicyTarget.bootstrap),
+      token: missingPolicyTarget.bootstrap.controlCredential.token,
+      idempotencyKey: 'http-bundle-missing-policy',
+      trustedKeyId: _bundleKeyId,
+      trustedPublicKey: source.publicKey,
+      body: source.bundleBytes,
+    );
+    expect(missingPolicyImport.statusCode, HttpStatus.serviceUnavailable);
+    expect(
+      (missingPolicyImport.body['error']! as Map)['code'],
+      'BUNDLE_TRUST_POLICY_MISSING',
+    );
+    expect(
+      await missingPolicyTarget.service.store.listJson('bundle_imports'),
+      isEmpty,
+    );
+
+    final ambiguousPolicyImport = await _httpRequest(
+      client: client,
+      method: 'POST',
+      uri: _bundleImportUri(
+        ambiguousPolicyServer,
+        ambiguousPolicyTarget.bootstrap,
+      ),
+      token: ambiguousPolicyTarget.bootstrap.controlCredential.token,
+      idempotencyKey: 'http-bundle-ambiguous-policy',
+      body: source.bundleBytes,
+    );
+    expect(ambiguousPolicyImport.statusCode, HttpStatus.serviceUnavailable);
+    expect(
+      (ambiguousPolicyImport.body['error']! as Map)['code'],
+      'BUNDLE_TRUST_POLICY_AMBIGUOUS',
+    );
+
+    final directImport = await target.service.importBundle(
+      token: target.bootstrap.controlCredential.token,
+      organizationId: target.bootstrap.organization.id,
+      applicationId: target.bootstrap.application.id,
+      environmentId: target.bootstrap.environment.id,
+      bytes: fresh.bundleBytes,
+      idempotencyKey: 'direct-fresh-import',
+      trustedKeyId: _freshBundleKeyId,
+      trustedPublicKey: fresh.publicKey,
+    );
+    final admission = await _httpRequest(
+      client: client,
+      method: 'POST',
+      uri: Uri.parse(
+        '$targetImportUri/${directImport.release.id}/${directImport.patch.id}'
+        '/admit',
+      ),
+      token: target.bootstrap.controlCredential.token,
+      idempotencyKey: 'http-bundle-fresh-admit',
+      trustedKeyId: _freshBundleKeyId,
+      trustedPublicKey: fresh.publicKey,
+    );
+    expect(admission.statusCode, HttpStatus.conflict);
+    expect(
+      (admission.body['error']! as Map)['code'],
+      'BUNDLE_ADMISSION_FAILED',
+    );
   });
 }
 
@@ -537,7 +670,10 @@ final class _TargetFixture {
 Future<_ReadyFixture> _createReadyFixture({
   String prefix = 'bundle',
   String runtimeApplicationId = 'com.example.bundle',
+  String signingKeyId = _bundleKeyId,
+  List<int>? signingSeed,
 }) async {
+  final seed = signingSeed ?? _bundleSeed;
   final directory = await Directory.systemTemp.createTemp('hyfens-$prefix-');
   final service = ControlPlaneService(
     store: FileControlPlaneStore(directory),
@@ -549,11 +685,13 @@ Future<_ReadyFixture> _createReadyFixture({
     platformId: 'android-arm64-release',
     environmentName: 'development',
   );
-  final publicKey = await _publicKey();
+  final publicKey = await _publicKey(seed: seed);
   final patchBytes = await _patchBytes(
     applicationId: runtimeApplicationId,
     releaseId: 'release-runtime-90',
     patchId: 'patch-runtime-90',
+    signingKeyId: signingKeyId,
+    signingSeed: seed,
   );
   final release = await service.registerRelease(
     token: bootstrap.controlCredential.token,
@@ -571,7 +709,7 @@ Future<_ReadyFixture> _createReadyFixture({
       functionSignatureDigest: _digest('bundle-functions'),
       displayVersion: '0.90.0',
       signingPublicKeys: <String, String>{
-        _bundleKeyId: base64Encode(publicKey),
+        signingKeyId: base64Encode(publicKey),
       },
     ),
   );
@@ -585,7 +723,7 @@ Future<_ReadyFixture> _createReadyFixture({
       artifactId: 'art_bundle_source_90',
       sha256: sha256Digest(patchBytes),
       sizeBytes: patchBytes.length,
-      signatureKeyId: _bundleKeyId,
+      signatureKeyId: signingKeyId,
     ),
   );
   await service.uploadArtifact(
@@ -604,12 +742,12 @@ Future<_ReadyFixture> _createReadyFixture({
   );
   final bundleBytes = await ReleaseBundle.sign(
     payload: payload,
-    keyId: _bundleKeyId,
-    privateKeySeed: _bundleSeed,
+    keyId: signingKeyId,
+    privateKeySeed: seed,
   );
   final bundleDigest = (await ReleaseBundle.verify(
     bytes: bundleBytes,
-    expectedKeyId: _bundleKeyId,
+    expectedKeyId: signingKeyId,
     expectedPublicKey: publicKey,
   )).bundleDigest;
   return _ReadyFixture(
@@ -630,11 +768,13 @@ Future<_ReadyFixture> _createReadyFixture({
 Future<_TargetFixture> _createTargetFixture({
   required String prefix,
   required String runtimeApplicationId,
+  ControlPlaneBundleTrustPolicy? bundleTrustPolicy,
 }) async {
   final directory = await Directory.systemTemp.createTemp('hyfens-$prefix-');
   final service = ControlPlaneService(
     store: FileControlPlaneStore(directory),
     random: Random(11),
+    bundleTrustPolicy: bundleTrustPolicy,
   );
   final bootstrap = await service.bootstrap(
     organizationName: '$prefix organization',
@@ -662,8 +802,12 @@ Future<List<int>> _patchBytes({
   required String applicationId,
   required String releaseId,
   required String patchId,
+  String signingKeyId = _bundleKeyId,
+  List<int>? signingSeed,
 }) async {
-  final keyPair = await DartEd25519().newKeyPairFromSeed(_bundleSeed);
+  final keyPair = await DartEd25519().newKeyPairFromSeed(
+    signingSeed ?? _bundleSeed,
+  );
   try {
     final artifact = await PatchFormatV1.sealAsync(
       PatchArtifact(
@@ -684,7 +828,7 @@ Future<List<int>> _patchBytes({
         instructions: const <int>[0],
         signatureMetadata: PatchSignatureMetadata(
           algorithm: ReleaseBundle.algorithmName,
-          keyId: _bundleKeyId,
+          keyId: signingKeyId,
         ),
         payloadDigest: const <int>[],
         signature: const <int>[],
@@ -701,6 +845,12 @@ Future<List<int>> _patchBytes({
 }
 
 String _digest(String value) => sha256Digest(utf8.encode(value));
+
+Uri _bundleImportUri(HttpServer server, BootstrapResult bootstrap) => Uri.parse(
+  'http://127.0.0.1:${server.port}/v1/organizations/'
+  '${bootstrap.organization.id}/applications/${bootstrap.application.id}/'
+  'environments/${bootstrap.environment.id}/bundles',
+);
 
 final class _HttpResult {
   const _HttpResult({required this.statusCode, required this.body});

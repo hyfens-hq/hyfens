@@ -121,6 +121,13 @@ hyfens profile current
 hyfens profile use acme
 ```
 
+Bundle import and admission use a server-owned trust anchor. Configure the
+control-plane process with `HYFENS_BUNDLE_TRUST_KEY_ID` and
+`HYFENS_BUNDLE_TRUST_PUBLIC_KEY` together; the latter is canonical base64
+Ed25519 public-key bytes. The public key is not secret, but it belongs in
+deployment configuration, not request headers or bundle metadata. If the pair
+is absent, HTTP bundle mutation fails closed.
+
 Profiles contain endpoint and organization/application/environment metadata,
 never passwords, JWTs, session secrets, bearer tokens, signing keys, or other
 private material. Credentials are bound to the normalized endpoint origin and

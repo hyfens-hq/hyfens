@@ -37,7 +37,14 @@ HYFENS_DASHBOARD_API_BASE=https://api.example.com/
 HYFENS_WEB_ORIGINS=https://app.example.com
 HYFENS_AUTH_AUTHORIZATION_ENDPOINT=https://app.example.com/cli/authorize/
 HYFENS_AUTH_DEVICE_VERIFICATION_URI=https://app.example.com/device/
+HYFENS_BUNDLE_TRUST_KEY_ID=release-key-identifier
+HYFENS_BUNDLE_TRUST_PUBLIC_KEY=<canonical-base64-ed25519-public-key>
 ```
+
+The bundle trust pair is required. It is the destination control plane's
+server-owned verification anchor for bundle import and admission; do not send
+it as request headers. Keep the corresponding private signing key outside the
+control-plane host.
 
 Configure the host reverse proxy using
 [`nginx.conf.example`](nginx.conf.example). The important boundary is:
@@ -159,7 +166,8 @@ docker compose --env-file .env up -d
 ```
 
 Back up PostgreSQL and the MinIO data volume before upgrades and test restores
-as one set. Pin the database/object-store image variables when operating a
-long-lived installation. The Compose package does not provide HA, automatic
-TLS, external identity providers, backup scheduling, or zero-downtime
-migrations.
+as one set. The default PostgreSQL and MinIO image references are immutable
+manifest digests. Pin any operator override to a reviewed digest as well; do
+not use `:latest` for a long-lived installation. The Compose package does not
+provide HA, automatic TLS, external identity providers, backup scheduling, or
+zero-downtime migrations.

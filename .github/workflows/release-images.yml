@@ -11,48 +11,72 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
+  release-metadata:
+    name: Validate release source
+    uses: ./.github/workflows/release-checks.yml
+
   publish:
     name: Publish control-plane and dashboard images
+    needs: release-metadata
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Require public build recipes before registry login
+        run: |
+          for recipe in deploy/self-hosted/control-plane.Dockerfile dashboard/Dockerfile; do
+            if [[ ! -f "$recipe" ]]; then
+              echo "Missing public build recipe: $recipe" >&2
+              exit 1
+            fi
+          done
+
+      - name: Normalize image names
+        id: image-names
+        env:
+          IMAGE_OWNER: ${{ github.repository_owner }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="$(printf '%s' "$IMAGE_OWNER" | tr '[:upper:]' '[:lower:]')"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "control-image=ghcr.io/$owner/hyfens-control-plane" >> "$GITHUB_OUTPUT"
+          echo "dashboard-image=ghcr.io/$owner/hyfens-dashboard" >> "$GITHUB_OUTPUT"
 
       - name: Set up multi-architecture emulation
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and publish release images
+        id: publish-images
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          IMAGE_OWNER: ${{ github.repository_owner }}
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+          IMAGE_OWNER: ${{ steps.image-names.outputs.owner }}
         run: |
           set -euo pipefail
 
-          version="${RELEASE_TAG#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Tag must contain a semantic version after v: $RELEASE_TAG" >&2
-            exit 1
-          fi
-
-          declared_version="$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+).*$/\1/p' cli/pubspec.yaml | head -n 1)"
-          if [[ "$version" != "$declared_version" ]]; then
-            echo "Image tag $version does not match cli/pubspec.yaml $declared_version" >&2
-            exit 1
-          fi
+          version="$RELEASE_VERSION"
 
           owner="$(printf '%s' "$IMAGE_OWNER" | tr '[:upper:]' '[:lower:]')"
           registry="ghcr.io/$owner"
@@ -69,12 +93,16 @@ jobs:
 
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
-            --file deploy/p2/Dockerfile \
+            --file deploy/self-hosted/control-plane.Dockerfile \
             "${control_tags[@]}" \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.version=$version" \
-            --provenance=false \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --provenance=mode=min \
+            --metadata-file "$RUNNER_TEMP/control-plane-image.json" \
             --push .
+          control_digest="$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "$RUNNER_TEMP/control-plane-image.json")"
+          echo "control-digest=$control_digest" >> "$GITHUB_OUTPUT"
 
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
@@ -82,5 +110,37 @@ jobs:
             "${dashboard_tags[@]}" \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.version=$version" \
-            --provenance=false \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --provenance=mode=min \
+            --metadata-file "$RUNNER_TEMP/dashboard-image.json" \
             --push .
+          dashboard_digest="$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "$RUNNER_TEMP/dashboard-image.json")"
+          echo "dashboard-digest=$dashboard_digest" >> "$GITHUB_OUTPUT"
+
+          for component in control-plane dashboard; do
+            digest="$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "$RUNNER_TEMP/$component-image.json")"
+            echo "ghcr.io/$owner/hyfens-$component@$digest" >> "$RUNNER_TEMP/image-digests.txt"
+          done
+          cat "$RUNNER_TEMP/image-digests.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attest control-plane image digest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.image-names.outputs.control-image }}
+          subject-digest: ${{ steps.publish-images.outputs.control-digest }}
+          push-to-registry: true
+
+      - name: Attest dashboard image digest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.image-names.outputs.dashboard-image }}
+          subject-digest: ${{ steps.publish-images.outputs.dashboard-digest }}
+          push-to-registry: true
+
+      - name: Retain immutable image references
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-digests
+          path: ${{ runner.temp }}/image-digests.txt
+          if-no-files-found: error
+          retention-days: 90

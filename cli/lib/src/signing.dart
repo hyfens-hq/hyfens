@@ -74,8 +74,30 @@ final class PublicSigningKey {
   }
 }
 
+/// Platform permission policy used for private signing-key files.
+enum SigningPlatform { posix, windows }
+
+/// Process boundary used by signing-key permission enforcement.
+///
+/// The injection point keeps Windows ACL generation and read validation
+/// deterministic in focused tests on non-Windows hosts.
+typedef SigningProcessRunner = ProcessResult Function(
+  String executable,
+  List<String> arguments,
+);
+
+SigningPlatform get defaultSigningPlatform =>
+    Platform.isWindows ? SigningPlatform.windows : SigningPlatform.posix;
+
 final class KeyStore {
-  const KeyStore();
+  const KeyStore({this.platform, this.processRunner});
+
+  final SigningPlatform? platform;
+  final SigningProcessRunner? processRunner;
+
+  SigningPlatform get _effectivePlatform => platform ?? defaultSigningPlatform;
+
+  SigningProcessRunner get _runProcess => processRunner ?? _runSigningProcess;
 
   Future<SigningKey> generate({
     required File privateFile,
@@ -107,15 +129,29 @@ final class KeyStore {
       final publicKey = await keyPair.extractPublicKey();
       final keyId =
           'ed25519-${sha256.convert(publicKey.bytes).toString().substring(0, 16)}';
-      await writeAtomicText(
-        privateFile,
-        jsonEncode(<String, Object>{
-              'algorithm': 'ed25519',
-              'keyId': keyId,
-              'seed': base64.encode(seed),
-            }) +
-            '\n',
-      );
+      await privateFile.parent.create(recursive: true);
+      final staging = await privateFile.parent.createTemp('.hyfens-key-');
+      final stagedPrivate = File('${staging.path}/private.key');
+      try {
+        await stagedPrivate.create();
+        _restrictPrivateFile(
+          stagedPrivate,
+          platform: _effectivePlatform,
+          processRunner: _runProcess,
+        );
+        await stagedPrivate.writeAsString(
+          jsonEncode(<String, Object>{
+                'algorithm': 'ed25519',
+                'keyId': keyId,
+                'seed': base64.encode(seed),
+              }) +
+              '\n',
+          flush: true,
+        );
+        await stagedPrivate.rename(privateFile.path);
+      } finally {
+        await staging.delete(recursive: true);
+      }
       await writeAtomicText(
         publicFile,
         jsonEncode(<String, Object>{
@@ -125,7 +161,6 @@ final class KeyStore {
             }) +
             '\n',
       );
-      await _restrictPrivateFile(privateFile);
       return SigningKey(keyId: keyId, seed: seed, publicKey: publicKey.bytes);
     } finally {
       keyPair.destroy();
@@ -133,6 +168,13 @@ final class KeyStore {
   }
 
   SigningKey readPrivate(File file) {
+    if (_effectivePlatform == SigningPlatform.windows && file.existsSync()) {
+      final principal = _currentWindowsPrincipal(
+        file,
+        processRunner: _runProcess,
+      );
+      _verifyWindowsAcl(file, principal, processRunner: _runProcess);
+    }
     final map = _readKey(file, private: true);
     return SigningKey(
       keyId: map['keyId']! as String,
@@ -217,15 +259,150 @@ String _keyIdForPublic(List<int> publicKey) =>
 bool _samePath(File left, File right) =>
     left.absolute.path == right.absolute.path;
 
-Future<void> _restrictPrivateFile(File file) async {
-  if (Platform.isWindows) return;
-  final result = await Process.run('chmod', <String>['600', file.path]);
-  if (result.exitCode != 0) {
-    throw ToolFailure.single(
-      exitCode: ToolExitCode.signing,
-      code: 'S4005',
-      summary: 'Could not restrict private key permissions',
-      detail: '${file.path}: ${result.stderr}',
+void _restrictPrivateFile(
+  File file, {
+  required SigningPlatform platform,
+  required SigningProcessRunner processRunner,
+}) {
+  switch (platform) {
+    case SigningPlatform.posix:
+      final result = _runSigningCommand(file, processRunner, 'chmod', <String>[
+        '600',
+        file.path,
+      ]);
+      if (result.exitCode != 0) throw _privatePermissionFailure(file);
+    case SigningPlatform.windows:
+      final principal = _currentWindowsPrincipal(
+        file,
+        processRunner: processRunner,
+      );
+      final result = _runSigningCommand(file, processRunner, 'icacls', <String>[
+        file.path,
+        '/reset',
+        '/inheritance:r',
+        '/grant:r',
+        '$principal:F',
+      ]);
+      if (result.exitCode != 0) throw _privatePermissionFailure(file);
+      _verifyWindowsAcl(file, principal, processRunner: processRunner);
+  }
+}
+
+String _currentWindowsPrincipal(
+  File file, {
+  required SigningProcessRunner processRunner,
+}) {
+  final result = _runSigningCommand(
+    file,
+    processRunner,
+    'whoami',
+    const <String>[],
+  );
+  if (result.exitCode != 0) throw _privatePermissionFailure(file);
+  final principals = const LineSplitter()
+      .convert(result.stdout.toString())
+      .map((line) => line.trim())
+      .where((line) => line.isNotEmpty)
+      .toList(growable: false);
+  if (principals.length != 1 || !_isSafeWindowsPrincipal(principals.single)) {
+    throw _privatePermissionFailure(file);
+  }
+  return principals.single;
+}
+
+void _verifyWindowsAcl(
+  File file,
+  String principal, {
+  required SigningProcessRunner processRunner,
+}) {
+  final result = _runSigningCommand(file, processRunner, 'icacls', <String>[
+    file.path,
+  ]);
+  if (result.exitCode != 0) throw _privatePermissionFailure(file);
+  final entries = _parseWindowsAcl(result.stdout.toString(), file);
+  if (entries.length != 1) throw _privatePermissionFailure(file);
+  final entry = entries.single;
+  final rights = entry.rights
+      .map((right) => right.toUpperCase())
+      .toList(growable: false);
+  if (entry.principal.toLowerCase() != principal.toLowerCase() ||
+      rights.length != 1 ||
+      rights.single != 'F') {
+    throw _privatePermissionFailure(file);
+  }
+}
+
+List<_WindowsAclEntry> _parseWindowsAcl(String output, File file) {
+  final entryPattern = RegExp(r'^\s*(.+?)\s*:\s*((?:\([^)]+\))+)$');
+  final entries = <_WindowsAclEntry>[];
+  for (final line in const LineSplitter().convert(output)) {
+    final aclLine = _stripWindowsAclPath(line, file);
+    final match = entryPattern.firstMatch(aclLine);
+    if (match == null) continue;
+    final rights = RegExp(r'\(([^)]*)\)')
+        .allMatches(match.group(2)!)
+        .map((item) => item.group(1)!)
+        .toList(growable: false);
+    entries.add(
+      _WindowsAclEntry(principal: match.group(1)!.trim(), rights: rights),
     );
   }
+  return entries;
+}
+
+String _stripWindowsAclPath(String line, File file) {
+  final candidates = <String>{
+    file.path,
+    file.absolute.path,
+    file.path.replaceAll('/', '\\'),
+    file.absolute.path.replaceAll('/', '\\'),
+  };
+  for (final candidate in candidates) {
+    for (final prefix in <String>[candidate, '"$candidate"']) {
+      if (line.startsWith(prefix)) {
+        return line.substring(prefix.length).trimLeft();
+      }
+    }
+  }
+  return line;
+}
+
+bool _isSafeWindowsPrincipal(String principal) {
+  if (principal.isEmpty ||
+      principal.startsWith('-') ||
+      principal.startsWith('/')) {
+    return false;
+  }
+  return !principal.contains(RegExp(r'[<>:"/|?*()]'));
+}
+
+ProcessResult _runSigningCommand(
+  File file,
+  SigningProcessRunner processRunner,
+  String executable,
+  List<String> arguments,
+) {
+  try {
+    return processRunner(executable, arguments);
+  } on Object {
+    throw _privatePermissionFailure(file);
+  }
+}
+
+ProcessResult _runSigningProcess(String executable, List<String> arguments) =>
+    Process.runSync(executable, arguments);
+
+ToolFailure _privatePermissionFailure(File file) => ToolFailure.single(
+  exitCode: ToolExitCode.signing,
+  code: 'S4005',
+  summary: 'Could not restrict private key permissions',
+  detail: file.path,
+  action: 'Fix the private key permissions before signing.',
+);
+
+final class _WindowsAclEntry {
+  const _WindowsAclEntry({required this.principal, required this.rights});
+
+  final String principal;
+  final List<String> rights;
 }

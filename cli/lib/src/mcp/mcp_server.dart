@@ -763,8 +763,7 @@ ObjectSchema _schema(
 
 StringSchema _pathSchema() => Schema.string(
   maxLength: 4096,
-  description:
-      'A bounded filesystem path without control characters or symlink roots.',
+  description: 'A bounded relative path under the MCP working directory.',
 );
 
 StringSchema _patchSchema() => Schema.string(
@@ -802,26 +801,36 @@ String _checkedPath(String value, String name) {
       ),
     );
   }
-  if (p.normalize(value).isEmpty) {
+  final normalized = p.normalize(value);
+  if (normalized.isEmpty ||
+      p.isAbsolute(value) ||
+      p.split(value).contains('..')) {
     throw const _McpOperationException(
       _McpError(
         code: 'MCP_INVALID_PATH',
         summary: 'Filesystem path is invalid',
-        detail: 'The normalized path is empty.',
+        detail:
+            'MCP paths must be relative to the working directory and must not contain traversal segments.',
       ),
     );
   }
-  if (FileSystemEntity.typeSync(value, followLinks: false) ==
-      FileSystemEntityType.link) {
-    throw _McpOperationException(
-      _McpError(
-        code: 'MCP_INVALID_PATH',
-        summary: 'Symlink paths are not accepted',
-        detail: name + ' must be a regular path rather than a symlink.',
-      ),
-    );
+
+  var cursor = Directory.current.absolute;
+  for (final segment in p.split(normalized)) {
+    if (segment.isEmpty || segment == '.') continue;
+    cursor = Directory(p.join(cursor.path, segment));
+    if (FileSystemEntity.typeSync(cursor.path, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw _McpOperationException(
+        _McpError(
+          code: 'MCP_INVALID_PATH',
+          summary: 'Symlink paths are not accepted',
+          detail: name + ' must not contain a symlinked path component.',
+        ),
+      );
+    }
   }
-  return value;
+  return normalized;
 }
 
 String _requiredString(Map<String, Object?> args, String name) {
