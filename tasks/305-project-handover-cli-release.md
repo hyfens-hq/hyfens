@@ -1,6 +1,6 @@
 # Task 305 — Publish project handover CLI test release
 
-Status: [*] In Progress
+Status: [x] Completed
 
 ## Goal
 
@@ -50,11 +50,11 @@ Hyfens release maintainer (single workstream).
   root repository check, OSS boundary scan, and native host build/smoke check.
 - [x] Commit with DCO sign-off, push, and open a PR with exact validation
   evidence and known source-baseline limitations.
-- [*] Push the annotated prerelease tag and monitor the CLI workflow through
+- [x] Push the annotated prerelease tag and monitor the CLI workflow through
   publication; keep server image/deployment work outside the release.
-- [ ] Verify published assets, checksums, provenance when available, reported
+- [x] Verify published assets, checksums, provenance when available, reported
   version, and `init --rebind` help from the downloaded host archive.
-- [ ] Record PR/release links, evidence, and remaining independent review.
+- [x] Record PR/release links, evidence, and remaining independent review.
 
 ## Validation
 
@@ -90,8 +90,8 @@ Local evidence on 2026-10-17:
 
 ## Next Action
 
-Fix the ARM SDK provisioning failure, validate the release-only revision, and
-publish `v0.1.11-rc.3` without moving the first tag or bypassing main review.
+Use the published candidate to test recipient handover. Main integration awaits
+an independent eligible review of PR #29; no server deployment is required.
 
 ## Blockers
 
@@ -102,7 +102,11 @@ limitation; it is disclosed rather than reported as a passing check.
 
 ## Outcome
 
-Pending release preparation and publication.
+Published opt-in CLI candidate `v0.1.11-rc.3` from `867dabc`; all six native
+platform archives, checksum manifest, and inventory are available. The release
+workflow and downloaded macOS installer/handover checks passed. Source remains
+in PR #29 pending required independent review. Stable `v0.1.10` is unchanged;
+no server deployment or Cloud repository modification occurred.
 
 ## References
 
@@ -111,6 +115,9 @@ Pending release preparation and publication.
 - `.github/workflows/release-cli.yml`
 - `.github/workflows/release-checks.yml`
 - `CONTRIBUTING.md`
+- PR: https://github.com/hyfens-hq/hyfens/pull/29
+- Release: https://github.com/hyfens-hq/hyfens/releases/tag/v0.1.11-rc.3
+- Successful workflow: https://github.com/hyfens-hq/hyfens/actions/runs/39000299085
 
 ## History
 
@@ -152,3 +159,27 @@ Pending release preparation and publication.
   rc.3 release metadata validation, and `git diff --check` pass. An initial
   metadata-check command used the wrong working directory and made no edits;
   reran from the correct directories successfully.
+
+- 2026-10-17: Published `v0.1.11-rc.3`; hosted preflight, all six native builds,
+  assembly, checksum verification, GitHub OIDC attestation, and publication
+  succeeded. Cancelled all three automatically triggered server image runs;
+  cancelled the superseded rc.2 CLI run after both ARM failures were recorded.
+- 2026-10-17: Downloaded all eight release assets. Verified every SHA-256 and
+  both canonical/compatibility executable architecture headers in all six
+  archives. The initial disposable verifier assumed ZIP forward slashes;
+  normalized Windows separators and all architecture checks passed. The host
+  published archive is byte-identical to the previously tested CI artifact.
+- 2026-10-17: `gh attestation verify` with repository/workflow restrictions and
+  self-hosted runners denied returned success. Retrieved the SLSA bundle and
+  confirmed all eight subjects, tag `v0.1.11-rc.3`, source `867dabc`, and the
+  GitHub-hosted release workflow identity.
+- 2026-10-17: Downloaded the tagged public installer and installed rc.3 into an
+  isolated temporary prefix. Its checksum verification passed. The installed
+  binary passed version/help, dry-run without writes, recipient rebind, and
+  preservation of every file except `hyfens.yaml`; compatibility version passed.
+- 2026-10-17: Published curated release notes, including the existing Android
+  overlay test limitation and Windows ZIP extraction folder (`hyfens-0.1.11-rc`)
+  for manual PATH setup. Generic Windows guide folder naming is a follow-up;
+  no unrelated archive format change was added. Evidence retained under
+  `/tmp/hyfens-handover-release.cn0TfK`. Completed the release package; main
+  review remains separate and was not bypassed.
