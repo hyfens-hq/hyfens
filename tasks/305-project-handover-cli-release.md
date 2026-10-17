@@ -11,7 +11,8 @@ release and submit the source through a pull request.
 
 Scope: CLI version metadata, release notes, version-sensitive tests, full CLI
 validation and a native host archive, a signed-off commit and PR, an annotated
-prerelease tag, hosted CLI archive publication, and downloaded archive checks.
+prerelease tag, hosted CLI archive publication, necessary release SDK provisioning fixes, and
+downloaded archive checks.
 
 Non-goals: server deployment, modifying server/runtime behavior, stable
 upgrade promotion, package-manager repository updates, importing historical
@@ -47,9 +48,9 @@ Hyfens release maintainer (single workstream).
   version-dependent checks, and document the handover test release.
 - [x] Review the release diff and run the full CLI suite, scoped analysis,
   root repository check, OSS boundary scan, and native host build/smoke check.
-- [*] Commit with DCO sign-off, push, and open a PR with exact validation
+- [x] Commit with DCO sign-off, push, and open a PR with exact validation
   evidence and known source-baseline limitations.
-- [ ] Push the annotated prerelease tag and monitor the CLI workflow through
+- [*] Push the annotated prerelease tag and monitor the CLI workflow through
   publication; keep server image/deployment work outside the release.
 - [ ] Verify published assets, checksums, provenance when available, reported
   version, and `init --rebind` help from the downloaded host archive.
@@ -89,8 +90,8 @@ Local evidence on 2026-10-17:
 
 ## Next Action
 
-Commit the validated batch, open its PR, and publish the annotated test-release
-tag without merging around the independent approval rule.
+Fix the ARM SDK provisioning failure, validate the release-only revision, and
+publish `v0.1.11-rc.2` without moving the first tag or bypassing main review.
 
 ## Blockers
 
@@ -120,3 +121,19 @@ Pending release preparation and publication.
 - 2026-10-17: Prepared consistent CLI/package version metadata and dynamic
   packaging checks. Completed local validation and native archive smoke;
   reproduced the only full-suite failure on unchanged main and disclosed it.
+
+- 2026-10-17: Pushed signed-off commit `3daa4f2`, opened PR #29, and tagged
+  `v0.1.11-rc.1`. Hosted preflight and Linux x64/macOS arm64 builds passed;
+  Linux/Windows ARM setup failed because flutter-action has no matching bundled
+  Flutter archive. Cancelled the unrelated server image run. Use pinned Flutter
+  source bootstrap only on those ARM hosts and issue a new `rc.2` tag.
+
+- 2026-10-17: Reviewed the release-only correction. Workflow YAML parses and
+  `git diff --check` passes; scoped Dart analysis reports no issues. The ARM
+  bootstrap uses Flutter 3.47.1 pinned at `6655482`, preserves native SDK
+  selection, and leaves all other platform setup unchanged. Hosted native
+  matrix builds will validate the unavailable local ARM platforms.
+- 2026-10-17: All 16 affected packaging/process checks passed for rc.2.
+  The first rc.2 test invocation used the root working directory and found no
+  matching test files; reran from `cli/` successfully. No behavior changed
+  since the full CLI validation recorded above.
