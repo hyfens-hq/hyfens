@@ -91,7 +91,7 @@ Local evidence on 2026-10-17:
 ## Next Action
 
 Fix the ARM SDK provisioning failure, validate the release-only revision, and
-publish `v0.1.11-rc.2` without moving the first tag or bypassing main review.
+publish `v0.1.11-rc.3` without moving the first tag or bypassing main review.
 
 ## Blockers
 
@@ -137,3 +137,18 @@ Pending release preparation and publication.
   The first rc.2 test invocation used the root working directory and found no
   matching test files; reran from `cli/` successfully. No behavior changed
   since the full CLI validation recorded above.
+
+- 2026-10-17: rc.2 native Linux ARM bootstrap succeeded, reporting Flutter
+  3.47.1 / Dart 3.13.1, but locked pub resolution needs the absent `sky_engine`
+  SDK package. The shared cause of both release failures is treating a source
+  checkout like a prebuilt Flutter bundle. Consolidated the provisioning fix
+  by explicitly precaching universal artifacts on both source-based hosts.
+  No handover behavior or dependency versions changed. Issue rc.3; preserve
+  prior tags and their failure evidence. YAML and metadata checks run
+  locally; the hosted matrix validates native ARM SDK caches and compilation.
+- 2026-10-17: Confirmed Windows ARM also bootstraps Flutter 3.47.1 and fails
+  at the identical missing `sky_engine` dependency. The consolidated cache
+  correction therefore addresses both observed failures. YAML parsing,
+  rc.3 release metadata validation, and `git diff --check` pass. An initial
+  metadata-check command used the wrong working directory and made no edits;
+  reran from the correct directories successfully.

@@ -11,7 +11,7 @@ not select a version or publish software.
 - Kept the public release notes limited to the self-hosted OSS product
   surface; deployment-specific onboarding remains outside this repository.
 
-## [0.1.11-rc.2] - 2026-10-17
+## [0.1.11-rc.3] - 2026-10-17
 
 ### Added
 
@@ -24,16 +24,17 @@ not select a version or publish software.
 ### Changed
 
 - Bootstrap the pinned Flutter source on Linux and Windows ARM release hosts,
-  where bundled Flutter SDK archives are unavailable. The first candidate tag
+  where bundled Flutter SDK archives are unavailable, and precache the shared
+  Flutter SDK packages needed by locked dependencies. Earlier candidate tags
   failed before publication; this candidate retains the same handover behavior.
 
 ### Testing
 
 - This is an opt-in CLI release candidate from the current public source
   snapshot. Server deployment is not required for the rebind command.
-- Install with the tagged release installer using `--version 0.1.11-rc.2` or
+- Install with the tagged release installer using `--version 0.1.11-rc.3` or
   download the matching archive. Installations supporting the upgrade command
-  can use `hyfens upgrade --version 0.1.11-rc.2`. Select the recipient profile
+  can use `hyfens upgrade --version 0.1.11-rc.3`. Select the recipient profile
   and run `hyfens init --rebind --dry-run` before applying the binding.
 - Already installed applications use the recipient runtime credentials after
   a normal store update built with those settings.

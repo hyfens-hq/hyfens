@@ -71,6 +71,7 @@ jobs:
         run: |
           git -C "$GITHUB_WORKSPACE/.release-flutter" tag 3.47.1
           "$GITHUB_WORKSPACE/.release-flutter/bin/flutter" --version
+          "$GITHUB_WORKSPACE/.release-flutter/bin/flutter" precache --universal
           echo "$GITHUB_WORKSPACE/.release-flutter/bin" >> "$GITHUB_PATH"
       - name: Bootstrap native Windows ARM SDK
         if: matrix.architecture == 'arm64' && matrix.platform == 'windows'
@@ -79,6 +80,8 @@ jobs:
           git -C "$env:GITHUB_WORKSPACE/.release-flutter" tag 3.47.1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$env:GITHUB_WORKSPACE/.release-flutter/bin/flutter.bat" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:GITHUB_WORKSPACE/.release-flutter/bin/flutter.bat" precache --universal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "$env:GITHUB_WORKSPACE/.release-flutter/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Resolve locked CLI dependencies
