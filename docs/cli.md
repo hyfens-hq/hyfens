@@ -195,6 +195,60 @@ contain only safe organization/application/environment identifiers. It does
 not write credentials or signing material, and it reports an application
 identity mismatch rather than weakening exact checks.
 
+#### Handover to another organization
+
+For a transferred store application, the receiving organization can use its
+own Hyfens application and credentials while keeping the existing Android
+application ID or iOS bundle identifier. Have the destination organization,
+application, environment, and authorized account provisioned first; the
+destination application's runtime application ID must match the project.
+
+Sign in as the recipient, select its destination resources, and rebind the
+initialized checkout:
+
+```bash
+hyfens login --host https://hyfens.example.com --profile recipient
+hyfens profile bind --organization-id org_recipient \
+  --application-id app_recipient --environment-id env_recipient
+hyfens init --rebind --dry-run
+hyfens init --rebind
+```
+
+`--rebind` replaces only `hyfens.yaml`. It preserves `tool.yaml`, signing
+paths/keys, release baselines, and patch sequence state. It requires an
+initialized project and a complete destination profile, refuses an application
+identity mismatch, and cannot be combined with `--force`. The binding records
+selection metadata; each deployment still requires server authorization.
+
+For the handover release, increment the normal store version/build number and
+provide the destination runtime settings through the release environment:
+
+```text
+HYFENS_CONTROL_PLANE_URL
+HYFENS_DELIVERY_CREDENTIAL
+HYFENS_APPLICATION_ID
+HYFENS_ENVIRONMENT_ID
+HYFENS_PLATFORM_ID
+```
+
+Use the destination delivery credential in the app and the recipient's CLI
+session or control credential for deployment. Check any `HYFENS_TOKEN`,
+`HYFENS_CONTROL_TOKEN`, and organization/application/environment overrides:
+explicit flags and environment values take precedence over the active profile.
+Keep secrets in protected local/CI storage rather than project files.
+
+Run `hyfens release android` (or `ios`) and publish that normal store update
+through the receiving party's store signing/release process. For subsequent
+supported code changes, run `hyfens patch --release <new-release-id>` and
+`hyfens deploy --release <new-release-id>` with the recipient profile active.
+Select the new baseline explicitly when the checkout retains older releases.
+
+Already installed binaries retain their previous endpoint, delivery credential,
+and signing trust until they receive the store update. Rebinding the checkout
+does not migrate them or transfer the previous Hyfens application's ownership
+and history. A different platform application ID starts a separate project
+instead of this handover flow.
+
 ### `hyfens keys generate`
 
 Generates the local Ed25519 key pair without overwriting existing signing

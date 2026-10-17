@@ -50,10 +50,40 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Flutter and bundled Dart
+        if: matrix.architecture != 'arm64' || matrix.platform == 'macos'
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           flutter-version: '3.47.1'
+      # Flutter publishes no bundled SDK archive for these ARM hosts. Its
+      # source bootstrap downloads the matching native Dart SDK instead.
+      - name: Check out pinned Flutter source for ARM hosts
+        if: matrix.architecture == 'arm64' && matrix.platform != 'macos'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: flutter/flutter
+          ref: 6655482ec06e547f90abf8ae7590466f4415978d # 3.47.1
+          path: .release-flutter
+          persist-credentials: false
+      - name: Bootstrap native Linux ARM SDK
+        if: matrix.architecture == 'arm64' && matrix.platform == 'linux'
+        shell: bash
+        run: |
+          git -C "$GITHUB_WORKSPACE/.release-flutter" tag 3.47.1
+          "$GITHUB_WORKSPACE/.release-flutter/bin/flutter" --version
+          "$GITHUB_WORKSPACE/.release-flutter/bin/flutter" precache --universal
+          echo "$GITHUB_WORKSPACE/.release-flutter/bin" >> "$GITHUB_PATH"
+      - name: Bootstrap native Windows ARM SDK
+        if: matrix.architecture == 'arm64' && matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          git -C "$env:GITHUB_WORKSPACE/.release-flutter" tag 3.47.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:GITHUB_WORKSPACE/.release-flutter/bin/flutter.bat" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:GITHUB_WORKSPACE/.release-flutter/bin/flutter.bat" precache --universal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "$env:GITHUB_WORKSPACE/.release-flutter/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Resolve locked CLI dependencies
         working-directory: cli
         run: dart pub get --enforce-lockfile --no-example

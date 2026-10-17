@@ -521,7 +521,12 @@ final class InitCommand extends _ToolCommand {
   InitCommand(super.runner) {
     argParser
       ..addFlag('dry-run', help: 'Show changes without modifying the project.')
-      ..addFlag('force', help: 'Replace the tool-owned metadata after review.');
+      ..addFlag('force', help: 'Replace the tool-owned metadata after review.')
+      ..addFlag(
+        'rebind',
+        negatable: false,
+        help: 'Update only an initialized project binding from the active profile, preserving release settings and artifacts.',
+      );
   }
 
   @override
@@ -533,6 +538,10 @@ final class InitCommand extends _ToolCommand {
 
   @override
   Future<void> run() async {
+    final rebind = argResults!['rebind'] as bool;
+    if (rebind && argResults!['force'] as bool) {
+      throw UsageException('--rebind cannot be combined with --force.', usage);
+    }
     // Validate the project-owned binding before toolchain initialization can
     // write legacy local metadata. A malformed or secret-bearing binding must
     // fail closed without weakening the existing identity guard.
@@ -550,8 +559,73 @@ final class InitCommand extends _ToolCommand {
         detail:
             '${plannedProject.applicationId} != ${existingBinding.runtimeApplicationId}',
         path: bindingFile.path,
-        action: 'Review the existing binding and pass --force only after confirming the exact application identity.',
+        action: rebind
+            ? 'Keep the transferred platform application ID unchanged. Initialize a separate project for a different application identity.'
+            : 'Review the existing binding and pass --force only after confirming the exact application identity.',
       );
+    }
+    if (rebind) {
+      if (existingBinding == null || !plannedProject.configFile.existsSync()) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.refused,
+          code: 'H1206',
+          summary: 'Rebind requires an initialized project',
+          detail: 'Both hyfens.yaml and tool.yaml must already exist.',
+          action: 'Run hyfens init first; use --rebind when changing an existing project account binding.',
+        );
+      }
+      // Parse without rewriting: handover must retain custom instrumentation,
+      // signing paths, release baselines, and patch sequence state.
+      ToolConfig.load(plannedProject.configFile);
+      final profile = await runner.authClient.storage.readActiveProfile();
+      if (profile.organizationId == null ||
+          profile.applicationId == null ||
+          profile.environmentId == null) {
+        throw ToolFailure.single(
+          exitCode: ToolExitCode.refused,
+          code: 'H1207',
+          summary: 'Rebind requires a complete destination profile',
+          detail:
+              'Profile ${profile.name} must select organization, application, and environment identifiers.',
+          action: 'Select the recipient profile and run hyfens profile bind with --organization-id, --application-id, and --environment-id.',
+        );
+      }
+      final binding = HyfensProjectBinding(
+        profile: profile.name,
+        organizationId: profile.organizationId,
+        applicationId: profile.applicationId,
+        environmentId: profile.environmentId,
+        runtimeApplicationId: plannedProject.applicationId,
+      );
+      final dryRun = argResults!['dry-run'] as bool;
+      final actions = <String>[
+        'replace ${plannedProject.relative(bindingFile)}',
+        'preserve ${plannedProject.relative(plannedProject.configFile)}',
+        'preserve ${plannedProject.relative(plannedProject.toolDirectory)}',
+      ];
+      if (!dryRun) await writeHyfensBinding(bindingFile, binding: binding);
+      if (jsonMode) {
+        runner.writeJson(<String, Object?>{
+          'result': dryRun ? 'REBIND_PLANNED' : 'PROJECT_REBOUND',
+          'projectRoot': plannedProject.root.path,
+          'dryRun': dryRun,
+          'profile': profile.toPublicJson(),
+          'previousBinding': existingBinding.toJson(),
+          'binding': binding.toJson(),
+          'actions': actions,
+        });
+      } else {
+        runner.write(
+          dryRun
+              ? 'Dry run: no files modified.'
+              : 'Rebound project to profile ${profile.name}.',
+        );
+        for (final action in actions) runner.write('  $action');
+        runner.write(
+          'Use the destination runtime delivery settings in a new store release before sending updates to that application.',
+        );
+      }
+      return;
     }
     final result = await runner.toolchain.init(
       projectPath: projectPath,

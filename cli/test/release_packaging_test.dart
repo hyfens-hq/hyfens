@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:hyfens_tool/tool.dart' show hyfensToolVersion;
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
@@ -19,13 +20,14 @@ Directory repositoryDirectory() {
 
 void main() {
   final repository = repositoryDirectory();
+  final releaseVersion = cliPackageVersion(repository.path);
 
   Future<ProcessResult> runInventory(Directory artifacts, File output) =>
       Process.run(Platform.resolvedExecutable, <String>[
         'run',
         '../scripts/cli-release/inventory.dart',
         '--version',
-        '0.1.0',
+        releaseVersion,
         '--artifacts-dir',
         artifacts.path,
         '--output',
@@ -35,11 +37,15 @@ void main() {
   group('release metadata', () {
     test('normalizes tags and enforces the CLI package version', () {
       expect(normalizeReleaseVersion('v0.1.0'), '0.1.0');
-      expect(cliPackageVersion(repository.path), '0.1.0');
+      expect(releaseVersion, hyfensToolVersion);
+      validateReleaseVersion(
+        repositoryRoot: repository.path,
+        version: releaseVersion,
+      );
       expect(
         () => validateReleaseVersion(
           repositoryRoot: repository.path,
-          version: '0.1.1',
+          version: '999.0.0',
         ),
         throwsStateError,
       );
@@ -90,12 +96,12 @@ void main() {
     );
     addTearDown(() => artifacts.delete(recursive: true));
     final names = <String>[
-      'hyfens-0.1.0-linux-arm64.tar.gz',
-      'hyfens-0.1.0-linux-x64.tar.gz',
-      'hyfens-0.1.0-macos-arm64.tar.gz',
-      'hyfens-0.1.0-macos-x64.tar.gz',
-      'hyfens-0.1.0-windows-arm64.zip',
-      'hyfens-0.1.0-windows-x64.zip',
+      'hyfens-$releaseVersion-linux-arm64.tar.gz',
+      'hyfens-$releaseVersion-linux-x64.tar.gz',
+      'hyfens-$releaseVersion-macos-arm64.tar.gz',
+      'hyfens-$releaseVersion-macos-x64.tar.gz',
+      'hyfens-$releaseVersion-windows-arm64.zip',
+      'hyfens-$releaseVersion-windows-x64.zip',
     ];
     for (final name in names) {
       await File(p.join(artifacts.path, name)).writeAsString(name);
@@ -105,7 +111,7 @@ void main() {
     expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
     final body =
         jsonDecode(await inventory.readAsString()) as Map<String, dynamic>;
-    expect(body['releaseVersion'], '0.1.0');
+    expect(body['releaseVersion'], releaseVersion);
     expect((body['artifacts'] as List<dynamic>), hasLength(6));
     final checksums = await File(p.join(artifacts.path, 'SHA256SUMS'))
         .readAsLines();
@@ -133,7 +139,7 @@ void main() {
       output = File(p.join(artifacts.path, 'artifact-inventory.json'));
       for (final target in supportedReleaseTargets) {
         final name = artifactFileName(
-          version: '0.1.0',
+          version: releaseVersion,
           platform: target.split('/')[0],
           architecture: target.split('/')[1],
         );

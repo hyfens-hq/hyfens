@@ -11,6 +11,43 @@ not select a version or publish software.
 - Kept the public release notes limited to the self-hosted OSS product
   surface; deployment-specific onboarding remains outside this repository.
 
+## [0.1.11-rc.3] - 2026-10-17
+
+### Added
+
+- `hyfens init --rebind` switches an initialized checkout to the active
+  recipient profile while preserving tool settings, signing material, release
+  baselines, patch sequence state, and the platform application ID.
+- Dry-run and validation for the handover binding, with a guide for releasing
+  a new store build using the recipient application's delivery credentials.
+
+### Changed
+
+- Bootstrap the pinned Flutter source on Linux and Windows ARM release hosts,
+  where bundled Flutter SDK archives are unavailable, and precache the shared
+  Flutter SDK packages needed by locked dependencies. Earlier candidate tags
+  failed before publication; this candidate retains the same handover behavior.
+
+### Testing
+
+- This is an opt-in CLI release candidate from the current public source
+  snapshot. Server deployment is not required for the rebind command.
+- Install with the tagged release installer using `--version 0.1.11-rc.3` or
+  download the matching archive. Installations supporting the upgrade command
+  can use `hyfens upgrade --version 0.1.11-rc.3`. Select the recipient profile
+  and run `hyfens init --rebind --dry-run` before applying the binding.
+- Already installed applications use the recipient runtime credentials after
+  a normal store update built with those settings.
+- The current source snapshot differs from the historical `0.1.10` release;
+  this candidate does not promote a stable upgrade or restore removed features.
+
+### Known limitation
+
+- The native Android overlay regression test fails with the installed Flutter
+  template's Android Gradle Plugin 9.1/Kotlin DSL classpath errors. The same
+  failure reproduces on unchanged main; this candidate does not fix that
+  separate native build compatibility issue.
+
 ## [0.1.10] - 2026-09-08
 
 ### Added
